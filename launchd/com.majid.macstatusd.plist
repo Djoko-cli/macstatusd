@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Gabarit de LaunchAgent. install.sh remplace __HOME__ par le dossier
+  personnel avant de l'écrire dans ~/Library/LaunchAgents.
+
+  LaunchAgent (session Aqua) et non LaunchDaemon : c'est ce qui donne accès à
+  l'état des écrans, aux notifications d'économiseur d'écran et à la saisie
+  sécurisée. Le verrouillage de session, lui, est lu via l'IORegistry et
+  fonctionnerait dans les deux cas.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.majid.macstatusd</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/macstatusd/macstatusd</string>
+        <string>--config</string>
+        <string>/opt/macstatusd/config.json</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Interactive : évite la coalescence des timers et l'App Nap, qui
+         retarderaient la détection d'état. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/macstatusd/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/macstatusd/launchd.log</string>
+</dict>
+</plist>

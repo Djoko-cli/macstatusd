@@ -1,0 +1,31 @@
+{
+  "enabled": true,
+  "webhook_base_url": "http://192.168.1.89:51828",
+  "accessory_id": "mac",
+
+  "port": 9090,
+  "bind_address": "",
+  "auth_token": "",
+
+  "off_action": "screensaver",
+  "off_escalate_to_display_sleep": true,
+  "stop_screensaver_on_wake": true,
+  "command_confirm_timeout_ms": 12000,
+  "command_escalate_after_ms": 2500,
+
+  "saver_dismiss_on_input": true,
+  "saver_dismiss_grace_ms": 1500,
+  "saver_redisplay_idle_seconds": 90,
+
+  "poll_interval_ms": 500,
+  "settle_on_ms": 300,
+  "settle_off_ms": 800,
+  "heartbeat_seconds": 60,
+  "require_auth_ui_when_locked": false,
+
+  "webhook_timeout_ms": 4000,
+  "webhook_retries": 3,
+
+  "log_level": "info",
+  "log_file": ""
+}
