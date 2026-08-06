@@ -1,0 +1,151 @@
+import Foundation
+import AppKit
+import CoreGraphics
+
+// MARK: - State flags
+
+var screenSaverActive = false
+var shieldRaised = false
+var authUIActive = false
+var statusUIVisible = false
+var unlockInProgress = false
+var lockRequestedByScreensaver = false
+
+// MARK: - Basic signals
+
+func sessionDict() -> [String: Any]? {
+    return CGSessionCopyCurrentDictionary() as? [String: Any]
+}
+
+func isScreenLocked() -> Bool {
+    guard let dict = sessionDict() else { return false }
+    if let b = dict["CGSSessionScreenIsLocked"] as? Bool { return b }
+    if let n = dict["CGSSessionScreenIsLocked"] as? NSNumber { return n.boolValue }
+    return false
+}
+
+func isDisplaySleeping() -> Bool {
+    CGDisplayIsAsleep(CGMainDisplayID()) != 0
+}
+
+// MARK: - Screensaver notifications
+
+let dist = DistributedNotificationCenter.default()
+
+dist.addObserver(
+    forName: NSNotification.Name("com.apple.screensaver.didstart"),
+    object: nil,
+    queue: .main
+) { _ in
+    screenSaverActive = true
+}
+
+dist.addObserver(
+    forName: NSNotification.Name("com.apple.screensaver.didstop"),
+    object: nil,
+    queue: .main
+) { _ in
+    screenSaverActive = false
+}
+
+// MARK: - Loginwindow watchers (log stream, comme V3)
+
+let process = Process()
+process.launchPath = "/usr/bin/log"
+process.arguments = [
+    "stream",
+    "--style", "compact",
+    "--predicate", #"process == "loginwindow""#
+]
+
+let pipe = Pipe()
+process.standardOutput = pipe
+process.launch()
+
+let handle = pipe.fileHandleForReading
+
+DispatchQueue.global().async {
+    while true {
+        let data = handle.readData(ofLength: 4096)
+        if data.isEmpty { continue }
+        guard let line = String(data: data, encoding: .utf8) else { continue }
+
+        // Shield raised
+        if line.contains("shieldWindowRaised")
+            || line.contains("Raising shield window")
+            || line.contains("creating shield window") {
+            shieldRaised = true
+        }
+
+        // Auth UI (invisible mais réelle)
+        if line.contains("set password field placeholder")
+            || line.contains("updatePlaceholderString")
+            || line.contains("updateFocus")
+            || line.contains("CGSSetSecureEventInput")
+            || line.contains("screenLockUIIsHidden") {
+            authUIActive = true
+        }
+
+        // Status UI
+        if line.contains("WiFi viewDidLoad")
+            || line.contains("Battery _updateViews")
+            || line.contains("Status viewDidLoad") {
+            statusUIVisible = true
+        }
+
+        // Unlock pipeline
+        if line.contains("startUnlock")
+            || line.contains("unlock failed")
+            || line.contains("resetAfterScreenLock") {
+            unlockInProgress = true
+        }
+
+        // Lock requested by screensaver
+        if line.contains("kLWLockFromScreenSaverOtherLaunch")
+            || line.contains("startScreenLock") {
+            lockRequestedByScreensaver = true
+        }
+    }
+}
+
+// MARK: - CGSession dump
+
+func dumpSession() {
+    guard let dict = sessionDict() else {
+        print("\n--- CGSession Dump ---")
+        print("nil")
+        print("----------------------\n")
+        return
+    }
+
+    print("\n--- CGSession Dump ---")
+    for (k, v) in dict {
+        print("\(k): \(v)")
+    }
+    print("----------------------\n")
+}
+
+// MARK: - Polling output
+
+Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+    let locked = isScreenLocked()
+    let displaySleep = isDisplaySleeping()
+
+    print("""
+    locked=\(locked) \
+    displaySleep=\(displaySleep) \
+    screensaverActive=\(screenSaverActive) \
+    shield=\(shieldRaised) \
+    authUI=\(authUIActive) \
+    statusUI=\(statusUIVisible) \
+    unlockInProgress=\(unlockInProgress) \
+    lockRequestedByScreensaver=\(lockRequestedByScreensaver)
+    """)
+
+    dumpSession()
+}
+
+// MARK: - Start
+
+print("macstatusd DEBUG V5 started.")
+RunLoop.main.run()

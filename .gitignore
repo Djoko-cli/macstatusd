@@ -1,0 +1,23 @@
+.DS_Store
+.build/
+.swiftpm/
+*.log
+
+# Binaires compilés issus des sondes/prototypes de debug — le source suffit
+# pour le versionning, le binaire se régénère avec swiftc.
+backtest+debug/displaystate
+backtest+debug/idleTime
+backtest+debug/logstream-loginwindow
+backtest+debug/macstatusd-debugv2
+backtest+debug/macstatusd-debugv3
+backtest+debug/macstatusd-debugv4
+backtest+debug/probe
+backtest+debug/testHybrid
+backtest+debug/testLoginWindow
+backtest+debug/test_display
+backtest+debug/test_screensaver
+macstatusd-debugv6
+
+# config.json réel : contient webhook_base_url / auth_token de l'installation.
+# config.example.json (versionné) sert de modèle.
+config.json

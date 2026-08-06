@@ -1,0 +1,84 @@
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                               HOMEKIT (iOS / iPadOS / macOS)                 │
+│                                                                              │
+│   • Interface utilisateur                                                    │
+│   • Affiche l’état ON/OFF du Mac                                             │
+│   • Envoie les commandes ON/OFF                                              │
+│                                                                              │
+│   Action utilisateur → "Allumer" / "Éteindre"                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        │ 1. Commande ON/OFF
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                 HOMEBRIDGE                                   │
+│                         Plugin HTTP Webhooks (benzman81)                     │
+│                                                                              │
+│   • Reçoit les commandes HomeKit                                             │
+│       - ON  → appelle /wake sur macstatusd                                   │
+│       - OFF → appelle /sleep sur macstatusd                                  │
+│                                                                              │
+│   • Lit l’état du Mac via /state                                             │
+│   • Reçoit les webhooks push de macstatusd                                   │
+│   • Met à jour l’accessoire HomeKit                                          │
+│                                                                              │
+│   Rôle : passerelle bidirectionnelle entre HomeKit et macstatusd             │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        │ 2. /wake, /sleep, /state, webhooks
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                 macstatusd                                   │
+│                         (Daemon Swift appliance‑grade)                       │
+│                                                                              │
+│   • Serveur HTTP local (port 9090)                                           │
+│   • Moteur d’état interne :                                                  │
+│       - isAsleep                                                             │
+│       - screenSaverActive                                                    │
+│       - wakePending                                                          │
+│       - idleMonitoringActive                                                 │
+│                                                                              │
+│   • Timers intelligents :                                                    │
+│       - wakeTimeout (30.5s)                                                  │
+│       - idleTimeout (30.5s)                                                  │
+│       - idlePolling (0.5s)                                                   │
+│                                                                              │
+│   • Détection système :                                                      │
+│       - CGDisplayIsAsleep (écran ON/OFF)                                     │
+│       - CGSessionCopyCurrentDictionary (lock/loginwindow)                    │
+│       - NSWorkspace sleep/wake                                               │
+│       - Screensaver notifications                                            │
+│       - Activité HID                                                         │
+│                                                                              │
+│   • Logique ON/OFF :                                                         │
+│       - OFF si : vrai sleep, écran OFF, screensaver                          │
+│       - ON si : écran ON, wake, display wake                                 │
+│                                                                              │
+│   • Push vers Homebridge :                                                   │
+│       - sendWebhook(state=true/false)                                        │
+│                                                                              │
+│   Rôle : vérité absolue de l’état du Mac                                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        │ 3. Notifications + API système
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                      macOS                                   │
+│                                                                              │
+│   • États réels :                                                            │
+│       - Sleep (S0)                                                           │
+│       - Awake (S1)                                                           │
+│       - Locked (S2)                                                          │
+│       - Screensaver (S3)                                                     │
+│       - Pseudo‑sleep (écran OFF sans sleep)                                  │
+│       - Darkwake (wake silencieux)                                           │
+│                                                                              │
+│   • Événements :                                                             │
+│       - willSleep / didWake                                                  │
+│       - Extinction écran                                                     │
+│       - Display wake                                                         │
+│       - Loginwindow                                                          │
+│       - HID activity                                                         │
+│                                                                              │
+│   Rôle : source brute de vérité physique                                     │
+└──────────────────────────────────────────────────────────────────────────────┘
