@@ -1,8 +1,12 @@
+[![English](https://img.shields.io/badge/lang-English-F65801.svg)](README.md) [![Français](https://img.shields.io/badge/lang-Fran%C3%A7ais-lightgrey.svg)](README.fr.md)
+
 # macstatusd 5.0
 
-Daemon macOS qui expose l'état ON/OFF du Mac à Homebridge (plugin
-[http-webhooks](https://github.com/benzman81/homebridge-http-webhooks)), et qui
-accepte les commandes ON/OFF venant de HomeKit.
+macOS daemon that exposes the Mac's ON/OFF state to Homebridge (plugin
+[http-webhooks](https://github.com/benzman81/homebridge-http-webhooks)), and
+accepts ON/OFF commands coming from HomeKit.
+
+Code comments, logs and diagnostic output are in French.
 
 ```
 HomeKit ──► Homebridge ──► GET /wake | /sleep ──► macstatusd ──► macOS
@@ -10,87 +14,89 @@ HomeKit ──► Homebridge ──► GET /wake | /sleep ──► macstatusd �
    └───────── webhook push (state=true|false) ◄────────┘
 ```
 
-## Sémantique de l'état
+## State semantics
 
-| Situation réelle du Mac                                  | État |
-|----------------------------------------------------------|------|
-| Bureau déverrouillé, dans une app                        | ON   |
-| Écran de verrouillage visible (champ mot de passe)       | ON   |
-| Fenêtre de login (personne de connecté), écran allumé    | ON   |
-| Économiseur d'écran actif                                | OFF  |
-| Écran éteint (display sleep)                             | OFF  |
-| Veille système                                           | OFF  |
-| Aucun écran connecté                                     | OFF  |
+| What the Mac is actually showing                         | State |
+|----------------------------------------------------------|-------|
+| Unlocked desktop, in an app                              | ON    |
+| Lock screen visible (password field)                     | ON    |
+| Login window (nobody logged in), display on              | ON    |
+| Screen saver running                                     | OFF   |
+| Display off (display sleep)                              | OFF   |
+| System sleep                                             | OFF   |
+| No display connected                                     | OFF   |
 
-Autrement dit : **ON = une interface est visible et utilisable**, OFF = rien à
-l'écran.
+In other words: **ON = a user interface is visible and usable**, OFF = nothing
+on screen.
 
-## Ce qui rend l'état déterministe
+## What makes the state deterministic
 
-La version 4 déduisait l'état en *lisant les messages de log privés de
-`loginwindow`* (`log stream --predicate 'process == "loginwindow"'`) et en
-cherchant des chaînes comme `screenLockUIIsHidden` ou `updatePlaceholderString`.
-C'était la cause de fond du problème : ces chaînes ne sont pas une API, elles
-changent d'une version de macOS à l'autre, un message coupé entre deux lectures
-de 4 Ko est perdu, et un drapeau resté bloqué à `true` fige l'état pour toujours.
+Version 4 inferred the state by *reading `loginwindow`'s private log messages*
+(`log stream --predicate 'process == "loginwindow"'`) and looking for strings
+such as `screenLockUIIsHidden` or `updatePlaceholderString`. That was the root
+cause of the problem: those strings are not an API, they change from one macOS
+release to the next, a message split across two 4 KB reads is lost, and a flag
+stuck at `true` freezes the state forever.
 
-La version 5 n'utilise plus aucun log. Chaque fait vient d'une API observable,
-avec une source de repli indépendante :
+Version 5 no longer reads any log. Every fact comes from an observable API, with
+an independent fallback source:
 
-| Fait | Source primaire | Repli |
-|------|-----------------|-------|
-| Veille système | IOKit `IORegisterForSystemPower` (événement) | `NSWorkspace.didWake` |
-| Écran éteint | `CGDisplayIsAsleep` (écran principal) | tous les écrans en ligne endormis + `screensDidSleep/Wake` |
-| Économiseur en cours | process `ScreenSaverEngine` | fenêtre à l'écran au niveau `kCGScreenSaverWindowLevel` appartenant à un process d'économiseur ; notifications `com.apple.screensaver.didstart/didstop` |
-| Économiseur **seul à l'écran** | `IOHIDSystem.HIDIdleTime` comparé à l'instant de démarrage | — (voir ci‑dessous) |
-| Session verrouillée | IORegistry `IOConsoleLocked` / `IOConsoleUsers` | `CGSessionCopyCurrentDictionary` |
+| Fact | Primary source | Fallback |
+|------|----------------|----------|
+| System sleep | IOKit `IORegisterForSystemPower` (event) | `NSWorkspace.didWake` |
+| Display off | `CGDisplayIsAsleep` (main display) | all online displays asleep + `screensDidSleep/Wake` |
+| Screen saver running | `ScreenSaverEngine` process | on-screen window at `kCGScreenSaverWindowLevel` or above, owned by a screen saver process; `com.apple.screensaver.didstart/didstop` notifications |
+| Screen saver **alone on screen** | `IOHIDSystem.HIDIdleTime` compared with its start time | — (see below) |
+| Session locked | IORegistry `IOConsoleLocked` / `IOConsoleUsers` | `CGSessionCopyCurrentDictionary` |
 
-### Économiseur en cours ≠ économiseur à l'écran
+### Screen saver running ≠ screen saver on screen
 
-C'est le piège principal, mesuré sur macOS 26.5 (`diagnostics/saver-probe.swift`) :
-quand une frappe fait apparaître le champ de mot de passe, **l'économiseur
-continue de tourner derrière le panneau**. Pendant cet état :
+This is the main trap, measured on macOS 26.5 (`diagnostics/saver-probe.swift`):
+when a keystroke brings up the password field, **the screen saver keeps running
+behind the panel**. In that state:
 
-- le process `ScreenSaverEngine` reste vivant ;
-- `SACScreenSaverIsRunning` (API privée d'Apple) renvoie toujours `1` ;
-- `com.apple.screensaver.didstop` n'est posté qu'**au déverrouillage** ;
-- la liste des fenêtres à l'écran est inchangée ;
-- `IsSecureEventInputEnabled` ne dit rien d'utile : `loginwindow` peut garder la
-  saisie sécurisée bien après un déverrouillage.
+- the `ScreenSaverEngine` process stays alive;
+- `SACScreenSaverIsRunning` (Apple private API) still returns `1`;
+- `com.apple.screensaver.didstop` is only posted **on unlock**;
+- the list of on-screen windows is unchanged;
+- `IsSecureEventInputEnabled` says nothing useful: `loginwindow` can hold secure
+  input long after an unlock.
 
-Le seul signal qui change est l'activité matérielle. Comme sur macOS **toute
-frappe ou tout mouvement écarte l'économiseur**, la règle est :
+The only signal that changes is hardware activity. Since on macOS **any
+keystroke or movement dismisses the screen saver**, the rule is:
 
-> l'économiseur occupe l'écran s'il tourne **et** qu'aucune activité clavier /
-> souris n'a eu lieu depuis son démarrage.
+> the screen saver occupies the screen if it is running **and** no keyboard /
+> mouse activity has happened since it started.
 
-`HIDIdleTime` est lisible session verrouillée, ce qui rend la règle utilisable
-exactement là où on en a besoin. Une inactivité prolongée
-(`saver_redisplay_idle_seconds`, 90 s) réarme l'économiseur, macOS y revenant
-quand le panneau reste sans réponse. `saver_dismiss_on_input: false` désactive la
-règle, et `--check-rules` la vérifie sans économiseur réel.
+`HIDIdleTime` is readable while the session is locked, which makes the rule
+usable exactly where it is needed. Prolonged inactivity
+(`saver_redisplay_idle_seconds`, 90 s) re-arms the screen saver, since macOS
+goes back to it when the panel is left unanswered.
+`saver_dismiss_on_input: false` disables the rule, and `--check-rules` verifies
+it without a real screen saver.
 
-Propriétés qui en découlent :
+Resulting properties:
 
-- **Aucun état mémorisé qui puisse rester bloqué.** Les faits sont relus à
-  chaque cycle ; les notifications ne servent qu'à réagir plus vite, jamais de
-  seule source de vérité.
-- **Anti‑rebond explicite.** Un changement n'est publié qu'après une période de
-  stabilité (`settle_on_ms` / `settle_off_ms`), ce qui absorbe les états
-  transitoires (écran noir d'une seconde pendant le verrouillage, par exemple).
-- **Auto‑réparation.** Un trou dans la boucle de scrutation (veille, gel,
-  surcharge) est détecté et déclenche une resynchronisation complète.
-- **OFF poussé *avant* la veille.** IOKit permet de retenir la veille le temps
-  d'envoyer le webhook ; sans ça HomeKit resterait sur ON pendant toute la veille.
-- **Commandes vérifiées par les faits.** Une commande HomeKit qui n'a aucun effet
-  observable est escaladée puis abandonnée avec un avertissement, et l'état
-  revient à la réalité au lieu de mentir.
-- **Battement de cœur.** L'état est republié périodiquement : un webhook perdu ou
-  un Homebridge redémarré ne peut pas laisser HomeKit désynchronisé.
+- **No stored state that can get stuck.** Facts are re-read on every cycle;
+  notifications only make reactions faster, they are never the sole source of
+  truth.
+- **Explicit debouncing.** A change is only published after a stability period
+  (`settle_on_ms` / `settle_off_ms`), which absorbs transient states (a
+  one-second black screen while locking, for example).
+- **Self-healing.** A gap in the polling loop (sleep, freeze, overload) is
+  detected and triggers a full resync.
+- **OFF pushed *before* sleep.** IOKit lets the daemon hold off sleep long
+  enough to send the webhook; otherwise HomeKit would stay ON during the whole
+  sleep.
+- **Commands verified against facts.** A HomeKit command with no observable
+  effect is escalated, then abandoned with a warning, and the state goes back to
+  reality instead of lying.
+- **Heartbeat.** The state is republished periodically: a lost webhook or a
+  restarted Homebridge cannot leave HomeKit out of sync.
 
-Le cas « verrouillé sans champ visible » est traité comme ON par défaut (l'écran
-de verrouillage *est* une UI accessible). `require_auth_ui_when_locked: true`
-inverse ce choix en exigeant la saisie sécurisée active.
+The "locked with no field visible" case is treated as ON by default (the lock
+screen *is* an accessible UI). `require_auth_ui_when_locked: true` reverses that
+choice by requiring secure input to be active.
 
 ## Installation
 
@@ -98,90 +104,93 @@ inverse ce choix en exigeant la saisie sécurisée active.
 ./scripts/install.sh
 ```
 
-**Sans `sudo`.** Le script élève lui‑même les privilèges pour `/opt/macstatusd`
-et rien d'autre : lancé entièrement en root, `$UID` vaut 0 et
-`launchctl bootstrap gui/0` échoue avec « Domain does not support specified
-action » (un LaunchAgent appartient à une session graphique d'utilisateur). Si
-tu l'appelles quand même avec `sudo`, il se relance de lui‑même sous
-`$SUDO_USER`.
+**Without `sudo`.** The script elevates privileges itself for `/opt/macstatusd`
+and nothing else: run entirely as root, `$UID` is 0 and
+`launchctl bootstrap gui/0` fails with "Domain does not support specified
+action" (a LaunchAgent belongs to a user's graphical session). If you call it
+with `sudo` anyway, it re-runs itself as `$SUDO_USER`.
 
-Compile en release, installe `/opt/macstatusd/macstatusd`, crée
-`/opt/macstatusd/config.json` s'il n'existe pas, puis charge le LaunchAgent
-`~/Library/LaunchAgents/com.majid.macstatusd.plist` et vérifie que l'endpoint
-répond.
+It builds in release mode, installs `/opt/macstatusd/macstatusd`, creates
+`/opt/macstatusd/config.json` if it doesn't exist, then loads the LaunchAgent
+`~/Library/LaunchAgents/com.majid.macstatusd.plist` and checks that the endpoint
+responds.
 
-**LaunchAgent (session Aqua) et non LaunchDaemon** : c'est ce qui donne accès à
-l'état des écrans, aux notifications d'économiseur d'écran et à la saisie
-sécurisée. Conséquence : macstatusd ne tourne pas avant l'ouverture de session
-(après un redémarrage, Homebridge ne peut pas lire `/state` tant que personne ne
-s'est connecté). Le verrouillage de session, lui, est lu via l'IORegistry et
-fonctionnerait aussi depuis un LaunchDaemon.
+**LaunchAgent (Aqua session), not LaunchDaemon**: that is what gives access to
+display state, screen saver notifications and secure input. Consequence:
+macstatusd doesn't run before login (after a reboot, Homebridge can't read
+`/state` until someone has logged in). Session locking, on the other hand, is
+read through the IORegistry and would also work from a LaunchDaemon.
 
-Désinstallation : `./scripts/uninstall.sh` (ajouter `--purge` pour supprimer
-aussi la configuration et les journaux).
+Uninstall: `./scripts/uninstall.sh` (add `--purge` to also remove the
+configuration and logs).
 
 ## Endpoints
 
-| Route | Effet |
-|-------|-------|
-| `GET /state` | `1` (ON) ou `0` (OFF) — l'état publié, identique au dernier webhook |
-| `GET /status` | diagnostic JSON : faits bruts, preuves, commande en cours, état du webhook |
+| Route | Effect |
+|-------|--------|
+| `GET /state` | `1` (ON) or `0` (OFF) — the published state, identical to the last webhook |
+| `GET /status` | JSON diagnostics: raw facts, evidence, pending command, webhook state |
 | `GET /health` | `OK` |
-| `GET /sleep` (`/off`) | commande HomeKit OFF |
-| `GET /wake` (`/on`) | commande HomeKit ON |
-| `GET /resync` | republie l'état courant vers Homebridge |
+| `GET /sleep` (`/off`) | HomeKit OFF command |
+| `GET /wake` (`/on`) | HomeKit ON command |
+| `GET /resync` | republishes the current state to Homebridge |
 
-Si `auth_token` est renseigné, `/sleep`, `/wake` et `/resync` exigent
-`?token=…` ou l'en‑tête `X-Auth-Token`. `/state`, `/status` et `/health` restent
-publics (Homebridge lit `/state` sans jeton).
+If `auth_token` is set, `/sleep`, `/wake` and `/resync` require `?token=…` or
+the `X-Auth-Token` header. `/state`, `/status` and `/health` stay public
+(Homebridge reads `/state` without a token).
 
 ## Configuration
 
-`/opt/macstatusd/config.json` — toutes les clés sont optionnelles, une clé
-absente ou invalide retombe sur son défaut sans empêcher le démarrage.
+`/opt/macstatusd/config.json` — every key is optional; a missing or invalid key
+falls back to its default without preventing startup.
 
-| Clé | Défaut | Rôle |
-|-----|--------|------|
-| `enabled` | `false` | active les webhooks vers Homebridge |
-| `webhook_base_url` | `""` | ex. `http://192.168.1.89:51828` |
-| `accessory_id` | `"mac"` | `accessoryId` envoyé au plugin |
-| `port` | `9090` | port HTTP |
-| `bind_address` | `""` | `""` = toutes interfaces, `127.0.0.1` = loopback |
-| `auth_token` | `""` | protège les commandes |
-| `off_action` | `"screensaver"` | `screensaver`, `display_sleep` ou `system_sleep` |
-| `off_escalate_to_display_sleep` | `true` | si l'action OFF reste sans effet observé |
-| `stop_screensaver_on_wake` | `true` | termine l'économiseur lors d'un ON |
-| `command_confirm_timeout_ms` | `12000` | délai avant d'abandonner une commande |
-| `command_escalate_after_ms` | `2500` | délai avant d'escalader une commande sans effet |
-| `saver_dismiss_on_input` | `true` | une activité après le démarrage de l'économiseur → ON |
-| `saver_dismiss_grace_ms` | `1500` | marge ignorée juste après le démarrage |
-| `saver_redisplay_idle_seconds` | `90` | inactivité au bout de laquelle l'économiseur est réputé réaffiché |
-| `poll_interval_ms` | `500` | cadence de relecture des faits |
-| `settle_on_ms` / `settle_off_ms` | `300` / `800` | stabilité exigée avant publication |
-| `heartbeat_seconds` | `60` | republication périodique (`0` = désactivé) |
-| `require_auth_ui_when_locked` | `false` | verrouillé sans champ visible → OFF |
-| `webhook_timeout_ms` / `webhook_retries` | `4000` / `3` | robustesse des envois |
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `enabled` | `false` | enables webhooks to Homebridge |
+| `webhook_base_url` | `""` | e.g. `http://192.168.1.89:51828` |
+| `accessory_id` | `"mac"` | `accessoryId` sent to the plugin |
+| `port` | `9090` | HTTP port |
+| `bind_address` | `""` | `""` = all interfaces, `127.0.0.1` = loopback |
+| `auth_token` | `""` | protects commands |
+| `off_action` | `"screensaver"` | `screensaver`, `display_sleep` or `system_sleep` |
+| `off_escalate_to_display_sleep` | `true` | if the OFF action has no observed effect |
+| `stop_screensaver_on_wake` | `true` | terminates the screen saver on ON |
+| `command_confirm_timeout_ms` | `12000` | delay before giving up on a command |
+| `command_escalate_after_ms` | `2500` | delay before escalating a command with no effect |
+| `saver_dismiss_on_input` | `true` | activity after the screen saver started → ON |
+| `saver_dismiss_grace_ms` | `1500` | margin ignored right after the start |
+| `saver_redisplay_idle_seconds` | `90` | inactivity after which the screen saver is deemed back on screen |
+| `poll_interval_ms` | `500` | how often facts are re-read |
+| `settle_on_ms` / `settle_off_ms` | `300` / `800` | stability required before publishing |
+| `heartbeat_seconds` | `60` | periodic republication (`0` = disabled) |
+| `require_auth_ui_when_locked` | `false` | locked with no field visible → OFF |
+| `webhook_timeout_ms` / `webhook_retries` | `4000` / `3` | delivery robustness |
 | `log_level` | `"info"` | `error`, `warn`, `info`, `debug` |
 | `log_file` | `""` | `""` = `~/Library/Logs/macstatusd/macstatusd.log` |
-| `off_command` / `wake_command` | `[]` | remplacent l'action intégrée (argv, ou chaîne passée à `sh -c`) |
+| `off_command` / `wake_command` | `[]` | replace the built-in action (argv, or a string passed to `sh -c`) |
 
-### Choix de l'action OFF
+### Choosing the OFF action
 
-`off_action` décide de ce que fait HomeKit → OFF :
+`off_action` decides what HomeKit → OFF does:
 
-- `screensaver` (défaut) — démarre l'économiseur d'écran. Le Mac reste éveillé et
-  joignable, donc **HomeKit ON peut vraiment rallumer**.
-- `display_sleep` — éteint l'écran (`pmset displaysleepnow`). Même propriété.
-- `system_sleep` — vraie veille (`pmset sleepnow`). Attention : pendant la veille
-  le daemon est gelé, `/wake` n'est pas reçu ; il faut Wake‑on‑LAN côté
-  Homebridge pour rallumer.
+- `screensaver` (default) — starts the screen saver. The Mac stays awake and
+  reachable, so **HomeKit ON can actually turn it back on**.
+- `display_sleep` — turns the display off (`pmset displaysleepnow`). Same
+  property.
+- `system_sleep` — real sleep (`pmset sleepnow`). Beware: during sleep the
+  daemon is frozen and `/wake` is never received; Homebridge needs Wake-on-LAN
+  to turn the Mac back on.
 
-Dans les trois cas l'état publié devient OFF, et la commande n'est considérée
-comme réussie que si les faits le confirment.
+If the session is already locked, `screensaver` turns the display off instead:
+measured on macOS 26, `open -a ScreenSaverEngine` has no effect on a locked
+session. An OFF received while the Mac is already OFF triggers no action.
+
+In all three cases the published state becomes OFF, and the command is only
+considered successful once the facts confirm it.
 
 ## Homebridge
 
-Plugin `homebridge-http-webhooks`, accessoire de type switch :
+Plugin `homebridge-http-webhooks`, switch accessory:
 
 ```json
 {
@@ -191,69 +200,79 @@ Plugin `homebridge-http-webhooks`, accessoire de type switch :
     {
       "id": "mac",
       "name": "Mac",
-      "on_url": "http://<ip-du-mac>:9090/wake",
+      "on_url": "http://<mac-ip>:9090/wake",
       "on_method": "GET",
-      "off_url": "http://<ip-du-mac>:9090/sleep",
+      "off_url": "http://<mac-ip>:9090/sleep",
       "off_method": "GET"
     }
   ]
 }
 ```
 
-`webhook_base_url` dans `config.json` doit pointer vers ce `webhook_port`, et
-`accessory_id` correspondre à `id`.
+`webhook_base_url` in `config.json` must point to that `webhook_port`, and
+`accessory_id` must match `id`.
 
-## Diagnostic
+## Diagnostics
 
 ```bash
-/opt/macstatusd/macstatusd --once      # état + faits en JSON, puis quitte
-/opt/macstatusd/macstatusd --watch     # tableau des faits en continu
-curl -s localhost:9090/status          # vue complète de l'instance qui tourne
+/opt/macstatusd/macstatusd --once      # state + facts as JSON, then exits
+/opt/macstatusd/macstatusd --watch     # continuous table of facts
+curl -s localhost:9090/status          # full view of the running instance
 tail -f ~/Library/Logs/macstatusd/macstatusd.log
 launchctl print gui/$UID/com.majid.macstatusd
 ```
 
-`reason` dans `/status` indique la règle qui a décidé : `desktop-ui`,
-`lock-screen-ui`, `login-window-ui`, `display-asleep`, `screensaver:process`,
-`screensaver:window`, `system-asleep`, `no-display`,
-`locked-without-auth-ui`, `command:off/…`.
+`reason` in `/status` tells which rule decided: `desktop-ui`, `lock-screen-ui`,
+`login-window-ui`, `display-asleep`, `system-asleep`, `no-display`,
+`locked-without-auth-ui`, `screensaver:<evidence>` (for example
+`screensaver:process+notification`), `command:on`, `command:off/<action>`.
 
 ## Tests
 
 ```bash
-./scripts/selftest.sh                   # 30 vérifications, sans rien perturber sur la session
-/opt/macstatusd/macstatusd --check-rules # règle de l'économiseur, logique pure
-./scripts/validate-live.sh              # validation guidée en passant par les vrais états
+./scripts/selftest.sh                    # 30 checks, without disturbing the session
+/opt/macstatusd/macstatusd --check-rules # screen saver rule, pure logic
+./scripts/validate-live.sh               # guided validation through the real states
+# Diagnostic probe: triggers a real OFF (screen saver) at t≈4 s
 swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 60
 ```
 
-`selftest.sh` simule l'économiseur d'écran avec un faux binaire nommé
-`ScreenSaverEngine` (exactement ce que l'oracle « process » observe) et un
-serveur HTTP local jouant Homebridge ; il vérifie aussi le retour honnête d'une
-commande sans effet, l'authentification, les erreurs HTTP, les réessais de
-webhook et la reprise du serveur quand le port est occupé.
+`selftest.sh` simulates the screen saver with a fake binary named
+`ScreenSaverEngine` (exactly what the "process" oracle observes) and a local
+HTTP server playing Homebridge; it also checks the honest fallback of a command
+with no effect, authentication, HTTP errors, webhook retries and server recovery
+when the port is already taken.
 
-`validate-live.sh` demande d'effectuer les vraies actions (verrouiller, lancer
-l'économiseur, éteindre l'écran, mettre en veille) et vérifie automatiquement ce
-que macstatusd a rapporté pendant chacune.
+`validate-live.sh` (run it without `sudo`) asks you to perform the real actions
+(lock, start the screen saver, turn the display off, sleep) and automatically
+checks what macstatusd reported during each one.
 
-## Limites connues
+## Known limitations
 
-- **Veille système** : rien ne tourne pendant la veille. `/state` est
-  injoignable et `/wake` ne peut pas réveiller le Mac — il faut Wake‑on‑LAN.
-  C'est pourquoi `off_action` vaut `screensaver` par défaut.
-- **Avant l'ouverture de session** : le LaunchAgent n'est pas encore chargé.
-- **Multi‑utilisateur** : deux sessions ouvertes signifient deux instances pour
-  un seul port ; la seconde réessaie en boucle sans planter, mais l'état publié
-  est celui de l'instance qui détient le port.
-- **Écran externe coupé physiquement** : macOS le considère allumé, donc l'état
-  reste ON.
-- **Économiseurs hébergés par `legacyScreenSaver`** : détectés par l'oracle
-  fenêtres, qui nécessite la session graphique (donc le LaunchAgent).
+- **System sleep**: nothing runs during sleep. `/state` is unreachable and
+  `/wake` can't wake the Mac — Wake-on-LAN is needed. That's why `off_action`
+  defaults to `screensaver`.
+- **Before login**: the LaunchAgent isn't loaded yet.
+- **Multiple users**: two open sessions mean two instances for a single port;
+  the second one retries in a loop without crashing, but the published state is
+  the one from the instance holding the port.
+- **External display physically switched off**: macOS considers it on, so the
+  state stays ON.
+- **Screen savers hosted by `legacyScreenSaver`**: detected by the window
+  oracle, which requires the graphical session (hence the LaunchAgent).
+- **Esc on the lock screen**: dismissing the authentication overlay with Esc
+  doesn't bring the state back to OFF right away; it returns to OFF after
+  `saver_redisplay_idle_seconds` (90 s) of inactivity, or as soon as the display
+  sleeps. No signal telling the hidden overlay apart from the displayed one has
+  been identified yet (investigation ongoing with
+  `diagnostics/saver-probe.swift`).
 
-## Historique
+## History
 
-`Versionning/` et `backtest+debug/` contiennent les versions 1 à 4.4.4 et les
-outils de capture qui ont servi à identifier les signaux exploitables.
-`macstatusdV4.4.4.swift` reste à la racine pour référence ; la v5 ne le remplace
-pas sur disque.
+`Versionning/` and `backtest+debug/` contain versions 1 to 4.4.4 and the capture
+tools that were used to identify the usable signals. `macstatusdV4.4.4.swift`
+stays at the root for reference; v5 doesn't replace it on disk.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
