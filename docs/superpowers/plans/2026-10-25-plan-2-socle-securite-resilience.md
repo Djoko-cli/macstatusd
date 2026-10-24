@@ -185,7 +185,7 @@ func test_offActionInconnue_garderLeDefaut() {
   avant chaque `sync`.
 - Produit (`Fakes.swift`) : `FakeActions` (journal des appels) et `FakePublisher` (états publiés, avec `force`).
 
-- [ ] **Étape 1 : tests de caractérisation**, contre le comportement actuel :
+- [x] **Étape 1 : tests de caractérisation**, contre le comportement actuel :
   - `test_prioriteDesRegles` : faits construits par `FakeSignals`, une assertion par ligne du tableau
     ci-dessous ;
 
@@ -205,13 +205,13 @@ func test_offActionInconnue_garderLeDefaut() {
   - `test_dejaOff_aucuneAction` ;
   - `test_trouDeScrutation_au_dela_de_10s_resynchronise` ;
   - `test_battementDeCoeur_republieAvecForce`.
-- [ ] **Étape 2 : `swift test --filter EngineCoreTests`** — attendu : échec de compilation.
-- [ ] **Étape 3 : extraire `EngineCore`** de `StateEngine.swift`. Les `Date()` deviennent `clock.monotonic()`
+- [x] **Étape 2 : `swift test --filter EngineCoreTests`** — attendu : échec de compilation.
+- [x] **Étape 3 : extraire `EngineCore`** de `StateEngine.swift`. Les `Date()` deviennent `clock.monotonic()`
   pour les durées et `clock.wall()` pour les horodatages affichés. `EngineRunner` porte la file, les
   minuteries et les contrats de file (F81).
-- [ ] **Étape 4 : `swift test`** — attendu : tous les tests OK ; puis `bash scripts/selftest.sh` sur les
+- [x] **Étape 4 : `swift test`** — attendu : tous les tests OK ; puis `bash scripts/selftest.sh` sur les
   sections qui ne dépendent pas de l'écran — attendu : OK.
-- [ ] **Étape 5 : commit** « Socle : moteur d'état extrait et testé, file unique vérifiée ».
+- [x] **Étape 5 : commit** « Socle : moteur d'état extrait et testé, file unique vérifiée ».
 
 ### Tâche 4 : client webhook testable
 
@@ -231,16 +231,16 @@ func test_offActionInconnue_garderLeDefaut() {
 - Produit (`Fakes.swift`) : `FakeTransport`, qui enregistre les requêtes et répond selon un script
   (`[WebhookOutcome]`).
 
-- [ ] **Étape 1 : tests de caractérisation :**
+- [x] **Étape 1 : tests de caractérisation :**
   - `test_urlEstConstruiteAvecAccessoryIdEtState` : `http://192.0.2.10:51828/?accessoryId=mac&state=true` ;
   - `test_changementsFusionnes_seulLeDernierPart` ;
   - `test_echec_reessaieA0_5s_2s_5s_puisAbandonne` ;
   - `test_force_reemetUnEtatDejaConfirme`.
-- [ ] **Étape 2 : `swift test --filter WebhookClientTests`** — attendu : échec de compilation.
-- [ ] **Étape 3 : déplacer et injecter** : délais par `scheduler`, envois par `transport`.
+- [x] **Étape 2 : `swift test --filter WebhookClientTests`** — attendu : échec de compilation.
+- [x] **Étape 3 : déplacer et injecter** : délais par `scheduler`, envois par `transport`.
   `URLSessionTransport` reprend la session éphémère actuelle et rappelle sur la file reçue.
-- [ ] **Étape 4 : `swift test`** — attendu : tout OK.
-- [ ] **Étape 5 : commit** « Socle : client webhook injecté et testé ».
+- [x] **Étape 4 : `swift test`** — attendu : tout OK.
+- [x] **Étape 5 : commit** « Socle : client webhook injecté et testé ».
 
 ### Tâche 5 : analyse HTTP et routage testables
 
@@ -261,17 +261,17 @@ func test_offActionInconnue_garderLeDefaut() {
     que `EngineRunner` adopte ;
   - `final class Router { init(config: Config, engine: EngineFacade); func handle(_ request: HTTPRequest) -> HTTPResponse }`.
 
-- [ ] **Étape 1 : tests de caractérisation** :
+- [x] **Étape 1 : tests de caractérisation** :
   - `test_parse_ligneEtEnTetesEtQuery` ;
   - `test_routes_stateStatusHealth` ;
   - `test_commandeSansJetonConfigure_appelleLeMoteur` ;
   - `test_cheminInconnu_404` ;
   - `test_post_405`.
-- [ ] **Étape 2 : `swift test --filter "RequestParserTests|RouterTests"`** — attendu : échec de compilation.
-- [ ] **Étape 3 : extraire** l'analyse et le routage ; l'adaptateur ne fait plus que lire, appeler `Router`
+- [x] **Étape 2 : `swift test --filter "RequestParserTests|RouterTests"`** — attendu : échec de compilation.
+- [x] **Étape 3 : extraire** l'analyse et le routage ; l'adaptateur ne fait plus que lire, appeler `Router`
   et écrire.
-- [ ] **Étape 4 : `swift test`, puis `bash scripts/selftest.sh`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Socle : analyse HTTP et routage testables ».
+- [x] **Étape 4 : `swift test`, puis `bash scripts/selftest.sh`** — attendu : OK.
+- [x] **Étape 5 : commit** « Socle : analyse HTTP et routage testables ».
 
 ### Tâche 6 : selftest hermétique et critère de sortie du lot 1
 
@@ -282,14 +282,14 @@ F24, F66.
 
 **Interfaces :** aucune nouvelle.
 
-- [ ] **Étape 1 : `selftest.sh`** :
+- [x] **Étape 1 : `selftest.sh`** :
   - lance d'abord `swift test` ;
   - lit `--once` au départ ; si l'écran est éteint, la session verrouillée ou le Mac en veille, il marque
     `SAUTÉ (écran éteint)` les sections qui en dépendent, sans les compter en échec ;
   - `field()` renvoie `__ERREUR__` si curl ou le JSON échoue, ce qui distingue « clé absente » d'« erreur ».
-- [ ] **Étape 2 : `validate-live.sh`** : la fenêtre d'observation du journal lit aussi `macstatusd.log.1`
+- [x] **Étape 2 : `validate-live.sh`** : la fenêtre d'observation du journal lit aussi `macstatusd.log.1`
   et filtre par horodatage, ce qui la rend sûre en cas de rotation.
-- [ ] **Étape 3 : critère de sortie du lot 1**, en trois commandes :
+- [x] **Étape 3 : critère de sortie du lot 1**, en trois commandes :
   - `swift test --list-tests 2>/dev/null | sed -E 's/^[^.]+\.([^/]+)\/.*/\1/' | sort | uniq -c` — attendu
     au moins : `ConfigTests` 5, `ScreenSaverOracleTests` 17, `EngineCoreTests` 8, `WebhookClientTests` 4,
     `RequestParserTests` 1, `RouterTests` 4. Aucun test d'un composant de `MacStatusCore` hors de
@@ -297,7 +297,7 @@ F24, F66.
   - `grep -rln "import CoreGraphics\|import IOKit\|import AppKit\|import Network" Sources/MacStatusCore`
     — attendu : aucune ligne ;
   - `bash scripts/selftest.sh`, avec l'écran éteint comme allumé — attendu : aucun échec.
-- [ ] **Étape 4 : commit** « Tests : selftest hermétique, critère de sortie du socle ».
+- [x] **Étape 4 : commit** « Tests : selftest hermétique, critère de sortie du socle ».
 
 ---
 
@@ -321,7 +321,7 @@ F79, F28.
   `limit` caractères avec `…`.
 - Produit : `HTTPResponse.methodNotAllowed(allow: String)` → 405 avec l'en-tête `Allow`.
 
-- [ ] **Étape 1 : tests :**
+- [x] **Étape 1 : tests :**
 
 ```swift
 func test_ligneEnTroisElements() { XCTAssertEqual(parse("GET / \r\n\r\n"), .failure(.malformedRequestLine)) }
@@ -336,11 +336,11 @@ func test_escapeForLog() {
 }
 ```
 
-- [ ] **Étape 2 : `swift test --filter "RequestParserTests|LoggingTests"`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.** `Router` répond 400 à toute `ParseError`, et 405 avec `Allow` ;
+- [x] **Étape 2 : `swift test --filter "RequestParserTests|LoggingTests"`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.** `Router` répond 400 à toute `ParseError`, et 405 avec `Allow` ;
   l'adaptateur journalise le chemin par `escapeForLog`.
-- [ ] **Étape 4 : `swift test`** — attendu : OK.
-- [ ] **Étape 5 : commit** « HTTP : analyseur strict, journal sans caractères de contrôle ».
+- [x] **Étape 4 : `swift test`** — attendu : OK.
+- [x] **Étape 5 : commit** « HTTP : analyseur strict, journal sans caractères de contrôle ».
 
 ### Tâche 8 : jeton et règles d'accès
 
