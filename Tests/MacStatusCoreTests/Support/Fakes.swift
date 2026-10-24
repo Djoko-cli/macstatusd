@@ -161,3 +161,47 @@ final class FakePublisher: StatePublisher {
 
     var statusDictionary: [String: Any] { ["faux": true] }
 }
+
+/// Transport simulé : note chaque requête (avec l'instant de l'horloge, si on en
+/// fournit une) et répond selon un script. Rien ne sort du processus.
+///
+/// Par défaut la réponse part tout de suite, dans l'appel à `send`. Avec
+/// `differe`, les réponses restent en attente jusqu'à `terminerEnAttente()`,
+/// pour simuler un envoi en vol.
+final class FakeTransport: WebhookTransport {
+    private let horloge: TestClock?
+    /// Réponses à donner, dans l'ordre ; une fois épuisées, `reponseParDefaut`.
+    var script: [WebhookOutcome]
+    var reponseParDefaut = WebhookOutcome.delivered(status: 200)
+    var differe = false
+
+    private(set) var requetes: [WebhookRequest] = []
+    /// Instant monotone de chaque envoi (0 sans horloge).
+    private(set) var instants: [Double] = []
+    private var enAttente: [() -> Void] = []
+
+    init(script: [WebhookOutcome] = [], clock: TestClock? = nil) {
+        self.script = script
+        self.horloge = clock
+    }
+
+    /// Nombre de réponses retenues par `differe`.
+    var reponsesEnAttente: Int { enAttente.count }
+
+    func send(_ request: WebhookRequest, _ completion: @escaping (WebhookOutcome) -> Void) {
+        requetes.append(request)
+        instants.append(horloge?.t ?? 0)
+        let reponse = script.isEmpty ? reponseParDefaut : script.removeFirst()
+        if differe {
+            enAttente.append { completion(reponse) }
+        } else {
+            completion(reponse)
+        }
+    }
+
+    /// Livre la plus ancienne réponse retenue.
+    func terminerEnAttente() {
+        guard !enAttente.isEmpty else { return }
+        enAttente.removeFirst()()
+    }
+}

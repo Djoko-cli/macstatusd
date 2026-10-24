@@ -96,9 +96,8 @@ Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || opti
 
 // MARK: - Modes de diagnostic
 
-let webhook = WebhookClient(config: config)
 let actions = PowerActions(config: config)
-let engine = EngineRunner(config: config, webhook: webhook, actions: actions)
+let engine = EngineRunner(config: config, actions: actions)
 
 if options.once {
     let snapshot = engine.inspect()

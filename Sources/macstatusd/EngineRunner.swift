@@ -22,9 +22,14 @@ final class EngineRunner {
     private var pollTimer: DispatchSourceTimer?
     private var heartbeatTimer: DispatchSourceTimer?
 
-    init(config: Config, webhook: WebhookClient, actions: PowerActions) {
+    init(config: Config, actions: PowerActions) {
         self.config = config
-        self.webhook = webhook
+        // Le client webhook vit sur la file du moteur : transport et délais y rappellent.
+        let clock = SystemClock()
+        webhook = WebhookClient(config: config,
+                                transport: URLSessionTransport(config: config, queue: queue),
+                                scheduler: DispatchScheduler(queue: queue),
+                                clock: clock)
         let signals = LiveSystemSignals()
         let oracle = ScreenSaverOracle(
             minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
@@ -33,7 +38,7 @@ final class EngineRunner {
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
             signals: signals
         )
-        core = EngineCore(config: config, clock: SystemClock(), signals: signals, oracle: oracle,
+        core = EngineCore(config: config, clock: clock, signals: signals, oracle: oracle,
                           actions: actions, publisher: webhook)
     }
 
@@ -74,10 +79,10 @@ final class EngineRunner {
             guard let self else { allow(); return }
             dispatchPrecondition(condition: .onQueue(queue))
             // Comme avant l'extraction : la veille n'est autorisée qu'une fois
-            // l'état OFF livré à Homebridge, ou après 1,5 s au plus.
+            // l'état OFF livré à Homebridge, ou après 1,5 s au plus. L'attente est
+            // un rappel : elle ne bloque pas la file, qui doit recevoir la réponse.
             core.willSleep { [webhook] in
-                webhook.waitForDelivery(timeout: 1.5)
-                allow()
+                webhook.waitForDelivery(timeout: 1.5) { _ in allow() }
             }
         }
 
