@@ -72,8 +72,8 @@ keystroke or movement dismisses the screen saver**, the rule is:
 usable exactly where it is needed. Prolonged inactivity
 (`saver_redisplay_idle_seconds`, 90 s) re-arms the screen saver, since macOS
 goes back to it when the panel is left unanswered.
-`saver_dismiss_on_input: false` disables the rule, and `--check-rules` verifies
-it without a real screen saver.
+`saver_dismiss_on_input: false` disables the rule, and the unit tests
+(`swift test`, `ScreenSaverOracleTests`) verify it without a real screen saver.
 
 Resulting properties:
 
@@ -230,14 +230,20 @@ launchctl print gui/$UID/com.djoko.macstatusd
 ## Tests
 
 ```bash
-./scripts/selftest.sh                    # 30 checks, without disturbing the session
-/opt/macstatusd/macstatusd --check-rules # screen saver rule, pure logic
+swift test                               # unit tests of MacStatusCore (rules, engine, webhook, HTTP)
+./scripts/selftest.sh                    # runs swift test, then 29 checks on isolated test instances
 ./scripts/validate-live.sh               # guided validation through the real states
 # Diagnostic probe: triggers a real OFF (screen saver) at t≈4 s
 swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 60
 ```
 
-`selftest.sh` simulates the screen saver with a fake binary named
+`selftest.sh` runs `swift test` first, then starts test instances that are
+sealed off from the real daemon: they listen on 127.0.0.1 on ports 19000-19999,
+their commands are inert (`/usr/bin/true`) and the webhooks go to a local fake
+receiver. If the display is off, the session locked or the Mac asleep, the
+sections that need a lit display are marked SKIPPED instead of failing
+(`SELFTEST_FORCER_ECRAN_ETEINT=1` forces that branch without turning anything
+off). It simulates the screen saver with a fake binary named
 `ScreenSaverEngine` (exactly what the "process" oracle observes) and a local
 HTTP server playing Homebridge; it also checks the honest fallback of a command
 with no effect, authentication, HTTP errors, webhook retries and server recovery

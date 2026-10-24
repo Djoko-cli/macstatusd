@@ -1,42 +1,123 @@
 #!/bin/bash
-# Suite de tests automatisée et NON intrusive : rien n'est verrouillé, endormi
-# ni éteint sur la session en cours.
+# Suite de tests automatisée, hermétique et NON intrusive : rien n'est verrouillé,
+# endormi ni éteint sur la session en cours, et rien ne sort de la machine.
 #
-# Principe : un faux binaire nommé ScreenSaverEngine simule l'économiseur
-# d'écran (c'est exactement ce que l'oracle « process » observe), et un serveur
-# HTTP local joue le rôle de Homebridge pour vérifier les webhooks.
+# Principe :
+#   - `swift test` joue d'abord les tests unitaires de MacStatusCore ;
+#   - un faux binaire nommé ScreenSaverEngine simule l'économiseur d'écran
+#     (c'est exactement ce que l'oracle « process » observe) ;
+#   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks ;
+#   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
+#     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
+#     /off ne touche jamais l'écran du Mac.
+#
+# Si l'écran est éteint, la session verrouillée ou le Mac en veille au départ, les
+# sections qui dépendent d'un écran allumé sont marquées SAUTÉ, sans compter en
+# échec. Pour éprouver cette branche sans rien éteindre :
+#
+#   SELFTEST_FORCER_ECRAN_ETEINT=1 ./scripts/selftest.sh
+#
+# Une session verrouillée mais écran allumé suffit aux sections concernées ; si
+# tu veux les jouer malgré le verrou (par exemple depuis une session distante) :
+#
+#   SELFTEST_IGNORER_VERROU=1 ./scripts/selftest.sh
+#
+# Le dossier de compilation de Swift est un dossier temporaire (supprimé à la
+# sortie), ou SWIFT_SCRATCH s'il est défini (conservé). Il doit rester hors de
+# ~/Documents : la signature du .xctest échoue sous iCloud.
 #
 #   ./scripts/selftest.sh
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d /tmp/macstatusd-selftest.XXXXXX)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/macstatusd-selftest.XXXXXX")"
+if [[ -n "${SWIFT_SCRATCH:-}" ]]; then
+  SCRATCH="$SWIFT_SCRATCH"
+  SCRATCH_TEMPORAIRE=0
+else
+  SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/macstatusd-selftest-build.XXXXXX")"
+  SCRATCH_TEMPORAIRE=1
+fi
+
+# Plage réservée aux instances de test : 19000-19999 (jamais 9090, l'instance réelle).
 PORT_A=19090
 PORT_B=19091
+PORT_C=$((PORT_B + 5))
 PORT_HB=19099
 PASS=0
 FAIL=0
+SKIP=0
+
+# Processus lancés par ce script. Ce sont des enfants du shell et on ne les
+# attend qu'à l'arrêt : un PID ne peut donc pas être réattribué avant qu'on
+# l'arrête (le zombie le retient). Jamais de pkill : seulement ces PID.
+PIDS=()
+FAKE_PID=""
+
+arreter_pid() { # arreter_pid <pid> : TERM, puis KILL si le processus s'obstine
+  local pid="$1" essais=0
+  kill "$pid" 2>/dev/null || return 0
+  while kill -0 "$pid" 2>/dev/null && [[ $essais -lt 30 ]]; do
+    sleep 0.1
+    essais=$((essais + 1))
+  done
+  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 0
+}
 
 cleanup() {
-  pkill -f "macstatusd --config $WORK" 2>/dev/null
-  pkill -f "$WORK/hbmock.py" 2>/dev/null
-  pkill -f "$WORK/ScreenSaverEngine" 2>/dev/null
+  local pid
+  [[ -n "$FAKE_PID" ]] && arreter_pid "$FAKE_PID"
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do arreter_pid "$pid"; done
   rm -rf "$WORK"
+  [[ $SCRATCH_TEMPORAIRE -eq 1 ]] && rm -rf "$SCRATCH"
+  return 0
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 
-ok()   { PASS=$((PASS+1)); printf '  \033[32mOK\033[0m   %s\n' "$1"; }
-bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
+ok()   { PASS=$((PASS+1)); printf '  \033[32mOK\033[0m    %s\n' "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m  %s\n' "$1"; }
+saute() { SKIP=$((SKIP+1)); printf '  \033[33mSAUTÉ\033[0m %s (%s)\n' "$1" "$2"; }
 check() { # check <description> <attendu> <obtenu>
   if [[ "$2" == "$3" ]]; then ok "$1 (= $3)"; else bad "$1 — attendu '$2', obtenu '$3'"; fi
 }
+
 state()  { curl -fsS --max-time 2 "http://127.0.0.1:$1/state" 2>/dev/null; }
+# Valeur d'une clé de /status (chemin à points : facts.hid_idle_seconds).
+# Renvoie `__ERREUR__` si curl ou le JSON échoue, et une chaîne vide si la clé
+# est absente : on distingue ainsi « pas de commande en attente » d'une panne.
+field() { # field <port> <chemin>
+  local json
+  json="$(curl -fsS --max-time 2 "http://127.0.0.1:$1/status" 2>/dev/null)" || { echo "__ERREUR__"; return 0; }
+  printf '%s' "$json" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for cle in sys.argv[1].split('.'):
+    if isinstance(d, dict) and cle in d:
+        d = d[cle]
+    else:
+        d = None
+        break
+print('' if d is None else d)" "$2" 2>/dev/null || echo "__ERREUR__"
+}
+code()   { curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$@"; }
+
 # Attend un état plutôt qu'un délai fixe : la latence de détection dépend de la
 # machine, ce que ces tests ne doivent pas transformer en faux échec.
 await_state() { # await_state <port> <attendu> <secondes>
   local deadline=$((SECONDS + $3))
   while [[ $SECONDS -lt $deadline ]]; do
     [[ "$(state "$1")" == "$2" ]] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+await_field() { # await_field <port> <chemin> <attendu> <secondes>
+  local deadline=$((SECONDS + $4))
+  while [[ $SECONDS -lt $deadline ]]; do
+    [[ "$(field "$1" "$2")" == "$3" ]] && return 0
     sleep 0.25
   done
   return 1
@@ -49,18 +130,46 @@ await_http() { # await_http <port> <secondes>
   done
   return 1
 }
-field()  { curl -fsS --max-time 2 "http://127.0.0.1:$1/status" 2>/dev/null | python3 -c "
-import json,sys
-d = json.load(sys.stdin)
-for key in '$2'.split('.'):
-    d = d.get(key, {}) if isinstance(d, dict) else {}
-print(d if d != {} else '')"; }
-code()   { curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$@"; }
+await_lignes() { # await_lignes <fichier> <minimum> <secondes>
+  local deadline=$((SECONDS + $3))
+  while [[ $SECONDS -lt $deadline ]]; do
+    [[ "$(wc -l < "$1" | tr -d ' ')" -ge "$2" ]] && return 0
+    sleep 0.5
+  done
+  return 1
+}
+port_libre() { # port_libre <port> : vrai si personne n'écoute dessus
+  # SO_REUSEADDR, comme le daemon : les connexions en TIME_WAIT d'un lancement
+  # précédent ne comptent pas.
+  python3 -c "
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(('127.0.0.1', int(sys.argv[1])))
+except OSError:
+    sys.exit(1)" "$1" 2>/dev/null
+}
 
-echo "==> Compilation"
+# ---------------------------------------------------------------------------
+echo "==> Tests unitaires (swift test)"
 cd "$REPO"
-swift build -c release >/dev/null || { echo "build échouée"; exit 1; }
-BIN="$(swift build -c release --show-bin-path)/macstatusd"
+swift test --scratch-path "$SCRATCH" >"$WORK/swift-test.log" 2>&1
+RC=$?
+grep -E "Executed [0-9]+ tests" "$WORK/swift-test.log" | tail -1 | sed 's/^/  /'
+if [[ $RC -ne 0 ]]; then
+  tail -n 30 "$WORK/swift-test.log"
+  echo "swift test a échoué"
+  exit 1
+fi
+
+echo "==> Compilation du binaire"
+swift build --scratch-path "$SCRATCH" >/dev/null 2>"$WORK/build.err" || { cat "$WORK/build.err"; echo "build échouée"; exit 1; }
+BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/macstatusd"
+
+for port in $PORT_A $PORT_B $PORT_C $PORT_HB; do
+  port_libre "$port" || { echo "le port $port est déjà occupé : arrêt avant tout lancement"; exit 1; }
+done
 
 echo "==> Préparation de l'environnement de test dans $WORK"
 cat > "$WORK/fake.c" <<'C'
@@ -71,6 +180,7 @@ C
 HAVE_FAKE=0
 if clang -o "$WORK/ScreenSaverEngine" "$WORK/fake.c" 2>/dev/null; then HAVE_FAKE=1; fi
 
+# Faux récepteur de webhook : note le chemin de chaque requête reçue.
 cat > "$WORK/hbmock.py" <<'PY'
 import http.server, socketserver, sys
 class H(http.server.BaseHTTPRequestHandler):
@@ -83,64 +193,128 @@ socketserver.TCPServer.allow_reuse_address = True
 socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 
-cat > "$WORK/a.json" <<JSON
-{
-  "enabled": true,
+# Champs communs à toutes les instances : écoute locale, faux récepteur de
+# webhook, commandes inertes, aucune escalade.
+commun() {
+  cat <<JSON
+  "bind_address": "127.0.0.1",
   "webhook_base_url": "http://127.0.0.1:$PORT_HB/hook",
+  "off_command": ["/usr/bin/true"],
+  "wake_command": ["/usr/bin/true"],
+  "off_escalate_to_display_sleep": false,
+  "stop_screensaver_on_wake": false,
+JSON
+}
+
+{
+  echo "{"
+  commun
+  cat <<JSON
+  "enabled": true,
   "accessory_id": "selftest",
   "port": $PORT_A,
-  "bind_address": "127.0.0.1",
   "poll_interval_ms": 250,
   "settle_on_ms": 200,
   "settle_off_ms": 300,
   "heartbeat_seconds": 4,
   "command_confirm_timeout_ms": 3000,
   "saver_dismiss_on_input": false,
-  "off_command": ["/bin/sh", "-c", "$WORK/ScreenSaverEngine 6 &"],
-  "wake_command": ["/usr/bin/killall", "ScreenSaverEngine"],
   "log_level": "debug",
   "log_file": "$WORK/a.log"
 }
 JSON
+} > "$WORK/a.json"
 
-cat > "$WORK/b.json" <<JSON
 {
+  echo "{"
+  commun
+  cat <<JSON
   "enabled": false,
   "port": $PORT_B,
-  "bind_address": "127.0.0.1",
   "auth_token": "jeton-test",
   "poll_interval_ms": 250,
   "settle_off_ms": 200,
   "command_confirm_timeout_ms": 2000,
-  "off_escalate_to_display_sleep": false,
-  "off_command": ["/usr/bin/true"],
   "log_level": "debug",
   "log_file": "$WORK/b.log"
 }
 JSON
+} > "$WORK/b.json"
 
-python3 "$WORK/hbmock.py" $PORT_HB > "$WORK/hook.log" 2>&1 & disown
-"$BIN" --config "$WORK/a.json" > "$WORK/a.out" 2>&1 & disown
-"$BIN" --config "$WORK/b.json" > "$WORK/b.out" 2>&1 & disown
+# Instance C : copie de B sur un autre port, pour la reprise après port occupé.
+sed "s/\"port\": $PORT_B/\"port\": $PORT_C/; s|$WORK/b.log|$WORK/c.log|" "$WORK/b.json" > "$WORK/c.json"
+
+# Garde : aucune instance ne démarre si sa configuration sort du cadre hermétique.
+conformes=1
+for nom in a b c; do
+  python3 - "$WORK/$nom.json" <<'PY' || conformes=0
+import json, sys
+chemin = sys.argv[1]
+c = json.load(open(chemin))
+erreurs = []
+if c.get("bind_address") != "127.0.0.1": erreurs.append("bind_address")
+if not 19000 <= c.get("port", 0) <= 19999: erreurs.append("port")
+if c.get("off_command") != ["/usr/bin/true"]: erreurs.append("off_command")
+if c.get("wake_command") != ["/usr/bin/true"]: erreurs.append("wake_command")
+if c.get("off_escalate_to_display_sleep") is not False: erreurs.append("off_escalate_to_display_sleep")
+if c.get("stop_screensaver_on_wake") is not False: erreurs.append("stop_screensaver_on_wake")
+if not c.get("webhook_base_url", "").startswith("http://127.0.0.1:"): erreurs.append("webhook_base_url")
+if erreurs:
+    print("  configuration non hermétique (%s) : %s" % (chemin, ", ".join(erreurs)))
+    sys.exit(1)
+PY
+done
+[[ $conformes -eq 1 ]] || { echo "configurations d'essai non conformes : arrêt"; exit 1; }
+
+python3 "$WORK/hbmock.py" $PORT_HB > "$WORK/hook.log" 2>&1 &
+PIDS+=($!)
+"$BIN" --config "$WORK/a.json" > "$WORK/a.out" 2>&1 &
+PIDS+=($!)
+"$BIN" --config "$WORK/b.json" > "$WORK/b.out" 2>&1 &
+PIDS+=($!)
+
+# Lecture initiale (--once) : les sections qui exigent un écran allumé et une
+# session déverrouillée n'ont de sens que si c'est le cas.
+ECRAN_ETEINT=0
+RAISON_SAUT=""
+ONCE_JSON="$("$BIN" --config "$WORK/a.json" --once 2>/dev/null)"
+ETAT_INITIAL="$(printf '%s' "$ONCE_JSON" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+ignorer_verrou = sys.argv[1] == "1"
+raisons = []
+if d.get("system_asleep"): raisons.append("Mac en veille")
+if d.get("display_asleep"): raisons.append("écran éteint")
+if d.get("session_locked") and not ignorer_verrou: raisons.append("session verrouillée")
+print(" + ".join(raisons))' "${SELFTEST_IGNORER_VERROU:-0}" 2>/dev/null)" || ETAT_INITIAL="__ERREUR__"
+if [[ "$ETAT_INITIAL" == "__ERREUR__" ]]; then
+  bad "lecture initiale (--once) illisible : sections dépendantes de l'écran sautées par prudence"
+  ECRAN_ETEINT=1; RAISON_SAUT="lecture initiale illisible"
+elif [[ -n "$ETAT_INITIAL" ]]; then
+  ECRAN_ETEINT=1; RAISON_SAUT="écran éteint : $ETAT_INITIAL"
+fi
+if [[ "${SELFTEST_FORCER_ECRAN_ETEINT:-0}" == "1" ]]; then
+  ECRAN_ETEINT=1; RAISON_SAUT="écran éteint : forcé par SELFTEST_FORCER_ECRAN_ETEINT"
+fi
+if [[ $ECRAN_ETEINT -eq 1 ]]; then
+  echo "    Écran non disponible — $RAISON_SAUT : les sections qui en dépendent seront SAUTÉES."
+fi
+
 sleep 2
 
 echo
 echo "== 1. Disponibilité et cohérence"
 check "/health répond" "OK" "$(curl -fsS --max-time 2 http://127.0.0.1:$PORT_A/health)"
-ONCE="$("$BIN" --config "$WORK/a.json" --once | python3 -c 'import json,sys;print(json.load(sys.stdin)["state"])')"
+ONCE="$(printf '%s' "$ONCE_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["state"])' 2>/dev/null)"
 check "/state == état calculé par --once" "$ONCE" "$(state $PORT_A)"
 
 echo
-echo "== 2. Règle de décision de l'économiseur (logique pure, sources injectées)"
-if "$BIN" --check-rules | sed 's/^/  /' | grep -q "toutes vérifiées"; then
-  ok "les 17 vérifications de --check-rules passent"
+echo "== 2. Détection de l'économiseur d'écran (oracle process, machine réelle)"
+if [[ $ECRAN_ETEINT -eq 1 ]]; then
+  saute "détection de l'économiseur" "$RAISON_SAUT"
+elif [[ $HAVE_FAKE -ne 1 ]]; then
+  saute "détection de l'économiseur" "clang indisponible pour construire le faux économiseur"
 else
-  bad "--check-rules signale des échecs (le détail: $BIN --check-rules)"
-fi
-
-echo
-echo "== 3. Détection de l'économiseur d'écran (oracle process, machine réelle)"
-if [[ $HAVE_FAKE -eq 1 ]]; then
   "$WORK/ScreenSaverEngine" 8 &
   FAKE_PID=$!
   # Instance A : saver_dismiss_on_input=false, on teste l'oracle brut.
@@ -166,73 +340,99 @@ if [[ $HAVE_FAKE -eq 1 ]]; then
     bad "instance B ne voit pas l'économiseur en cours"
   fi
   IDLE="$(field $PORT_B facts.hid_idle_seconds)"
-  if [[ -n "$IDLE" ]]; then ok "inactivité HID exposée ($IDLE s)"; else bad "hid_idle_seconds absent de /status"; fi
+  if [[ -n "$IDLE" && "$IDLE" != "__ERREUR__" ]]; then ok "inactivité HID exposée ($IDLE s)"; else bad "hid_idle_seconds absent de /status"; fi
 
-  kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null
+  arreter_pid "$FAKE_PID"; FAKE_PID=""
   if await_state $PORT_A 1 5; then ok "retour à ON après l'économiseur"; else bad "état non revenu à ON après l'économiseur"; fi
-else
-  echo "  (ignoré : clang indisponible pour construire le faux économiseur)"
 fi
 
 echo
-echo "== 4. Commandes HomeKit confirmées par les faits"
-curl -fsS --max-time 2 "http://127.0.0.1:$PORT_A/off" >/dev/null
-sleep 0.3
-check "OFF immédiat (retour instantané à HomeKit)" "0" "$(state $PORT_A)"
-sleep 1.5
-check "commande OFF confirmée (plus de commande en attente)" "" "$(field $PORT_A pending_command.source)"
-check "état toujours OFF" "0" "$(state $PORT_A)"
-curl -fsS --max-time 2 "http://127.0.0.1:$PORT_A/on" >/dev/null
-sleep 1.8
-check "ON confirmé après /on" "1" "$(state $PORT_A)"
-check "commande ON confirmée" "" "$(field $PORT_A pending_command.source)"
+echo "== 3. Commandes HomeKit confirmées par les faits"
+if [[ $ECRAN_ETEINT -eq 1 ]]; then
+  saute "commandes /off puis /on confirmées" "$RAISON_SAUT"
+elif [[ $HAVE_FAKE -ne 1 ]]; then
+  saute "commandes /off puis /on confirmées" "clang indisponible pour construire le faux économiseur"
+else
+  # Les commandes de l'instance sont inertes (/usr/bin/true) : c'est le script
+  # qui joue l'effet, en lançant puis en arrêtant le faux économiseur.
+  curl -fsS --max-time 2 "http://127.0.0.1:$PORT_A/off" >/dev/null
+  check "OFF immédiat (retour instantané à HomeKit)" "0" "$(state $PORT_A)"
+  "$WORK/ScreenSaverEngine" 8 &
+  FAKE_PID=$!
+  if await_field $PORT_A pending_command.source "" 5; then
+    ok "commande OFF confirmée (plus de commande en attente)"
+  else
+    bad "commande OFF non confirmée par les faits"
+  fi
+  check "état toujours OFF" "0" "$(state $PORT_A)"
+  curl -fsS --max-time 2 "http://127.0.0.1:$PORT_A/on" >/dev/null
+  arreter_pid "$FAKE_PID"; FAKE_PID=""
+  if await_state $PORT_A 1 5; then ok "ON confirmé après /on"; else bad "ON non confirmé après /on"; fi
+  check "commande ON confirmée" "" "$(field $PORT_A pending_command.source)"
+fi
 
 echo
-echo "== 5. Commande sans effet : retour honnête aux faits"
-curl -fsS --max-time 2 "http://127.0.0.1:$PORT_B/off?token=jeton-test" >/dev/null
-sleep 0.4
-check "OFF affiché pendant la commande" "0" "$(state $PORT_B)"
-sleep 2.4
-check "retour à l'état réel après expiration" "1" "$(state $PORT_B)"
-if grep -q "non confirmée" "$WORK/b.log"; then ok "avertissement journalisé"; else bad "aucun avertissement 'non confirmée' dans le journal"; fi
+echo "== 4. Commande sans effet : retour honnête aux faits"
+if [[ $ECRAN_ETEINT -eq 1 ]]; then
+  saute "retour à l'état réel après une commande sans effet" "$RAISON_SAUT"
+else
+  curl -fsS --max-time 2 "http://127.0.0.1:$PORT_B/off?token=jeton-test" >/dev/null
+  sleep 0.4
+  check "OFF affiché pendant la commande" "0" "$(state $PORT_B)"
+  if await_state $PORT_B 1 6; then ok "retour à l'état réel après expiration"; else bad "état non revenu à ON après expiration"; fi
+  if grep -q "non confirmée" "$WORK/b.log"; then ok "avertissement journalisé"; else bad "aucun avertissement 'non confirmée' dans le journal"; fi
+fi
 
 echo
-echo "== 6. Serveur HTTP"
+echo "== 5. Serveur HTTP"
 check "route inconnue → 404" "404" "$(code http://127.0.0.1:$PORT_A/inconnu)"
 check "POST → 405" "405" "$(code -X POST http://127.0.0.1:$PORT_A/state)"
 check "requête surdimensionnée → 413" "413" "$(code "http://127.0.0.1:$PORT_A/state?x=$(python3 -c 'print("a"*65000)')")"
 check "commande sans jeton → 401" "401" "$(code http://127.0.0.1:$PORT_B/off)"
 check "commande avec jeton → 200" "200" "$(code "http://127.0.0.1:$PORT_B/off?token=jeton-test")"
 check "/state reste public" "200" "$(code http://127.0.0.1:$PORT_B/state)"
-PIDS=()
-for _ in $(seq 10); do state $PORT_A > /dev/null & PIDS+=($!); done
-for pid in "${PIDS[@]}"; do wait "$pid"; done
+REQ_PIDS=()
+for _ in $(seq 10); do state $PORT_A > /dev/null & REQ_PIDS+=($!); done
+for pid in "${REQ_PIDS[@]}"; do wait "$pid"; done
 check "toujours vivant après 10 requêtes simultanées" "OK" "$(curl -fsS --max-time 2 http://127.0.0.1:$PORT_A/health)"
 
 echo
-echo "== 7. Webhooks Homebridge"
-if grep -q "accessoryId=selftest&state=false" "$WORK/hook.log"; then ok "push OFF reçu"; else bad "aucun push state=false reçu"; fi
-if grep -q "accessoryId=selftest&state=true" "$WORK/hook.log"; then ok "push ON reçu"; else bad "aucun push state=true reçu"; fi
+echo "== 6. Webhooks (faux récepteur local)"
+if [[ $ECRAN_ETEINT -eq 1 ]]; then
+  saute "pushs OFF puis ON reçus" "$RAISON_SAUT"
+else
+  if grep -q "accessoryId=selftest&state=false" "$WORK/hook.log"; then ok "push OFF reçu"; else bad "aucun push state=false reçu"; fi
+  if grep -q "accessoryId=selftest&state=true" "$WORK/hook.log"; then ok "push ON reçu"; else bad "aucun push state=true reçu"; fi
+fi
+# Le battement de cœur est de 4 s : on lui laisse le temps de se manifester.
+await_lignes "$WORK/hook.log" 3 15
 HB="$(wc -l < "$WORK/hook.log" | tr -d ' ')"
 if [[ "$HB" -ge 3 ]]; then ok "battement de cœur actif ($HB requêtes)"; else bad "battement de cœur absent ($HB requêtes)"; fi
-check "webhook synchronisé (voulu == confirmé)" "$(field $PORT_A webhook.desired)" "$(field $PORT_A webhook.confirmed)"
+DESIRE="$(field $PORT_A webhook.desired)"
+CONFIRME="$(field $PORT_A webhook.confirmed)"
+if [[ "$DESIRE" == "__ERREUR__" || "$CONFIRME" == "__ERREUR__" ]]; then
+  bad "webhook synchronisé : /status illisible"
+else
+  check "webhook synchronisé (voulu == confirmé)" "$DESIRE" "$CONFIRME"
+fi
 
 echo
-echo "== 8. Reprise du serveur si le port est occupé"
-python3 - "$PORT_B" <<'PY' &
+echo "== 7. Reprise du serveur si le port est occupé"
+python3 - "$PORT_C" <<'PY' &
 import socket, sys, time
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", int(sys.argv[1]) + 5)); s.listen(1); time.sleep(5)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(5)
 PY
+PIDS+=($!)
 sleep 0.5
-sed "s/\"port\": $PORT_B/\"port\": $((PORT_B+5))/; s|$WORK/b.log|$WORK/c.log|" "$WORK/b.json" > "$WORK/c.json"
-"$BIN" --config "$WORK/c.json" > "$WORK/c.out" 2>&1 & disown
+"$BIN" --config "$WORK/c.json" > "$WORK/c.out" 2>&1 &
+PIDS+=($!)
 sleep 2
 if grep -q "Address already in use" "$WORK/c.log"; then ok "conflit de port détecté sans crash"; else bad "conflit de port non journalisé"; fi
-if await_http $((PORT_B+5)) 30; then ok "écoute reprise après libération du port"; else bad "écoute non reprise après libération du port"; fi
+if await_http $PORT_C 30; then ok "écoute reprise après libération du port"; else bad "écoute non reprise après libération du port"; fi
 
 echo
 echo "==================================="
-printf 'Résultat: %d OK, %d échec(s)\n' "$PASS" "$FAIL"
+printf 'Résultat: %d OK, %d échec(s), %d sauté(s)\n' "$PASS" "$FAIL" "$SKIP"
 echo "Journaux: $WORK (supprimé à la sortie)"
 [[ $FAIL -eq 0 ]]

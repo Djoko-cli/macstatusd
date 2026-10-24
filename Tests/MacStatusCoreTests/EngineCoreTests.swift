@@ -115,6 +115,42 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(ouvert.etat, true); XCTAssertEqual(ouvert.raison, "desktop-ui")
     }
 
+    /// Option `require_auth_ui_when_locked` : une session verrouillée sans saisie
+    /// sécurisée (pas de champ de mot de passe) est OFF. Cette règle passe après
+    /// « aucun écran » et avant « écran de verrouillage visible ».
+    func test_verrouilleSansSaisieSecurisee_donneLockedWithoutAuthUI() {
+        var config = Config()
+        config.requireAuthUIWhenLocked = true
+
+        func verdict(_ config: Config, preparer: (FakeSignals) -> Void) -> (etat: Bool, raison: String) {
+            signaux = Self.signauxDeBureau()
+            preparer(signaux)
+            let resultat = moteur(config).inspect()
+            return (resultat.state, resultat.reason)
+        }
+
+        // Verrouillée, aucune saisie sécurisée : OFF.
+        let sansChamp = verdict(config) { $0.etatSession.locked = true }
+        XCTAssertEqual(sansChamp.etat, false); XCTAssertEqual(sansChamp.raison, "locked-without-auth-ui")
+
+        // Priorité inférieure à « aucun écran » : celle-ci l'emporte.
+        let sansEcran = verdict(config) { $0.etatSession.locked = true; $0.etatEcran.onlineCount = 0 }
+        XCTAssertEqual(sansEcran.etat, false); XCTAssertEqual(sansEcran.raison, "no-display")
+
+        // Priorité supérieure à « écran de verrouillage visible » : avec le champ
+        // de mot de passe (saisie sécurisée), c'est lock-screen-ui qui reste.
+        let avecChamp = verdict(config) { $0.etatSession.locked = true; $0.saisieSecurisee = true }
+        XCTAssertEqual(avecChamp.etat, true); XCTAssertEqual(avecChamp.raison, "lock-screen-ui")
+
+        // Option inactive (défaut) : la session verrouillée sans champ reste ON.
+        let optionInactive = verdict(Config()) { $0.etatSession.locked = true }
+        XCTAssertEqual(optionInactive.etat, true); XCTAssertEqual(optionInactive.raison, "lock-screen-ui")
+
+        // Session déverrouillée : l'option n'agit pas.
+        let deverrouillee = verdict(config) { _ in }
+        XCTAssertEqual(deverrouillee.etat, true); XCTAssertEqual(deverrouillee.raison, "desktop-ui")
+    }
+
     // MARK: - Lissage
 
     func test_lissage_offAttend800ms_onAttend300ms() {
@@ -264,6 +300,27 @@ final class EngineCoreTests: XCTestCase {
         scruter(core, 11)
         XCTAssertTrue(core.currentState)
         XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: false))
+    }
+
+    /// Le seuil vaut `max(10, scrutation × 20 ms)` : à 1000 ms, 20 s.
+    func test_seuilDeTrouDeScrutation_suitLIntervalleDeScrutation() {
+        var config = Config()
+        config.pollIntervalMS = 1000
+        let core = moteur(config)
+        core.start()
+        scruter(core, 1)
+        XCTAssertEqual(publieur.publications.count, 1)
+
+        // 15 s dépassent le seuil de base (10 s) mais pas celui de 20 s.
+        scruter(core, 15)
+        XCTAssertEqual(publieur.publications.count, 1)
+        XCTAssertFalse(journalContient("interruption de"))
+
+        // 21 s : au-delà du seuil, resynchronisation forcée.
+        scruter(core, 21)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: true))
+        XCTAssertEqual(publieur.publications.count, 2)
+        XCTAssertTrue(journalContient("interruption de 21.0 s détectée → resynchronisation"))
     }
 
     func test_battementDeCoeur_republieAvecForce() {

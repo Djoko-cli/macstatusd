@@ -59,16 +59,23 @@ print(json.dumps({
 ) & REC_PID=$!
 
 MARK=0
-LOGMARK=0
+LOGSTART=""
+# Horodatage local au format du journal (yyyy-MM-dd HH:mm:ss.SSS).
+horodatage() { python3 -c 'import datetime; print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3])'; }
 # La fenêtre d'observation doit commencer AVANT l'action, sinon on ne mesure que
 # le retour au bureau.
 window_start() {
   MARK=$(wc -l < "$REC" | tr -d ' ')
-  LOGMARK=$(wc -l < "$LOGFILE" 2>/dev/null | tr -d ' ')
-  [[ -n "$LOGMARK" ]] || LOGMARK=0
+  LOGSTART="$(horodatage)"
 }
-# Ne cherche que dans ce que le daemon a journalisé pendant l'étape.
-log_since_mark() { tail -n "+$((LOGMARK + 1))" "$LOGFILE" 2>/dev/null; }
+# Ne cherche que dans ce que le daemon a journalisé pendant l'étape. On filtre par
+# horodatage (et non par numéro de ligne) et on lit aussi `<journal>.1` : si le
+# journal tourne pendant l'étape (rotation à 2 Mo), les lignes du début de
+# fenêtre sont dans le fichier précédent. Les lignes sans horodatage sont ignorées.
+log_since_mark() {
+  cat "$LOGFILE.1" "$LOGFILE" 2>/dev/null \
+    | awk -v debut="$LOGSTART" 'length($0) >= 23 && substr($0, 1, 4) ~ /^[0-9][0-9][0-9][0-9]$/ && substr($0, 1, 23) >= debut'
+}
 # window_has <expression python sur la variable r> : vrai si un échantillon
 # enregistré depuis window_start satisfait l'expression.
 window_has() {
@@ -164,12 +171,15 @@ fi
 # 5. Veille système
 step "Étape 5/5 — veille système" \
      "Mets le Mac en veille (menu Pomme > Suspendre), attends ~10 s, réveille-le, déverrouille, reviens ici,"
-if log_since_mark | grep -q "veille imminente"; then
+# Capturé une fois : un `grep -q` en fin de tube coupe le tube (SIGPIPE) et, avec
+# pipefail, ferait échouer le test à tort.
+LOG_ETAPE="$(log_since_mark)"
+if grep -q "veille imminente" <<<"$LOG_ETAPE"; then
   ok "veille détectée par IOKit (OFF poussé avant le gel du daemon)"
 else
   bad "aucune trace « veille imminente » dans $LOGFILE"
 fi
-if log_since_mark | grep -qE "réveil système|interruption de"; then
+if grep -qE "réveil système|interruption de" <<<"$LOG_ETAPE"; then
   ok "réveil détecté et resynchronisation effectuée"
 else
   bad "aucune trace de réveil/resynchronisation dans le journal"

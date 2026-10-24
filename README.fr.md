@@ -70,7 +70,8 @@ frappe ou tout mouvement écarte l'économiseur**, la règle est :
 exactement là où on en a besoin. Une inactivité prolongée
 (`saver_redisplay_idle_seconds`, 90 s) réarme l'économiseur, macOS y revenant
 quand le panneau reste sans réponse. `saver_dismiss_on_input: false` désactive la
-règle, et `--check-rules` la vérifie sans économiseur réel.
+règle, et les tests unitaires (`swift test`, `ScreenSaverOracleTests`) la vérifient
+sans économiseur réel.
 
 Propriétés qui en découlent :
 
@@ -228,14 +229,20 @@ launchctl print gui/$UID/com.djoko.macstatusd
 ## Tests
 
 ```bash
-./scripts/selftest.sh                    # 30 vérifications, sans rien perturber sur la session
-/opt/macstatusd/macstatusd --check-rules # règle de l'économiseur, logique pure
+swift test                               # tests unitaires de MacStatusCore (règles, moteur, webhook, HTTP)
+./scripts/selftest.sh                    # lance swift test, puis 29 vérifications sur des instances d'essai isolées
 ./scripts/validate-live.sh               # validation guidée en passant par les vrais états
 # Sonde de diagnostic : déclenche un vrai OFF (économiseur) à t≈4 s
 swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 60
 ```
 
-`selftest.sh` simule l'économiseur d'écran avec un faux binaire nommé
+`selftest.sh` lance d'abord `swift test`, puis démarre des instances d'essai
+isolées du vrai daemon : elles écoutent sur 127.0.0.1, sur les ports 19000 à
+19999, leurs commandes sont inertes (`/usr/bin/true`) et les webhooks vont vers
+un faux récepteur local. Si l'écran est éteint, la session verrouillée ou le Mac
+en veille, les sections qui exigent un écran allumé sont marquées SAUTÉ au lieu
+d'échouer (`SELFTEST_FORCER_ECRAN_ETEINT=1` force cette branche sans rien
+éteindre). Il simule l'économiseur d'écran avec un faux binaire nommé
 `ScreenSaverEngine` (exactement ce que l'oracle « process » observe) et un
 serveur HTTP local jouant Homebridge ; il vérifie aussi le retour honnête d'une
 commande sans effet, l'authentification, les erreurs HTTP, les réessais de

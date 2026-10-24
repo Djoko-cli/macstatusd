@@ -3,8 +3,6 @@ import Foundation
 /// Instantané des faits observables. Aucune interprétation ici : uniquement ce
 /// que le système rapporte, avec la provenance de chaque valeur pour /status.
 public struct Facts {
-    public var timestamp = Date()
-
     /// Veille système confirmée par IOKit (kIOMessageSystemWillSleep).
     public var systemAsleep = false
     /// Écran physiquement éteint (display sleep).
