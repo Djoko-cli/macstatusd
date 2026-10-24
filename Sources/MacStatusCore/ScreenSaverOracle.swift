@@ -1,6 +1,4 @@
 import Foundation
-import CoreGraphics
-import MacStatusCore
 
 /// Détermine si l'économiseur d'écran **occupe seul l'écran**.
 ///
@@ -27,68 +25,59 @@ import MacStatusCore
 /// une inactivité prolongée (`redisplayIdle`) réarme l'économiseur, macOS
 /// revenant à l'économiseur quand le panneau reste sans réponse.
 ///
+/// Les instants sont des secondes monotones (`Clock.monotonic()`), pas des dates.
 /// À n'utiliser que depuis la file série du moteur d'état.
-final class ScreenSaverOracle {
-    enum WindowVerdict { case visible, notVisible, unavailable }
-
-    struct Verdict {
+public final class ScreenSaverOracle {
+    public struct Verdict {
         /// Économiseur seul à l'écran (ce qui décide de l'état OFF).
-        var active: Bool
+        public var active: Bool
         /// Économiseur en cours, panneau par‑dessus ou non.
-        var running: Bool
+        public var running: Bool
         /// Il tourne, mais une activité utilisateur l'a recouvert.
-        var dismissed: Bool
-        var evidence: String
+        public var dismissed: Bool
+        public var evidence: String
     }
 
     private var notificationSaysActive = false
     private var pendingRearm = false
     /// Instant où l'économiseur a commencé à occuper l'écran.
-    private var occupyingSince: Date?
+    private var occupyingSince: Double?
     private var lastSaverPID: Int32 = 0
     private var lastWindowVerdict = WindowVerdict.unavailable
-    private var lastWindowCheck = Date.distantPast
+    private var lastWindowCheck = -Double.infinity
 
-    private let minimumInterval: TimeInterval
+    private let minimumInterval: Double
     private let dismissOnInput: Bool
-    private let dismissGrace: TimeInterval
-    private let redisplayIdle: TimeInterval
-    /// `p_comm` est tronqué à 16 caractères par le noyau : « ScreenSaverEngine »
-    /// devient « ScreenSaverEngin ».
-    private let engineCommPrefix = "ScreenSaverEngin"
+    private let dismissGrace: Double
+    private let redisplayIdle: Double
+    private let signals: SystemSignals
 
-    /// `processProbe` et `windowProbe` ne servent qu'à `--check-rules` : ils
-    /// permettent de vérifier la règle de décision sans économiseur réel.
-    private let processProbe: (() -> Int32)?
-    private let windowProbe: (() -> WindowVerdict)?
-
-    init(minimumInterval: TimeInterval = 1.0,
-         dismissOnInput: Bool = true,
-         dismissGrace: TimeInterval = 1.5,
-         redisplayIdle: TimeInterval = 90,
-         processProbe: (() -> Int32)? = nil,
-         windowProbe: (() -> WindowVerdict)? = nil) {
+    public init(minimumInterval: Double = 1.0,
+                dismissOnInput: Bool = true,
+                dismissGrace: Double = 1.5,
+                redisplayIdle: Double = 90,
+                signals: SystemSignals) {
         self.minimumInterval = minimumInterval
         self.dismissOnInput = dismissOnInput
         self.dismissGrace = dismissGrace
         self.redisplayIdle = redisplayIdle
-        self.processProbe = processProbe
-        self.windowProbe = windowProbe
+        self.signals = signals
     }
 
     /// Une notification `didstart` signifie que l'économiseur (re)prend l'écran :
     /// on réarme la fenêtre d'observation de l'activité.
-    func noteNotification(active: Bool) {
+    public func noteNotification(active: Bool) {
         if active && !notificationSaysActive { pendingRearm = true }
         notificationSaysActive = active
-        lastWindowCheck = .distantPast
+        lastWindowCheck = -Double.infinity
     }
 
-    func verdict(now: Date = Date(), hidIdle: Double) -> Verdict {
+    /// `now` est un instant monotone en secondes (voir `Clock.monotonic()`).
+    public func verdict(now: Double, hidIdle: Double) -> Verdict {
         var evidence: [String] = []
         var running = false
 
-        let saverPID = enginePID()
+        let saverPID = signals.saverEnginePID()
         if saverPID != 0 {
             running = true
             evidence.append("process")
@@ -96,8 +85,8 @@ final class ScreenSaverOracle {
 
         // Vérification des fenêtres à chaque cycle tant qu'un indice existe,
         // sinon en filet de sécurité une fois par `minimumInterval`.
-        if notificationSaysActive || now.timeIntervalSince(lastWindowCheck) >= minimumInterval {
-            lastWindowVerdict = windowVerdict()
+        if notificationSaysActive || now - lastWindowCheck >= minimumInterval {
+            lastWindowVerdict = signals.saverWindow()
             lastWindowCheck = now
         }
         if lastWindowVerdict == .visible {
@@ -127,8 +116,8 @@ final class ScreenSaverOracle {
 
         var dismissed = false
         if dismissOnInput, hidIdle >= 0, let since = occupyingSince {
-            let lastInput = now.addingTimeInterval(-hidIdle)
-            if lastInput > since.addingTimeInterval(dismissGrace) {
+            let lastInput = now - hidIdle
+            if lastInput > since + dismissGrace {
                 if hidIdle >= redisplayIdle {
                     // Personne n'a touché la machine depuis longtemps : macOS est
                     // revenu à l'économiseur, on réarme au lieu de rester à ON.
@@ -145,43 +134,5 @@ final class ScreenSaverOracle {
                        running: true,
                        dismissed: dismissed,
                        evidence: evidence.joined(separator: "+"))
-    }
-
-    // MARK: - Sources
-
-    private func enginePID() -> Int32 {
-        if let processProbe { return processProbe() }
-        for process in runningProcesses() where process.name.hasPrefix(engineCommPrefix) {
-            return process.pid
-        }
-        return 0
-    }
-
-    private func windowVerdict() -> WindowVerdict {
-        if let windowProbe { return windowProbe() }
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
-              !list.isEmpty else {
-            return .unavailable
-        }
-
-        let screen = CGDisplayBounds(CGMainDisplayID())
-        let screenArea = Double(screen.width * screen.height)
-        let saverLevel = Int(CGWindowLevelForKey(.screenSaverWindow))
-
-        for window in list {
-            guard let layer = window[kCGWindowLayer as String] as? Int, layer >= saverLevel else { continue }
-            guard let owner = window[kCGWindowOwnerName as String] as? String,
-                  owner.lowercased().contains("screensaver") else { continue }
-
-            // Écarte l'aperçu miniature des Réglages Système : on exige une
-            // fenêtre qui couvre réellement l'écran.
-            guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
-                  let height = (bounds["Height"] as? NSNumber)?.doubleValue else { continue }
-            if screenArea <= 0 || (width * height) >= 0.5 * screenArea {
-                return .visible
-            }
-        }
-        return .notVisible
     }
 }

@@ -4,55 +4,6 @@ import CoreGraphics
 import Carbon
 import MacStatusCore
 
-/// Instantané des faits observables. Aucune interprétation ici : uniquement ce
-/// que le système rapporte, avec la provenance de chaque valeur pour /status.
-struct Facts {
-    var timestamp = Date()
-
-    /// Veille système confirmée par IOKit (kIOMessageSystemWillSleep).
-    var systemAsleep = false
-    /// Écran physiquement éteint (display sleep).
-    var displayAsleep = false
-    var onlineDisplays = 0
-    var displayEnumerationOK = false
-    /// Économiseur seul à l'écran. Faux dès qu'une activité utilisateur l'a
-    /// recouvert du panneau d'authentification (voir `ScreenSaverOracle`).
-    var screenSaverActive = false
-    var screenSaverEvidence = "none"
-    /// Économiseur en cours d'exécution, panneau de login par‑dessus ou non.
-    var screenSaverRunning = false
-    /// L'économiseur tourne mais une activité utilisateur l'a écarté.
-    var screenSaverDismissed = false
-    /// Secondes depuis la dernière activité clavier/souris matérielle
-    /// (`IOHIDSystem.HIDIdleTime`), -1 si indisponible.
-    var hidIdleSeconds: Double = -1
-    var sessionLocked = false
-    var lockEvidence = "none"
-    /// Un utilisateur est ouvert sur la console (false = fenêtre de login).
-    var consoleUserLoggedIn = false
-    /// Saisie sécurisée active : sur session verrouillée, signe que le champ
-    /// mot de passe de l'écran de verrouillage a le focus.
-    var secureInputActive = false
-
-    var asDictionary: [String: Any] {
-        [
-            "system_asleep": systemAsleep,
-            "display_asleep": displayAsleep,
-            "online_displays": onlineDisplays,
-            "display_enumeration_ok": displayEnumerationOK,
-            "screensaver_active": screenSaverActive,
-            "screensaver_evidence": screenSaverEvidence,
-            "screensaver_running": screenSaverRunning,
-            "screensaver_dismissed": screenSaverDismissed,
-            "hid_idle_seconds": (hidIdleSeconds * 10).rounded() / 10,
-            "session_locked": sessionLocked,
-            "lock_evidence": lockEvidence,
-            "console_user_logged_in": consoleUserLoggedIn,
-            "secure_input_active": secureInputActive,
-        ]
-    }
-}
-
 /// Lecture des signaux bruts du système.
 ///
 /// Chaque signal a une source primaire déterministe et, quand c'est possible,
@@ -63,7 +14,7 @@ struct Facts {
 /// - écran éteint : `CGDisplayIsAsleep` sur l'écran principal, avec repli sur
 ///   « tous les écrans en ligne endormis ».
 /// - champ d'authentification : `IsSecureEventInputEnabled`.
-final class SignalReader {
+final class LiveSystemSignals: SystemSignals {
     private let registryRoot: io_registry_entry_t
 
     init() {
@@ -79,13 +30,7 @@ final class SignalReader {
 
     // MARK: - Verrouillage / session
 
-    struct SessionState {
-        var locked = false
-        var loggedIn = false
-        var evidence = "none"
-    }
-
-    func sessionState() -> SessionState {
+    func session() -> SessionState {
         var state = SessionState()
         var evidence: [String] = []
 
@@ -98,6 +43,7 @@ final class SignalReader {
             if let sessions = registryProperty("IOConsoleUsers") as? [[String: Any]] {
                 let console = sessions.first { ($0["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue == true }
                 if let console {
+                    state.onConsole = true
                     if (console["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
                         state.loggedIn = true
                     }
@@ -133,13 +79,7 @@ final class SignalReader {
 
     // MARK: - Écrans
 
-    struct DisplayState {
-        var asleep = false
-        var onlineCount = 0
-        var enumerationOK = false
-    }
-
-    func displayState() -> DisplayState {
+    func display() -> DisplayState {
         var state = DisplayState()
 
         let main = CGMainDisplayID()
@@ -193,6 +133,52 @@ final class SignalReader {
                                                           kCFAllocatorDefault, 0)?
             .takeRetainedValue() as? NSNumber else { return -1 }
         return Double(value.uint64Value) / 1_000_000_000
+    }
+
+    // MARK: - Économiseur d'écran
+
+    /// `p_comm` est tronqué à 16 caractères par le noyau : « ScreenSaverEngine »
+    /// devient « ScreenSaverEngin ».
+    private let engineCommPrefix = "ScreenSaverEngin"
+
+    func saverEnginePID() -> Int32 {
+        for process in runningProcesses() where process.name.hasPrefix(engineCommPrefix) {
+            return process.pid
+        }
+        return 0
+    }
+
+    func saverWindow() -> WindowVerdict {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+              !list.isEmpty else {
+            return .unavailable
+        }
+
+        let screen = CGDisplayBounds(CGMainDisplayID())
+        let screenArea = Double(screen.width * screen.height)
+        let saverLevel = Int(CGWindowLevelForKey(.screenSaverWindow))
+
+        for window in list {
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer >= saverLevel else { continue }
+            guard let owner = window[kCGWindowOwnerName as String] as? String,
+                  owner.lowercased().contains("screensaver") else { continue }
+
+            // Écarte l'aperçu miniature des Réglages Système : on exige une
+            // fenêtre qui couvre réellement l'écran.
+            guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? NSNumber)?.doubleValue else { continue }
+            if screenArea <= 0 || (width * height) >= 0.5 * screenArea {
+                return .visible
+            }
+        }
+        return .notVisible
+    }
+
+    // MARK: - Session graphique
+
+    func hasAquaSession() -> Bool {
+        CGSessionAvailable()
     }
 }
 

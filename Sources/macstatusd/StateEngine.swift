@@ -21,7 +21,8 @@ final class StateEngine {
     let queue = DispatchQueue(label: "macstatusd.state")
 
     private let config: Config
-    private let reader: SignalReader
+    private let signals: SystemSignals
+    private let clock: Clock
     private let saver: ScreenSaverOracle
     private let webhook: WebhookClient
     private let actions: PowerActions
@@ -55,12 +56,14 @@ final class StateEngine {
         self.config = config
         self.webhook = webhook
         self.actions = actions
-        self.reader = SignalReader()
+        self.signals = LiveSystemSignals()
+        self.clock = SystemClock()
         self.saver = ScreenSaverOracle(
             minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
             dismissOnInput: config.saverDismissOnInput,
             dismissGrace: Double(config.saverDismissGraceMS) / 1000,
-            redisplayIdle: Double(config.saverRedisplayIdleSeconds)
+            redisplayIdle: Double(config.saverRedisplayIdleSeconds),
+            signals: signals
         )
     }
 
@@ -123,17 +126,18 @@ final class StateEngine {
         var next = Facts()
         next.systemAsleep = systemAsleep
 
-        let session = reader.sessionState()
+        let session = signals.session()
         next.sessionLocked = session.locked
         next.consoleUserLoggedIn = session.loggedIn
+        next.onConsole = session.onConsole
         next.lockEvidence = session.evidence
 
-        let display = reader.displayState()
+        let display = signals.display()
         next.displayAsleep = display.asleep
         next.onlineDisplays = display.onlineCount
         next.displayEnumerationOK = display.enumerationOK
 
-        next.hidIdleSeconds = reader.hidIdleSeconds()
+        next.hidIdleSeconds = signals.hidIdleSeconds()
 
         // Inutile de sonder l'économiseur quand une condition OFF plus
         // prioritaire est déjà vraie : c'est aussi le cas où le Mac est inactif
@@ -142,14 +146,14 @@ final class StateEngine {
             next.screenSaverActive = false
             next.screenSaverEvidence = "non-évalué"
         } else {
-            let verdict = saver.verdict(hidIdle: next.hidIdleSeconds)
+            let verdict = saver.verdict(now: clock.monotonic(), hidIdle: next.hidIdleSeconds)
             next.screenSaverActive = verdict.active
             next.screenSaverRunning = verdict.running
             next.screenSaverDismissed = verdict.dismissed
             next.screenSaverEvidence = verdict.evidence
         }
 
-        next.secureInputActive = reader.secureInputActive()
+        next.secureInputActive = signals.secureInputActive()
 
         if next.asDictionary as NSDictionary != facts.asDictionary as NSDictionary {
             logDebug("faits: \(summary(of: next))")

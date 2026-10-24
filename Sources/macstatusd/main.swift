@@ -15,7 +15,6 @@ struct Options {
     var once = false
     var watch = false
     var disableWebhook = false
-    var checkRules = false
 }
 
 func parseOptions() -> Options {
@@ -39,8 +38,6 @@ func parseOptions() -> Options {
             options.watch = true
         case "--no-webhook":
             options.disableWebhook = true
-        case "--check-rules":
-            options.checkRules = true
         case "--version", "-v":
             print("macstatusd \(macstatusdVersion)")
             exit(0)
@@ -56,7 +53,6 @@ func parseOptions() -> Options {
               --foreground, -f    écrit aussi sur la sortie standard
               --once              affiche l'état et les faits en JSON, puis quitte
               --watch             affiche l'état en continu (diagnostic)
-              --check-rules       vérifie la règle de décision de l'économiseur
               --no-webhook        n'envoie rien à Homebridge (tests)
               --version, -v       version
               --help, -h          cette aide
@@ -82,11 +78,6 @@ let options = parseOptions()
 
 // Sortie ligne par ligne même quand elle est redirigée (journaux launchd, pipes).
 setvbuf(stdout, nil, _IOLBF, 0)
-
-if options.checkRules {
-    print("macstatusd \(macstatusdVersion) — vérification des règles de décision")
-    exit(RuleCheck.run())
-}
 
 // MARK: - Configuration et journalisation
 
