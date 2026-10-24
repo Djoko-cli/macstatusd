@@ -203,6 +203,11 @@ while read -r commit <&4; do
   # ASCII est écrit entre guillemets en octaux, que la liste ne reconnaîtrait pas.
   if git -c core.quotePath=false show --no-renames --format= --unified=0 --text --no-ext-diff --no-textconv "$commit" > "$tmp/diff-complet" 2> /dev/null; then
     LC_ALL=C grep -a '^+' "$tmp/diff-complet" > "$tmp/diff" || true
+    # Un fichier vide ajouté n'a pas de ligne « +++ » : la liste des chemins ajoutés ou modifiés
+    # couvre aussi ce cas. Les suppressions sont exclues, pour ne pas bloquer un commit de nettoyage.
+    if ! git -c core.quotePath=false show --no-renames --format= --name-only --diff-filter=d "$commit" >> "$tmp/diff" 2> /dev/null; then
+      signaler "$court" "liste des chemins illisible"
+    fi
     verifier_texte "$tmp/diff" "diff" "$court"
   else
     signaler "$court" "diff illisible"

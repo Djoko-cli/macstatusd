@@ -255,6 +255,24 @@ printf 'contenu propre 7\n' > "$clone/$prenom_accent.txt"
 commiter "Ajout d'un fichier au nom accentué" "$prenom_accent.txt"
 attendre_refusee "nom-accentue" "liste locale (diff)" main
 
+# fichier-vide : un fichier vide n'a pas de ligne « +++ » dans le diff ; son nom doit être vu quand même.
+repartir
+: > "$clone/vide-$prenom.txt"
+commiter "Ajout d'un fichier vide" "vide-$prenom.txt"
+attendre_refusee "fichier-vide" "liste locale (diff)" main
+
+# suppression-acceptee : supprimer un fichier dont le nom contenait une valeur (nettoyage) reste possible
+# quand le fichier est déjà publié ; seul le commit de suppression est poussé.
+repartir
+printf 'contenu propre 9\n' > "$clone/ancien-$prenom.txt"
+commiter "Ajout ancien" "ancien-$prenom.txt"
+# Publication simulée côté distant (le distant va chercher le commit), sans passer par la garde.
+git --git-dir="$distant" fetch -q "$clone" main:main
+git_c fetch -q origin
+git_c rm -q -- "ancien-$prenom.txt"
+git_c commit -q -m "Nettoyage"
+attendre_acceptee "suppression-acceptee" main
+
 # nom-auteur : contenu propre, adresse noreply valide, mais le NOM de l'auteur est une valeur de la liste.
 repartir
 printf 'contenu propre 8\n' > "$clone/k.txt"
