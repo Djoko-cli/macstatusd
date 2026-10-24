@@ -12,7 +12,7 @@ import MacStatusCore
 /// besoin du code retour sont lancées détachées, sans tuyau hérité (un enfant
 /// mis en arrière‑plan par un `off_command` garderait sinon le tuyau ouvert et
 /// retarderait toutes les commandes suivantes).
-final class PowerActions {
+final class PowerActions: CommandActions {
     private let queue = DispatchQueue(label: "macstatusd.actions", qos: .userInitiated)
     private var userActivityAssertion = IOPMAssertionID(0)
     private let screenSaverAppPath = "/System/Library/CoreServices/ScreenSaverEngine.app"

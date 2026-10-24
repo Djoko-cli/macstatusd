@@ -109,3 +109,37 @@ final class FakeSignals: SystemSignals {
     func saverWindow() -> WindowVerdict { fenetreEconomiseur }
     func hasAquaSession() -> Bool { sessionAqua }
 }
+
+/// Actions de commande simulées : chaque appel est noté, rien n'agit sur le Mac.
+final class FakeActions: CommandActions {
+    enum Appel: Equatable {
+        case runOff(OffAction)
+        case displaySleep
+        case wake
+        case stopScreenSaver
+    }
+
+    var hasOffOverride = false
+    private(set) var appels: [Appel] = []
+
+    func runOff(_ action: OffAction) { appels.append(.runOff(action)) }
+    func displaySleep() { appels.append(.displaySleep) }
+    func wake() { appels.append(.wake) }
+    func stopScreenSaver() { appels.append(.stopScreenSaver) }
+}
+
+/// Publieur simulé : garde chaque état publié, avec son drapeau `force`.
+final class FakePublisher: StatePublisher {
+    struct Publication: Equatable {
+        let etat: Bool
+        let force: Bool
+    }
+
+    private(set) var publications: [Publication] = []
+
+    func publish(_ state: Bool, force: Bool) {
+        publications.append(Publication(etat: state, force: force))
+    }
+
+    var statusDictionary: [String: Any] { ["faux": true] }
+}

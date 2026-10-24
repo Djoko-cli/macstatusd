@@ -182,6 +182,13 @@ final class LiveSystemSignals: SystemSignals {
     }
 }
 
+/// Indique si le process voit une session graphique (LaunchAgent Aqua) ou non
+/// (LaunchDaemon) : utile pour diagnostiquer les signaux disponibles.
+func CGSessionAvailable() -> Bool {
+    guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    return dict["kCGSSessionUserIDKey"] != nil
+}
+
 /// Liste des process (`p_comm` est tronqué à 16 caractères par le noyau).
 /// Utilisable depuis n'importe quel contexte, y compris hors session graphique.
 func runningProcesses() -> [(pid: Int32, name: String)] {

@@ -7,7 +7,7 @@ import MacStatusCore
 /// Un webhook perdu ne peut pas laisser HomeKit désynchronisé : tant que l'état
 /// confirmé diffère de l'état voulu, l'envoi est réessayé (et le battement de
 /// cœur du moteur d'état repousse l'état périodiquement).
-final class WebhookClient {
+final class WebhookClient: StatePublisher {
     private let queue = DispatchQueue(label: "macstatusd.webhook", qos: .utility)
     private let session: URLSession
     private let enabled: Bool

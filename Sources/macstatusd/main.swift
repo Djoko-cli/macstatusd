@@ -98,7 +98,7 @@ Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || opti
 
 let webhook = WebhookClient(config: config)
 let actions = PowerActions(config: config)
-let engine = StateEngine(config: config, webhook: webhook, actions: actions)
+let engine = EngineRunner(config: config, webhook: webhook, actions: actions)
 
 if options.once {
     let snapshot = engine.inspect()

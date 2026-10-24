@@ -33,23 +33,10 @@ private func powerNotificationCallback(
 /// déclenchent une réévaluation immédiate, mais aucun état n'en dépend
 /// exclusivement (le moteur repolle les faits en continu).
 final class PowerWatcher {
-    enum Event: String {
-        case systemDidWake = "system-did-wake"
-        case screensDidSleep = "screens-did-sleep"
-        case screensDidWake = "screens-did-wake"
-        case screenSaverDidStart = "screensaver-did-start"
-        case screenSaverDidStop = "screensaver-did-stop"
-        case screenLocked = "screen-locked"
-        case screenUnlocked = "screen-unlocked"
-        case sessionActive = "session-active"
-        case sessionInactive = "session-inactive"
-        case saverProcessChanged = "saver-process-changed"
-    }
-
     /// Appelé juste avant la veille. Le daemon doit invoquer `allow()` dès que
     /// l'état OFF est poussé ; un garde‑fou l'appelle de toute façon.
     var onWillSleep: ((_ allow: @escaping () -> Void) -> Void)?
-    var onEvent: ((Event) -> Void)?
+    var onEvent: ((SystemEvent) -> Void)?
 
     private let queue: DispatchQueue
     private var rootPort: io_connect_t = 0
@@ -151,13 +138,13 @@ final class PowerWatcher {
         observe(distributed, NSNotification.Name("com.apple.screenIsUnlocked"), .screenUnlocked)
     }
 
-    private func observe(_ center: NotificationCenter, _ name: NSNotification.Name, _ event: Event) {
+    private func observe(_ center: NotificationCenter, _ name: NSNotification.Name, _ event: SystemEvent) {
         observers.append(center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
             self?.emit(event)
         })
     }
 
-    private func emit(_ event: Event) {
+    private func emit(_ event: SystemEvent) {
         queue.async { [weak self] in
             logDebug("événement système: \(event.rawValue)")
             self?.onEvent?(event)
