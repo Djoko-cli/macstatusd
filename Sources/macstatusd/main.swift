@@ -161,49 +161,10 @@ engine.attach(to: powerWatcher)
 powerWatcher.start()
 engine.start()
 
-// MARK: - Routes HTTP
+// MARK: - Serveur HTTP
 
-func isAuthorized(_ request: HTTPRequest) -> Bool {
-    guard !config.authToken.isEmpty else { return true }
-    let provided = request.query["token"] ?? request.headers["x-auth-token"] ?? ""
-    guard provided.utf8.count == config.authToken.utf8.count else { return false }
-    return provided == config.authToken
-}
-
-let server = HTTPServer(port: config.port, bindAddress: config.bindAddress) { request in
-    guard request.method == "GET" || request.method == "HEAD" else {
-        return .text("method not allowed", status: 405)
-    }
-
-    switch request.path {
-    case "/state":
-        return .text(engine.currentState ? "1" : "0")
-
-    case "/status":
-        return .json(engine.statusSnapshot())
-
-    case "/health":
-        return .text("OK")
-
-    case "/sleep", "/off":
-        guard isAuthorized(request) else { return .text("unauthorized", status: 401) }
-        engine.requestOff(source: request.peer)
-        return .text("OK")
-
-    case "/wake", "/on":
-        guard isAuthorized(request) else { return .text("unauthorized", status: 401) }
-        engine.requestOn(source: request.peer)
-        return .text("OK")
-
-    case "/resync":
-        guard isAuthorized(request) else { return .text("unauthorized", status: 401) }
-        engine.resync()
-        return .text("OK")
-
-    default:
-        return .text("not found", status: 404)
-    }
-}
+let router = Router(config: config, engine: engine)
+let server = HTTPServer(port: config.port, bindAddress: config.bindAddress, router: router)
 server.start()
 
 // MARK: - Arrêt propre

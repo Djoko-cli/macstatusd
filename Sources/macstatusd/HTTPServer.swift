@@ -2,50 +2,16 @@ import Foundation
 import Network
 import MacStatusCore
 
-struct HTTPRequest {
-    var method = "GET"
-    var path = "/"
-    var query: [String: String] = [:]
-    var headers: [String: String] = [:]
-    var peer = "?"
-}
-
-struct HTTPResponse {
-    var status = 200
-    var contentType = "text/plain; charset=utf-8"
-    var body = Data()
-
-    static func text(_ body: String, status: Int = 200) -> HTTPResponse {
-        HTTPResponse(status: status, contentType: "text/plain; charset=utf-8", body: Data(body.utf8))
-    }
-
-    static func json(_ object: [String: Any], status: Int = 200) -> HTTPResponse {
-        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]))
-            ?? Data("{}".utf8)
-        return HTTPResponse(status: status, contentType: "application/json; charset=utf-8", body: data)
-    }
-
-    var reasonPhrase: String {
-        switch status {
-        case 200: return "OK"
-        case 400: return "Bad Request"
-        case 401: return "Unauthorized"
-        case 404: return "Not Found"
-        case 405: return "Method Not Allowed"
-        case 413: return "Payload Too Large"
-        default: return "Error"
-        }
-    }
-}
-
-/// Serveur HTTP minimal mais défensif : requêtes bornées en taille et en durée,
-/// une réponse par connexion, et surtout **redémarrage automatique** du listener
-/// en cas d'échec (port occupé, réinitialisation réseau) au lieu d'un crash.
+/// Adaptateur réseau (`NWListener`) du serveur HTTP : il lit les octets, délègue
+/// l'analyse à `RequestParser` et le routage à `Router`, puis écrit la réponse.
+/// Requêtes bornées en taille et en durée, une réponse par connexion, et surtout
+/// **redémarrage automatique** du listener en cas d'échec (port occupé,
+/// réinitialisation réseau) au lieu d'un crash.
 final class HTTPServer {
     private let queue = DispatchQueue(label: "macstatusd.http")
     private let port: UInt16
     private let bindAddress: String
-    private let handler: (HTTPRequest) -> HTTPResponse
+    private let router: Router
     private let maxRequestBytes = 16 * 1024
     private let requestTimeout: TimeInterval = 5
 
@@ -54,10 +20,10 @@ final class HTTPServer {
     private var restartScheduled = false
     private var stopped = false
 
-    init(port: UInt16, bindAddress: String, handler: @escaping (HTTPRequest) -> HTTPResponse) {
+    init(port: UInt16, bindAddress: String, router: Router) {
         self.port = port
         self.bindAddress = bindAddress
-        self.handler = handler
+        self.router = router
     }
 
     func start() {
@@ -153,7 +119,9 @@ final class HTTPServer {
     // MARK: - Connexions
 
     private func accept(_ connection: NWConnection) {
-        let peer = Self.describe(endpoint: connection.currentPath?.remoteEndpoint ?? connection.endpoint)
+        let remote = connection.currentPath?.remoteEndpoint ?? connection.endpoint
+        let peer = Self.describe(endpoint: remote)
+        let peerIsLoopback = Self.isLoopback(endpoint: remote)
         var buffer = Data()
         var finished = false
 
@@ -186,14 +154,15 @@ final class HTTPServer {
                 }
                 if let range = buffer.range(of: Data("\r\n\r\n".utf8)) ?? buffer.range(of: Data("\n\n".utf8)) {
                     let head = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
-                    guard var request = Self.parse(head: head) else {
+                    guard var request = RequestParser.parse(head: head) else {
                         complete(.text("bad request", status: 400))
                         return
                     }
                     request.peer = peer
+                    request.peerIsLoopback = peerIsLoopback
                     method = request.method
                     logDebug("HTTP \(request.method) \(request.path) depuis \(peer)")
-                    complete(handler(request))
+                    complete(router.handle(request))
                     return
                 }
                 if error != nil || isComplete {
@@ -219,6 +188,9 @@ final class HTTPServer {
         head += "Content-Type: \(response.contentType)\r\n"
         head += "Content-Length: \(response.body.count)\r\n"
         head += "Cache-Control: no-store\r\n"
+        for (name, value) in response.headers.sorted(by: { $0.key < $1.key }) {
+            head += "\(name): \(value)\r\n"
+        }
         head += "Connection: close\r\n\r\n"
 
         var payload = Data(head.utf8)
@@ -230,42 +202,7 @@ final class HTTPServer {
         })
     }
 
-    // MARK: - Analyse
-
-    private static func parse(head: Data) -> HTTPRequest? {
-        guard let text = String(data: head, encoding: .utf8) else { return nil }
-        let lines = text.split(whereSeparator: { $0 == "\r\n" || $0 == "\n" })
-        guard let requestLine = lines.first else { return nil }
-
-        let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2 else { return nil }
-
-        var request = HTTPRequest()
-        request.method = String(parts[0]).uppercased()
-
-        let target = String(parts[1])
-        if let questionMark = target.firstIndex(of: "?") {
-            request.path = String(target[target.startIndex..<questionMark])
-            let queryString = String(target[target.index(after: questionMark)...])
-            for pair in queryString.split(separator: "&") {
-                let kv = pair.split(separator: "=", maxSplits: 1)
-                guard let key = kv.first else { continue }
-                let value = kv.count > 1 ? String(kv[1]) : ""
-                request.query[String(key).removingPercentEncoding ?? String(key)] =
-                    value.removingPercentEncoding ?? value
-            }
-        } else {
-            request.path = target
-        }
-
-        for line in lines.dropFirst() {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            let name = line[line.startIndex..<colon].trimmingCharacters(in: .whitespaces).lowercased()
-            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            request.headers[name] = value
-        }
-        return request
-    }
+    // MARK: - Pair
 
     private static func describe(endpoint: NWEndpoint) -> String {
         if case .hostPort(let host, _) = endpoint {
@@ -277,5 +214,23 @@ final class HTTPServer {
             }
         }
         return "\(endpoint)"
+    }
+
+    /// Vrai si le pair est en boucle locale, d'après le `NWEndpoint` lui-même
+    /// (IPv4 127.0.0.0/8, IPv6 ::1, ou IPv4 mappée en IPv6), jamais d'après une chaîne.
+    /// Un nom d'hôte ou un autre type de point d'accès n'est pas une boucle locale.
+    static func isLoopback(endpoint: NWEndpoint) -> Bool {
+        guard case .hostPort(let host, _) = endpoint else { return false }
+        switch host {
+        case .ipv4(let address):
+            return address.isLoopback
+        case .ipv6(let address):
+            if address.isIPv4Mapped, let mapped = address.asIPv4 { return mapped.isLoopback }
+            return address.isLoopback
+        case .name:
+            return false
+        @unknown default:
+            return false
+        }
     }
 }

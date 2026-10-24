@@ -205,3 +205,32 @@ final class FakeTransport: WebhookTransport {
         enAttente.removeFirst()()
     }
 }
+
+/// Moteur simulé pour le routeur : chaque appel est noté, rien n'agit sur le Mac.
+final class FakeEngine: EngineFacade {
+    enum Appel: Equatable {
+        case etat
+        case instantane
+        case off(String)
+        case on(String)
+        case resync
+    }
+
+    var etat = true
+    var instantane: [String: Any] = ["faux": true, "etat": "1"]
+    private(set) var appels: [Appel] = []
+
+    var currentState: Bool {
+        appels.append(.etat)
+        return etat
+    }
+
+    func statusSnapshot() -> [String: Any] {
+        appels.append(.instantane)
+        return instantane
+    }
+
+    func requestOff(source: String) { appels.append(.off(source)) }
+    func requestOn(source: String) { appels.append(.on(source)) }
+    func resync() { appels.append(.resync) }
+}

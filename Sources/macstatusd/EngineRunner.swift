@@ -12,7 +12,7 @@ import MacStatusCore
 ///   `sync` lancé depuis la file elle-même bloquerait le daemon pour toujours ;
 /// - les rappels du veilleur système arrivent déjà sur la file, ce que
 ///   `dispatchPrecondition(.onQueue)` vérifie.
-final class EngineRunner {
+final class EngineRunner: EngineFacade {
     let queue = DispatchQueue(label: "macstatusd.state")
 
     private let config: Config
