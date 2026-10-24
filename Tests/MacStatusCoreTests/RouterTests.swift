@@ -3,7 +3,8 @@ import XCTest
 
 /// Routage HTTP : routes, codes, corps, types de contenu et règles d'accès.
 /// Tâche 7 : 400 pour toute `ParseError`, 404 avant tout, 405 avec `Allow`.
-/// Tâche 8 : `AccessPolicy.decide` avant toute route connue, une ligne WARN par refus.
+/// Tâche 8 : `AccessPolicy.decide` avant toute route connue.
+/// Tâche 9 : journal des refus borné par pair (voir `RateLimitsTests`).
 final class RouterTests: XCTestCase {
     private let jeton = "jeton-essai-0123456789abcdef"
     private var moteur: FakeEngine!
@@ -194,8 +195,9 @@ final class RouterTests: XCTestCase {
     }
 
     func test_commandeAvecJetonAbsentOuFaux_401_sansAppelDuMoteur() {
-        let r = routeur(jeton: jeton)
         for chemin in ["/sleep", "/off", "/wake", "/on", "/resync"] {
+            // Un routeur par chemin : 15 refus d'un même pair le feraient interdire (tâche 9).
+            let r = routeur(jeton: jeton)
             var reponse = r.handle(requete(chemin))
             XCTAssertEqual(reponse.status, 401, chemin)
             XCTAssertEqual(texte(reponse), "unauthorized", chemin)

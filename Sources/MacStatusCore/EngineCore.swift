@@ -283,7 +283,13 @@ public final class EngineCore {
         published ?? factsVerdict().state
     }
 
+    /// Commande OFF. Idempotente : un doublon reçu pendant une intention OFF en cours ne fait
+    /// rien (ni action, ni nouvelle échéance) ; une intention ON en cours est remplacée.
     public func requestOff(source: String) {
+        if isPending(target: false) {
+            logInfo("commande OFF (\(source)) → commande OFF déjà en cours, ignorée")
+            return
+        }
         refreshFacts()
         let factual = factsVerdict()
         if factual.state == false {
@@ -309,7 +315,23 @@ public final class EngineCore {
         evaluate(immediate: true)
     }
 
+    /// Commande ON. Idempotente : un doublon reçu pendant une intention ON en cours ne fait
+    /// rien ; une intention OFF en cours est remplacée. Les faits sont relus d'abord : déjà ON et
+    /// sans intention OFF en cours, rien n'est lancé (ni réveil, ni arrêt de l'économiseur).
     public func requestOn(source: String) {
+        if isPending(target: true) {
+            logInfo("commande ON (\(source)) → commande ON déjà en cours, ignorée")
+            return
+        }
+        refreshFacts()
+        let factual = factsVerdict()
+        if factual.state, !isPending(target: false) {
+            logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)), aucune action")
+            intent = nil
+            evaluate(immediate: true)
+            return
+        }
+
         logInfo("commande ON (\(source))")
         intent = makeIntent(target: true, source: "on")
         actions.wake()
@@ -327,6 +349,12 @@ public final class EngineCore {
         saver.noteNotification(active: false)
         refreshFacts()
         evaluate(immediate: true, force: true)
+    }
+
+    /// Vrai si une intention de ce sens attend encore sa confirmation (échéance non atteinte).
+    private func isPending(target: Bool) -> Bool {
+        guard let intent, intent.target == target else { return false }
+        return clock.monotonic() < intent.deadline
     }
 
     private func makeIntent(target: Bool, source: String) -> Intent {

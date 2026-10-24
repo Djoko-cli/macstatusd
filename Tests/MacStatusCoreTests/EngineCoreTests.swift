@@ -274,6 +274,115 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(journalContient("commande OFF (essai) → déjà OFF (display-asleep), aucune action"))
     }
 
+    // MARK: - Idempotence (tâche 9)
+
+    func test_doublonOff_pendantUneCommandeOff_aucuneActionEtEcheanceInchangee() {
+        let core = moteur()
+        core.start()
+        core.requestOff(source: "essai")
+        let publications = publieur.publications
+
+        // Doublons à 1 s et à 2 s : aucune action, la commande garde son origine.
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        core.requestOff(source: "essai")
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        core.requestOff(source: "autre")
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
+        XCTAssertEqual(commandeEnAttente(core)?["age_seconds"] as? Int, 2)
+        XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/screensaver")
+        XCTAssertEqual(publieur.publications, publications)
+        XCTAssertTrue(journalContient("commande OFF (essai) → commande OFF déjà en cours, ignorée"))
+
+        // L'escalade tombe toujours à 2,5 s du premier OFF, le retour aux faits à 12 s.
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .displaySleep])
+        for _ in 0..<18 { scruter(core, 0.5) }
+        XCTAssertNotNil(commandeEnAttente(core))
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("non confirmée après 12.0 s"))
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .displaySleep])
+    }
+
+    func test_doublonOn_pendantUneCommandeOn_aucuneAction() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        scruter(core, 0.5)
+        core.requestOn(source: "essai")
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(commandeEnAttente(core)?["age_seconds"] as? Int, 0)
+        XCTAssertTrue(journalContient("commande ON (essai) → commande ON déjà en cours, ignorée"))
+
+        // Une fois la commande échue (retour aux faits), un nouvel ON agit de nouveau.
+        for _ in 0..<24 { scruter(core, 0.5) }
+        XCTAssertNil(commandeEnAttente(core))
+        let avant = actions.appels.count
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels.count, avant + 1)
+        XCTAssertEqual(actions.appels.last, .wake)
+    }
+
+    func test_onPuisOff_rapides_leDernierGagne() {
+        // Écran éteint : ON puis OFF aussitôt. Les faits disent déjà OFF : l'intention ON
+        // est remplacée, sans action OFF, et l'état reste OFF.
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        XCTAssertTrue(core.currentState)
+        core.requestOff(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertFalse(core.currentState)
+        for _ in 0..<30 { scruter(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(actions.appels, [.wake])
+    }
+
+    func test_offPuisOn_rapides_leDernierGagne() {
+        // Bureau ouvert : OFF puis ON aussitôt. L'intention ON remplace l'intention OFF.
+        let core = moteur()
+        core.start()
+        core.requestOff(source: "essai")
+        XCTAssertFalse(core.currentState)
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
+                                               Publication(etat: false, force: false),
+                                               Publication(etat: true, force: false)])
+        // Les faits disent ON : confirmée au cycle suivant, et jamais d'escalade OFF.
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        for _ in 0..<30 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
+    }
+
+    func test_onQuandDejaOn_aucuneAction() {
+        let core = moteur()
+        core.start()
+        let avant = publieur.publications
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [])
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(publieur.publications, avant)
+        XCTAssertTrue(journalContient("commande ON (essai) → déjà ON (desktop-ui), aucune action"))
+
+        // Les faits sont relus avant de décider : un écran éteint depuis le dernier cycle
+        // n'est pas « déjà ON ».
+        signaux.etatEcran.asleep = true
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertNotNil(commandeEnAttente(core))
+    }
+
     // MARK: - Resynchronisation et battement de cœur
 
     func test_trouDeScrutation_au_dela_de_10s_resynchronise() {
