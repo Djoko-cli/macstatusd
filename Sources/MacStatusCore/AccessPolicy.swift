@@ -53,7 +53,7 @@ public enum AccessDecision: Equatable {
 ///
 /// `decide` applique ces règles, dans l'ordre :
 /// 1. `.health` → `allow` ;
-/// 2. `Host` (sans le port ni les crochets IPv6) : littéral IPv4 ou IPv6, `localhost`,
+/// 2. `Host` (sans le port ni les crochets IPv6) : littéral IPv4 ou IPv6 (hors `0.0.0.0` et `::`), `localhost`,
 ///    un des `localNames` ou un des `allowedHosts`, sans casse ; sinon 403 `host`.
 ///    Un `Host` absent (HTTP/1.0) passe ; un `Host` vide ou mal formé est refusé ;
 /// 3. en-tête `Origin` présent, ou `Sec-Fetch-Site` présent et autre que `none` → 403 `origin` ;
@@ -133,13 +133,16 @@ public struct AccessPolicy {
 
     /// Vrai si `Host` désigne le Mac par une adresse littérale ou par un nom connu.
     /// Aucune résolution DNS : un nom inconnu est refusé, quelle que soit son adresse.
+    /// Une adresse non spécifiée (`0.0.0.0`, `[::]`) ne désigne aucun hôte : refusée.
     func isAcceptedHost(_ value: String) -> Bool {
         guard let host = Self.hostWithoutPort(value) else { return false }
+        let specified: ([UInt8]) -> Bool = { $0.contains { $0 != 0 } }
         switch host {
         case .ipv6Literal(let text):
-            return ipv6Bytes(text) != nil
+            return ipv6Bytes(text).map(specified) ?? false
         case .name(let text):
-            return ipv4Bytes(text) != nil || acceptedNames.contains(text.lowercased())
+            if let bytes = ipv4Bytes(text) { return specified(bytes) }
+            return acceptedNames.contains(text.lowercased())
         }
     }
 

@@ -206,7 +206,7 @@ final class AccessPolicyTests: XCTestCase {
 
     func test_hostLitteraux_acceptes() {
         let p = politique()
-        for host in ["192.0.2.10:9090", "192.0.2.10", "127.0.0.1:9090", "198.51.100.1:9090", "0.0.0.0",
+        for host in ["192.0.2.10:9090", "192.0.2.10", "127.0.0.1:9090", "198.51.100.1:9090",
                      "[::1]:9090", "[::1]", "[fd00::1]:9090", "[::ffff:192.0.2.10]:9090",
                      "localhost:9090", "localhost", "LocalHost:9090", "192.0.2.10:"] {
             XCTAssertEqual(p.decide(requete("/wake", host: host, headers: ["x-auth-token": jeton])), .allow, host)
@@ -218,7 +218,9 @@ final class AccessPolicyTests: XCTestCase {
         for host in ["", "evil.example", "evil.example:9090", "192.0.2.10.evil.example", "localhost.evil.example",
                      "::1", "[::1", "[::1]x", "[::1]:x", "192.0.2.10:abc", "192.0.2.10:90:90",
                      "[evil.example]:9090", "[192.0.2.10]:9090", "999.0.0.1", "192.0.2", "192.0.2.10.",
-                     "1234.0.0.1", "+1.2.3.4", "[fe80::1%25en0]:9090", "[fe80::1%en0]", "localhost.", " localhost"] {
+                     "1234.0.0.1", "+1.2.3.4", "[fe80::1%25en0]:9090", "[fe80::1%en0]", "localhost.", " localhost",
+                     // Adresses non spécifiées (tâche 8, tour 1) : elles ne désignent aucun hôte.
+                     "0.0.0.0", "0.0.0.0:9090", "[::]", "[::]:9090", "[0:0:0:0:0:0:0:0]:9090"] {
             XCTAssertEqual(p.decide(requete("/wake", host: host, headers: ["x-auth-token": jeton])),
                            .deny(status: 403, reason: "host"), host)
         }

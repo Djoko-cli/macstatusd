@@ -160,17 +160,9 @@ final class HTTPServer {
                         request.peerIsLoopback = peerIsLoopback
                         return request
                     }
-                    switch parsed {
-                    case .success(let request):
-                        method = request.method
-                        logDebug("HTTP \(escapeForLog(request.method, limit: 16)) \(escapeForLog(request.path)) depuis \(peer)")
-                    case .failure(let error):
-                        // Ligne de requête reçue, échappée : jamais de caractère de contrôle au journal.
-                        var firstLine = head.prefix { $0 != 0x0A }
-                        if firstLine.last == 0x0D { firstLine = firstLine.dropLast() }
-                        logDebug("HTTP refusée (\(error)) « \(escapeForLog(String(decoding: firstLine, as: UTF8.self))) » "
-                            + "depuis \(peer)")
-                    }
+                    if case .success(let request) = parsed { method = request.method }
+                    // Requête de la cible masquée (`?…`) : jamais de jeton au journal.
+                    logReceivedRequest(parsed, head: head, peer: peer)
                     complete(router.handle(parsed))
                     return
                 }

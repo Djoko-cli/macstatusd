@@ -136,10 +136,10 @@ public final class Router {
         if result.banned {
             logWarn("HTTP pair \(escapeForLog(peer)) interdit pendant \(Int(Self.banDuration)) s : "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s, dernier refus \(status) "
-                    + "(\(escapeForLog(reason))) sur \(escapeForLog(request.path))\(suffix)")
+                    + "(\(escapeForLog(reason))) sur \(escapeForLog(redactingQuery(request.path)))\(suffix)")
         } else {
             logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(escapeForLog(request.method, limit: 16)) "
-                    + "\(escapeForLog(request.path)) depuis \(escapeForLog(request.peer)) — "
+                    + "\(escapeForLog(redactingQuery(request.path))) depuis \(escapeForLog(request.peer)) — "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s\(suffix)")
         }
     }
@@ -174,7 +174,7 @@ public final class Router {
         guard due else { return }
         logWarn("HTTP 429 : débit des commandes dépassé (\(Int(Self.commandRate))/s, rafale de \(Self.commandBurst)), "
                 + "\(count) commande(s) refusée(s) depuis la dernière ligne ; dernière : "
-                + "\(escapeForLog(request.path)) depuis \(escapeForLog(request.peer))")
+                + "\(escapeForLog(redactingQuery(request.path))) depuis \(escapeForLog(request.peer))")
     }
 
     private static func allow(for routeClass: RouteClass) -> String {

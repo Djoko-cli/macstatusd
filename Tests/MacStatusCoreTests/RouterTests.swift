@@ -315,6 +315,74 @@ final class RouterTests: XCTestCase {
         XCTAssertTrue(moteur.appels.isEmpty)
     }
 
+    // MARK: - Tâche 8, tour 1
+
+    func test_pointDeVigilance1_octetsBrutsDeHA_200EtRequestOn() throws {
+        // Octets exacts de l'appel de Home Assistant, du parseur au moteur, pair du LAN.
+        let octets = Data("GET /wake?action=WAKE HTTP/1.1\r\nHost: 192.0.2.10:9090\r\nX-Auth-Token: \(jeton)\r\n\r\n".utf8)
+        let analysee = RequestParser.parse(head: octets).map { requete -> HTTPRequest in
+            var requete = requete
+            requete.peer = "192.0.2.10"
+            requete.peerIsLoopback = false
+            return requete
+        }
+        let requete = try analysee.get()
+        XCTAssertEqual(requete.path, "/wake")
+        XCTAssertEqual(requete.query, ["action": "WAKE"])
+        XCTAssertNil(requete.headers["origin"])
+        let reponse = routeur(jeton: jeton).handle(analysee)
+        XCTAssertEqual(reponse.status, 200)
+        XCTAssertEqual(texte(reponse), "OK")
+        XCTAssertEqual(moteur.appels, [.on("192.0.2.10")])
+        XCTAssertTrue(avertissements.isEmpty, "\(avertissements)")
+    }
+
+    func test_masquageDeLaQuery() {
+        XCTAssertEqual(redactingQuery("GET /off?token=jeton-essai-0123456789abcdef HTTP/1.1"), "GET /off?…")
+        XCTAssertEqual(redactingQuery("/wake?action=WAKE"), "/wake?…")
+        XCTAssertEqual(redactingQuery("GET /off HTTP/1.1"), "GET /off HTTP/1.1")
+        XCTAssertEqual(redactingQuery("?"), "?…")
+    }
+
+    func test_journal_requeteMalFormee_neContientJamaisLeJeton() {
+        let r = routeur(jeton: jeton)
+        let tetes = [
+            "GET /off?token=\(jeton) HTTP/1.1 en-trop\r\nHost: 192.0.2.10\r\n\r\n",   // ligne mal formée
+            "GET /off?token=\(jeton) HTTP/2.0\r\nHost: 192.0.2.10\r\n\r\n",            // version refusée
+            "get /off?token=\(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",            // méthode refusée
+            "GET /off?token=\(jeton)&token=x HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",    // clé en double
+            "GET /off?token=\(jeton) HTTP/1.1\r\n\r\n",                                   // sans Host
+            "GET /off?token=\(jeton) HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",          // Host en double
+            "GET /off?token=\(jeton)\u{1B}[31m HTTP/1.1\r\nHost: a\r\n\r\n",           // cible non imprimable
+        ]
+        for tete in tetes {
+            let octets = Data(tete.utf8)
+            let analysee = RequestParser.parse(head: octets)
+            XCTAssertNotNil(analysee.failureValue, tete)
+            logReceivedRequest(analysee, head: octets, peer: "192.0.2.10")
+            XCTAssertEqual(r.handle(analysee).status, 400, tete)
+        }
+        XCTAssertEqual(capture.lines.count, tetes.count)
+        XCTAssertTrue(capture.lines.allSatisfy { $0.1.contains("/off?…") }, "\(capture.lines)")
+        XCTAssertFalse(capture.lines.contains { $0.1.contains("jeton-essai") }, "\(capture.lines)")
+        XCTAssertFalse(capture.lines.contains { $0.1.contains("\u{1B}") })
+    }
+
+    func test_journal_refusDAccesEtRequeteAcceptee_neContiennentJamaisLeJeton() {
+        let r = routeur(jeton: jeton)
+        // Jeton dans l'URL refusé par défaut : 401 journalisé, chemin seul.
+        let refusee = Data("GET /off?token=\(jeton) HTTP/1.1\r\nHost: 192.0.2.10:9090\r\n\r\n".utf8)
+        let analysee = RequestParser.parse(head: refusee)
+        logReceivedRequest(analysee, head: refusee, peer: "192.0.2.10")
+        XCTAssertEqual(r.handle(analysee).status, 401)
+        // Requête acceptée avec le jeton dans l'URL (option active).
+        let acceptee = routeur(jeton: jeton, jetonEnQuery: true)
+        logReceivedRequest(analysee, head: refusee, peer: "192.0.2.10")
+        XCTAssertEqual(acceptee.handle(analysee).status, 200)
+        XCTAssertFalse(capture.lines.isEmpty)
+        XCTAssertFalse(capture.lines.contains { $0.1.contains("jeton-essai") }, "\(capture.lines)")
+    }
+
     // MARK: - Erreurs
 
     func test_cheminInconnu_404() {
@@ -409,5 +477,12 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(HTTPResponse.text("", status: 405).reasonPhrase, "Method Not Allowed")
         XCTAssertEqual(HTTPResponse.text("", status: 413).reasonPhrase, "Payload Too Large")
         XCTAssertEqual(HTTPResponse.text("", status: 500).reasonPhrase, "Error")
+    }
+}
+
+private extension Result {
+    var failureValue: Failure? {
+        if case .failure(let erreur) = self { return erreur }
+        return nil
     }
 }

@@ -83,4 +83,38 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(r.warnings.count, 1)
         XCTAssertTrue(r.warnings.first?.contains("illisible") ?? false)
     }
+
+    // MARK: - auth_token (tâche 8, tour 1)
+
+    func test_authToken_valide_aucunAvertissement() {
+        let r = Config.parse(data: Data(#"{"auth_token":"jeton-essai-0123456789abcdef"}"#.utf8))
+        XCTAssertEqual(r.config.authToken, "jeton-essai-0123456789abcdef")
+        XCTAssertTrue(r.warnings.isEmpty, "\(r.warnings)")
+        // Absent ou vide : rien à signaler ici (main.swift traite le cas « aucun jeton »).
+        XCTAssertTrue(Config.parse(data: Data(#"{"auth_token":""}"#.utf8)).warnings.isEmpty)
+        XCTAssertTrue(Config.parse(data: Data("{}".utf8)).warnings.isEmpty)
+    }
+
+    func test_authToken_espacesDeBord_avertissement() {
+        for json in [#"{"auth_token":" jeton-essai-0123456789abcdef"}"#, #"{"auth_token":"jeton-essai-0123456789abcdef\t"}"#] {
+            let r = Config.parse(data: Data(json.utf8))
+            XCTAssertTrue(r.warnings.contains { $0.contains("auth_token") && $0.contains("espace") }, "\(json) \(r.warnings)")
+            XCTAssertFalse(r.warnings.contains { $0.contains("jeton-essai") }, "\(r.warnings)")
+        }
+    }
+
+    func test_authToken_pasUneChaine_avertissement() {
+        for json in [#"{"auth_token":1234567890123456789}"#, #"{"auth_token":true}"#, #"{"auth_token":["a"]}"#] {
+            let r = Config.parse(data: Data(json.utf8))
+            XCTAssertTrue(r.warnings.contains { $0.contains("auth_token") && $0.contains("chaîne") }, "\(json) \(r.warnings)")
+        }
+    }
+
+    func test_authToken_tropCourt_avertissement() {
+        let r = Config.parse(data: Data(#"{"auth_token":"jeton-court"}"#.utf8))
+        XCTAssertTrue(r.warnings.contains { $0.contains("auth_token") && $0.contains("16") }, "\(r.warnings)")
+        XCTAssertFalse(r.warnings.contains { $0.contains("jeton-court") }, "\(r.warnings)")
+        // 16 caractères exactement : accepté sans avertissement.
+        XCTAssertTrue(Config.parse(data: Data(#"{"auth_token":"0123456789abcdef"}"#.utf8)).warnings.isEmpty)
+    }
 }

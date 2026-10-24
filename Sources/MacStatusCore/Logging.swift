@@ -78,3 +78,29 @@ public func escapeForLog(_ s: String, limit: Int = 200) -> String {
     }
     return String(out)
 }
+
+// MARK: - Requêtes reçues
+
+/// Coupe un texte au premier `?` et remplace la suite par `?…` : la requête d'une cible
+/// (`?token=…` compris) n'entre jamais au journal. À appliquer avant `escapeForLog` à toute
+/// cible ou ligne de requête brute.
+public func redactingQuery(_ text: String) -> String {
+    guard let mark = text.firstIndex(of: "?") else { return text }
+    return String(text[..<mark]) + "?…"
+}
+
+/// Ligne DEBUG d'une requête reçue par l'adaptateur réseau. Acceptée par l'analyseur : méthode
+/// et chemin (sans la requête). Refusée : motif et première ligne reçue, requête masquée puis
+/// échappée. Le jeton ne peut donc y figurer, ni par `?token=`, ni par un en-tête.
+public func logReceivedRequest(_ parsed: Result<HTTPRequest, ParseError>, head: Data, peer: String) {
+    switch parsed {
+    case .success(let request):
+        logDebug("HTTP \(escapeForLog(request.method, limit: 16)) \(escapeForLog(redactingQuery(request.path))) "
+                 + "depuis \(escapeForLog(peer))")
+    case .failure(let error):
+        var firstLine = head.prefix { $0 != 0x0A }
+        if firstLine.last == 0x0D { firstLine = firstLine.dropLast() }
+        let line = redactingQuery(String(decoding: firstLine, as: UTF8.self))
+        logDebug("HTTP refusée (\(error)) « \(escapeForLog(line)) » depuis \(escapeForLog(peer))")
+    }
+}

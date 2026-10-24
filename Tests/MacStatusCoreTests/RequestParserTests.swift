@@ -168,9 +168,22 @@ final class RequestParserTests: XCTestCase {
     }
 
     func test_enTeteRepete_leDernierGagne() throws {
-        // Hors `Host`, comportement historique gardé : la politique d'accès relève de la tâche 8.
-        let r = try requete("GET / HTTP/1.1\r\nHost: x\r\nX-Auth-Token: a\r\nx-auth-token: b\r\n\r\n")
-        XCTAssertEqual(r.headers["x-auth-token"], "b")
+        // Hors des en-têtes d'accès, comportement historique gardé : le dernier gagne.
+        let r = try requete("GET / HTTP/1.1\r\nHost: x\r\nX-A: a\r\nx-a: b\r\n\r\n")
+        XCTAssertEqual(r.headers["x-a"], "b")
+    }
+
+    func test_enTetesDAccesEnDouble_refuses() {
+        // Tâche 8, tour 1 : un doublon pourrait être lu différemment par un relais et par le daemon.
+        for (nom, valeur) in [("Origin", "http://a.example"), ("Sec-Fetch-Site", "none"),
+                              ("X-Auth-Token", "jeton-essai-0123456789abcdef"),
+                              ("Authorization", "Bearer jeton-essai-0123456789abcdef")] {
+            XCTAssertEqual(parse("GET /wake HTTP/1.1\r\nHost: x\r\n\(nom): \(valeur)\r\n\(nom.lowercased()): \(valeur)\r\n\r\n"),
+                           .failure(.malformedHeader), nom)
+            XCTAssertNotNil(try? parse("GET /wake HTTP/1.1\r\nHost: x\r\n\(nom): \(valeur)\r\n\r\n").get(), nom)
+        }
+        // Les deux en-têtes de jeton ensemble restent admis : la politique prend `X-Auth-Token`.
+        XCTAssertNotNil(try? parse("GET /wake HTTP/1.1\r\nHost: x\r\nX-Auth-Token: a\r\nAuthorization: Bearer b\r\n\r\n").get())
     }
 
     func test_enTeteNonUTF8_refuse() {

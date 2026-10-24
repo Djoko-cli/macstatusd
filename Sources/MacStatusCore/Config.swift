@@ -187,6 +187,7 @@ public struct Config {
         cfg.port = UInt16(bag.int("port", Int(cfg.port), min: 1, max: 65_535))
         cfg.bindAddress = bag.string("bind_address", cfg.bindAddress)
         cfg.authToken = bag.string("auth_token", cfg.authToken)
+        warnings += authTokenWarnings(bag.raw["auth_token"])
         cfg.allowQueryToken = bag.bool("allow_query_token", cfg.allowQueryToken)
         if let hosts = bag.stringList("allowed_hosts") {
             cfg.allowedHosts = hosts
@@ -225,5 +226,25 @@ public struct Config {
             warnings.append("enabled=true mais webhook_base_url vide → aucun push vers Homebridge")
         }
         return (cfg, warnings)
+    }
+
+    /// Avertissements sur `auth_token`, sans jamais citer sa valeur : pas une chaîne, espaces
+    /// de bord (l'analyseur les ôte de l'en-tête reçu : un tel jeton ne correspondrait jamais),
+    /// moins de 16 caractères. Absent ou vide : rien ici (traité au démarrage).
+    static func authTokenWarnings(_ raw: Any?) -> [String] {
+        guard let raw else { return [] }
+        guard let text = raw as? String else {
+            return ["auth_token doit être une chaîne JSON (entre guillemets)"]
+        }
+        guard !text.isEmpty else { return [] }
+        var warnings: [String] = []
+        if text.first.map({ $0.isWhitespace }) == true || text.last.map({ $0.isWhitespace }) == true {
+            warnings.append("auth_token commence ou finit par une espace : l'en-tête reçu en est débarrassé, "
+                            + "aucune requête ne correspondra")
+        }
+        if text.count < 16 {
+            warnings.append("auth_token trop court (\(text.count) caractères, 16 au moins conseillés)")
+        }
+        return warnings
     }
 }

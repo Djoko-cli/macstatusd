@@ -14,7 +14,8 @@ public enum ParseError: Error, Equatable {
     /// HTTP/1.1 sans en-tête `Host`, ou avec un `Host` vide.
     case missingHost
     /// Ligne d'en-tête sans deux-points, nom invalide, valeur avec caractère de contrôle,
-    /// `\r` ou `\n` isolé, ligne repliée, valeur non UTF-8, `Host` en double.
+    /// `\r` ou `\n` isolé, ligne repliée, valeur non UTF-8, en-tête d'accès en double
+    /// (`RequestParser.singletonHeaders`).
     case malformedHeader
 }
 
@@ -25,7 +26,9 @@ public enum ParseError: Error, Equatable {
 /// - ligne de requête en exactement trois éléments séparés par une seule espace ;
 /// - méthode en lettres majuscules ASCII ; le routeur choisit ensuite entre 404 et 405 ;
 /// - version `HTTP/1.1` ou `HTTP/1.0` ; en HTTP/1.1, `Host` obligatoire et non vide ;
-///   `Host` jamais en double ;
+/// - jamais en double : `Host`, `Origin`, `Sec-Fetch-Site`, `X-Auth-Token`, `Authorization`
+///   (deux lectures possibles d'un même en-tête, par un relais et par le daemon) ; ailleurs,
+///   le dernier gagne ;
 /// - cible en forme d'origine (`/…`), caractères ASCII imprimables seulement, sans `#` ;
 /// - requête (`?…`) décodée strictement : `%` suivi de deux chiffres hexadécimaux, UTF-8
 ///   valide, aucun caractère de contrôle après décodage, `+` littéral, clés non vides et
@@ -46,6 +49,9 @@ public enum RequestParser {
     private static let sp: UInt8 = 0x20
     private static let htab: UInt8 = 0x09
 
+    /// En-têtes dont dépend la politique d'accès : un doublon est refusé (400), en minuscules.
+    public static let singletonHeaders: Set<String> = ["host", "origin", "sec-fetch-site", "x-auth-token", "authorization"]
+
     public static func parse(head: Data) -> Result<HTTPRequest, ParseError> {
         var lines = splitLines(cutAtEndOfHead([UInt8](head)))
         // Une seule fin de ligne finale, sans ligne vide derrière, est tolérée.
@@ -54,13 +60,9 @@ public enum RequestParser {
         var request = HTTPRequest()
         if let error = parseRequestLine(lines[0], into: &request) { return .failure(error) }
 
-        var sawHost = false
         for line in lines.dropFirst() {
             guard let (name, value) = parseHeaderLine(line) else { return .failure(.malformedHeader) }
-            if name == "host" {
-                guard !sawHost else { return .failure(.malformedHeader) }
-                sawHost = true
-            }
+            if singletonHeaders.contains(name), request.headers[name] != nil { return .failure(.malformedHeader) }
             request.headers[name] = value
         }
 
