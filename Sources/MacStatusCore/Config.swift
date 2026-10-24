@@ -78,7 +78,9 @@ public struct Config {
 
     // --- Serveur HTTP ---
     public var port: UInt16 = 9090
-    /// "" = toutes les interfaces, "127.0.0.1" = loopback uniquement.
+    /// Adresse d'écoute, sous forme canonique (voir `ListenAddress`) : "" ou "::" = toutes les
+    /// interfaces en IPv4 et IPv6, "0.0.0.0" = toutes les interfaces en IPv4 seulement, sinon une
+    /// adresse littérale ("127.0.0.1" = boucle locale uniquement). `localhost` vaut "127.0.0.1".
     public var bindAddress = ""
     /// Jeton d'accès. Exigé sur les commandes, et sur les lectures venues d'ailleurs que de
     /// la boucle locale ; passé par l'en-tête `X-Auth-Token` ou `Authorization: Bearer …`.
@@ -185,7 +187,17 @@ public struct Config {
         cfg.heartbeatSeconds = bag.int("heartbeat_seconds", cfg.heartbeatSeconds, min: 0, max: 3600)
 
         cfg.port = UInt16(bag.int("port", Int(cfg.port), min: 1, max: 65_535))
-        cfg.bindAddress = bag.string("bind_address", cfg.bindAddress)
+        if let raw = bag.raw["bind_address"] {
+            let text = (raw as? String) ?? (raw as? NSNumber)?.stringValue ?? ""
+            if raw is String, let address = ListenAddress(bindAddress: text) {
+                cfg.bindAddress = text.isEmpty ? "" : address.canonical
+            } else {
+                let defaut = ListenAddress(bindAddress: cfg.bindAddress) ?? .dualStack
+                warnings.append("bind_address=\"\(escapeForLog(text, limit: 64))\" invalide "
+                                + "(attendu 0.0.0.0, :: ou une adresse IP littérale) → "
+                                + "défaut, écoute sur \(defaut.description(port: cfg.port))")
+            }
+        }
         cfg.authToken = bag.string("auth_token", cfg.authToken)
         warnings += authTokenWarnings(bag.raw["auth_token"])
         cfg.allowQueryToken = bag.bool("allow_query_token", cfg.allowQueryToken)
@@ -246,5 +258,57 @@ public struct Config {
             warnings.append("auth_token trop court (\(text.count) caractères, 16 au moins conseillés)")
         }
         return warnings
+    }
+}
+
+// MARK: - Adresse d'écoute
+
+/// Adresse d'écoute du serveur HTTP, tirée de `bind_address`.
+public enum ListenAddress: Equatable {
+    /// "" ou "::" : toutes les interfaces, IPv4 et IPv6 (une seule socket double pile).
+    case dualStack
+    /// "0.0.0.0" : toutes les interfaces, IPv4 seulement.
+    case allIPv4
+    /// Adresse IPv4 littérale, sous forme canonique.
+    case ipv4(String)
+    /// Adresse IPv6 littérale, sous forme canonique (`inet_ntop`, minuscules), sans zone.
+    case ipv6(String)
+
+    /// `nil` pour tout ce qui n'est ni vide, ni `localhost`, ni une adresse littérale stricte
+    /// (un nom d'hôte, un port, des crochets, une zone IPv6, des espaces).
+    public init?(bindAddress text: String) {
+        if text.isEmpty { self = .dualStack; return }
+        if text.lowercased() == "localhost" { self = .ipv4("127.0.0.1"); return }
+        guard ipv4Bytes(text) != nil || ipv6Bytes(text) != nil else { return nil }
+        // Forme canonique ; une IPv4 mappée (`::ffff:a.b.c.d`) devient l'IPv4.
+        let canonical = peerIdentity(text)
+        if canonical == "::" {
+            self = .dualStack
+        } else if canonical == "0.0.0.0" {
+            self = .allIPv4
+        } else if ipv4Bytes(canonical) != nil {
+            self = .ipv4(canonical)
+        } else {
+            self = .ipv6(canonical)
+        }
+    }
+
+    /// Valeur de `Config.bindAddress` : "" garde son sens de défaut, les autres leur forme canonique.
+    var canonical: String {
+        switch self {
+        case .dualStack: return "::"
+        case .allIPv4: return "0.0.0.0"
+        case .ipv4(let address), .ipv6(let address): return address
+        }
+    }
+
+    /// Texte exact du message « à l'écoute sur … ».
+    public func description(port: UInt16) -> String {
+        switch self {
+        case .dualStack: return "[::]:\(port) (IPv4+IPv6, toutes interfaces)"
+        case .allIPv4: return "0.0.0.0:\(port) (IPv4 seulement, toutes interfaces)"
+        case .ipv4(let address): return "\(address):\(port)"
+        case .ipv6(let address): return "[\(address)]:\(port)"
+        }
     }
 }

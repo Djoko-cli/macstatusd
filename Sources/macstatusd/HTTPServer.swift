@@ -4,25 +4,55 @@ import MacStatusCore
 
 /// Adaptateur réseau (`NWListener`) du serveur HTTP : il lit les octets, délègue
 /// l'analyse à `RequestParser` et le routage à `Router`, puis écrit la réponse.
-/// Requêtes bornées en taille et en durée, une réponse par connexion, et surtout
-/// **redémarrage automatique** du listener en cas d'échec (port occupé,
-/// réinitialisation réseau) au lieu d'un crash.
+///
+/// - **Plafond de connexions** (`ConnectionLimiter`, 32 au total, 8 par pair) appliqué à
+///   l'acceptation, avant toute lecture : une connexion refusée est fermée aussitôt, sans
+///   réponse ; les refus sont journalisés une fois, puis au plus une fois par minute.
+/// - **Délai d'en-têtes** de 2 s compté depuis l'acceptation : à l'échéance, `cancel()`.
+///   Durée de vie totale bornée à 10 s (envoi bloqué par un client qui ne lit pas).
+/// - En-tête borné à 16 Kio (413), une réponse par connexion.
+/// - **Reprise automatique** du listener : `.failed` ou `.cancelled` inattendu → nouvelle
+///   écoute avec un délai croissant (1 s, doublé jusqu'à 30 s) ; `.waiting` → une ligne par
+///   épisode, puis `cancel()` et nouvelle écoute au bout de 5 s si l'état n'a pas changé.
+///
+/// Tout s'exécute sur une seule file série (`queue`) : listener, connexions, minuteries et
+/// routage. La lecture est asynchrone (`NWConnection.receive` rend la main aussitôt et rappelle
+/// sur la file quand des octets arrivent) : un client lent n'occupe jamais la file pendant
+/// qu'il envoie. Seul le routage s'y exécute d'un bloc, lecture du moteur comprise.
 final class HTTPServer {
     private let queue = DispatchQueue(label: "macstatusd.http")
     private let port: UInt16
-    private let bindAddress: String
+    private let listenAddress: ListenAddress
     private let router: Router
     private let maxRequestBytes = 16 * 1024
-    private let requestTimeout: TimeInterval = 5
+    /// Délai d'obtention des en-têtes, depuis l'acceptation.
+    private let headerTimeout: TimeInterval = 2
+    /// Durée de vie maximale d'une connexion, envoi de la réponse compris.
+    private let connectionLifetime: TimeInterval = 10
+    /// Durée d'un état `.waiting` avant d'abandonner le listener pour un neuf.
+    private let waitingTimeout: TimeInterval = 5
+
+    private let limiter = ConnectionLimiter(maxTotal: ConnectionLimiter.defaultMaxTotal,
+                                            maxPerPeer: ConnectionLimiter.defaultMaxPerPeer)
+    private let refusalLog = PeriodicLogGate(period: 60, clock: SystemClock())
 
     private var listener: NWListener?
     private var restartDelay: TimeInterval = 1
     private var restartScheduled = false
     private var stopped = false
+    /// Épisode `.waiting` déjà journalisé : plus de ligne jusqu'au prochain `.ready`, même si
+    /// le listener neuf retombe en attente.
+    private var waitingLogged = false
+    /// Le listener courant est en `.waiting` (un `.waiting` suivant ne relance pas le délai).
+    private var listenerWaiting = false
+    /// Numéro de la période d'attente du listener courant : la reprise à 5 s ne vaut que pour
+    /// elle ; tout autre état en ouvre une nouvelle.
+    private var waitingEpisode = 0
 
     init(port: UInt16, bindAddress: String, router: Router) {
         self.port = port
-        self.bindAddress = bindAddress
+        // `Config` a déjà validé l'adresse ; par prudence, une valeur invalide garde le défaut.
+        self.listenAddress = ListenAddress(bindAddress: bindAddress) ?? .dualStack
         self.router = router
     }
 
@@ -41,6 +71,20 @@ final class HTTPServer {
         }
     }
 
+    private func makeParameters() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        tcp.connectionTimeout = 5
+        let parameters = NWParameters(tls: nil, tcp: tcp)
+        parameters.allowLocalEndpointReuse = true
+        parameters.includePeerToPeer = false
+        if listenAddress == .allIPv4,
+           let ip = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ip.version = .v4
+        }
+        return parameters
+    }
+
     private func createListener() {
         restartScheduled = false
         guard !stopped else { return }
@@ -49,44 +93,71 @@ final class HTTPServer {
             return
         }
 
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-        parameters.includePeerToPeer = false
-        if let tcp = parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options {
-            tcp.connectionTimeout = 5
-            tcp.noDelay = true
-        }
-
+        let parameters = makeParameters()
         let newListener: NWListener
         do {
-            if bindAddress.isEmpty {
+            switch listenAddress {
+            case .dualStack, .allIPv4:
                 newListener = try NWListener(using: parameters, on: nwPort)
-            } else {
-                parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(bindAddress), port: nwPort)
+            case .ipv4(let address), .ipv6(let address):
+                parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(address), port: nwPort)
                 newListener = try NWListener(using: parameters)
             }
         } catch {
-            logError("création du listener impossible: \(error) → nouvelle tentative dans \(Int(restartDelay)) s")
+            logError("création du listener impossible: \(error)")
             scheduleRestart()
             return
         }
 
-        newListener.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
+        // Le gestionnaire ne touche `listener` que s'il s'agit encore de cette instance : un
+        // ancien listener annulé ne doit ni effacer ni relancer son successeur.
+        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+            guard let self, let newListener, listener === newListener else { return }
+            if case .waiting = state {} else {
+                // Sortie de l'attente (ou jamais entrée) : la reprise planifiée devient caduque.
+                listenerWaiting = false
+                waitingEpisode += 1
+            }
             switch state {
             case .ready:
                 restartDelay = 1
-                let bind = bindAddress.isEmpty ? "0.0.0.0" : bindAddress
-                logInfo("serveur HTTP à l'écoute sur \(bind):\(port)")
+                waitingLogged = false
+                let actual = newListener.port?.rawValue ?? port
+                logInfo("serveur HTTP à l'écoute sur \(listenAddress.description(port: actual))")
+            case .waiting(let error):
+                // Déjà en attente : l'état ne change pas, le délai de 5 s court toujours.
+                guard !listenerWaiting else {
+                    logDebug("listener toujours en attente: \(error)")
+                    return
+                }
+                listenerWaiting = true
+                waitingEpisode += 1
+                let episode = waitingEpisode
+                if !waitingLogged {
+                    waitingLogged = true
+                    logWarn("listener en attente: \(error) → nouvelle écoute dans \(Int(waitingTimeout)) s "
+                            + "si l'état ne change pas")
+                } else {
+                    logDebug("listener de nouveau en attente: \(error)")
+                }
+                queue.asyncAfter(deadline: .now() + waitingTimeout) { [weak self, weak newListener] in
+                    guard let self, let newListener, !stopped,
+                          listener === newListener, listenerWaiting, waitingEpisode == episode else { return }
+                    logDebug("listener en attente depuis \(Int(waitingTimeout)) s → nouvelle écoute")
+                    listener = nil
+                    listenerWaiting = false
+                    newListener.cancel()
+                    createListener()
+                }
             case .failed(let error):
                 logError("listener en échec: \(error)")
-                listener?.cancel()
                 listener = nil
+                newListener.cancel()
                 scheduleRestart()
             case .cancelled:
+                listener = nil
                 if !stopped {
                     logWarn("listener annulé")
-                    listener = nil
                     scheduleRestart()
                 }
             default:
@@ -99,11 +170,12 @@ final class HTTPServer {
         }
 
         listener = newListener
+        listenerWaiting = false
+        waitingEpisode += 1
         newListener.start(queue: queue)
     }
 
-    /// Idempotent : `.failed` puis `.cancelled` arrivent souvent en paire, une
-    /// seule reprise doit être planifiée.
+    /// Idempotent : une seule reprise planifiée à la fois.
     private func scheduleRestart() {
         guard !stopped, !restartScheduled else { return }
         restartScheduled = true
@@ -111,7 +183,10 @@ final class HTTPServer {
         restartDelay = min(restartDelay * 2, 30)
         logInfo("nouvelle tentative d'écoute dans \(Int(delay)) s")
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, !stopped else { return }
+            // Jamais deux listeners : rien à faire si un autre a pris la place entre-temps.
+            guard let self else { return }
+            restartScheduled = false
+            guard !stopped, listener == nil else { return }
             createListener()
         }
     }
@@ -121,9 +196,24 @@ final class HTTPServer {
     private func accept(_ connection: NWConnection) {
         let remote = connection.currentPath?.remoteEndpoint ?? connection.endpoint
         let peer = Self.describe(endpoint: remote)
+
+        // Plafond appliqué avant toute lecture : la connexion refusée n'est jamais démarrée.
+        guard limiter.acquire(peer: peer) else {
+            connection.cancel()
+            if let count = refusalLog.note() {
+                logWarn("HTTP connexion refusée depuis \(escapeForLog(peer)) : plafond atteint "
+                        + "(\(ConnectionLimiter.defaultMaxTotal) au total, \(ConnectionLimiter.defaultMaxPerPeer) par pair), "
+                        + "\(count) refus depuis la dernière ligne")
+            }
+            return
+        }
+
         let peerIsLoopback = Self.isLoopback(endpoint: remote)
         var buffer = Data()
         var finished = false
+        // Tout ce qui suit s'exécute sur `queue` (connexion démarrée sur elle, minuteries
+        // sur elle) : ce drapeau n'est lu et écrit que depuis cette file série.
+        var released = false
 
         var method = "GET"
         let complete: (HTTPResponse?) -> Void = { [weak self] response in
@@ -137,15 +227,23 @@ final class HTTPServer {
             }
         }
 
-        queue.asyncAfter(deadline: .now() + requestTimeout) {
+        // Délai d'en-têtes, compté depuis l'acceptation.
+        queue.asyncAfter(deadline: .now() + headerTimeout) {
             guard !finished else { return }
-            logDebug("connexion \(peer) sans requête complète → fermeture")
+            logDebug("connexion \(peer) sans en-têtes complets en \(Int(self.headerTimeout)) s → fermeture")
             complete(nil)
+        }
+        // Filet : une connexion ne vit jamais plus de `connectionLifetime`, envoi compris.
+        queue.asyncAfter(deadline: .now() + connectionLifetime) { [weak connection] in
+            guard let connection, !released else { return }
+            logDebug("connexion \(peer) encore ouverte après \(Int(self.connectionLifetime)) s → fermeture")
+            finished = true
+            connection.cancel()
         }
 
         func receiveMore() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
-                guard let self else { return }
+                guard let self, !finished else { return }
                 if let data, !data.isEmpty { buffer.append(data) }
 
                 if buffer.count > maxRequestBytes {
@@ -174,10 +272,21 @@ final class HTTPServer {
             }
         }
 
-        connection.stateUpdateHandler = { state in
-            if case .failed(let error) = state {
+        // La place est rendue une seule fois, à l'état final de la connexion. Toute issue
+        // finit par `cancel()` (réponse envoyée, délai, erreur, filet), qui livre `.cancelled` ;
+        // `.failed` peut le précéder : le drapeau empêche la seconde libération.
+        connection.stateUpdateHandler = { [limiter] state in
+            switch state {
+            case .failed(let error):
                 logDebug("connexion \(peer) en échec: \(error)")
                 complete(nil)
+                connection.cancel()
+                if !released { released = true; limiter.release(peer: peer) }
+            case .cancelled:
+                finished = true
+                if !released { released = true; limiter.release(peer: peer) }
+            default:
+                break
             }
         }
         connection.start(queue: queue)

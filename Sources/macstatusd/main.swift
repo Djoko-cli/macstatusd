@@ -147,7 +147,8 @@ if options.watch {
 
 logInfo("macstatusd \(macstatusdVersion) démarrage — uid=\(getuid()) session=\(CGSessionAvailable() ? "aqua" : "headless") config=\(options.configPath)")
 for warning in configWarnings { logWarn("config: \(warning)") }
-logInfo("configuration: port=\(config.port) bind=\(config.bindAddress.isEmpty ? "0.0.0.0" : config.bindAddress) "
+let listenDescription = (ListenAddress(bindAddress: config.bindAddress) ?? .dualStack).description(port: config.port)
+logInfo("configuration: port=\(config.port) écoute=\(listenDescription) "
         + "off_action=\(config.offAction.rawValue) webhook=\(config.enabled ? config.webhookBaseURL : "désactivé") "
         + "poll=\(config.pollIntervalMS)ms settle_on=\(config.settleOnMS)ms settle_off=\(config.settleOffMS)ms "
         + "heartbeat=\(config.heartbeatSeconds)s")
@@ -176,8 +177,7 @@ if config.authToken.isEmpty {
     if bindAddressIsLoopbackOnly(config.bindAddress) {
         logWarn("aucun jeton configuré (auth_token) : seules les requêtes de la boucle locale sont servies")
     } else {
-        let bind = config.bindAddress.isEmpty ? "0.0.0.0" : config.bindAddress
-        logError("aucun jeton configuré (auth_token) alors que l'écoute est ouverte sur \(escapeForLog(bind)) : "
+        logError("aucun jeton configuré (auth_token) alors que l'écoute est ouverte sur \(listenDescription) : "
                  + "toute requête venue du réseau sera refusée (403), Home Assistant et Homebridge compris. "
                  + "Définir auth_token, ou bind_address à 127.0.0.1.")
     }

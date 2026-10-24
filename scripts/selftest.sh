@@ -10,7 +10,10 @@
 #   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks ;
 #   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
 #     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
-#     /off ne touche jamais l'écran du Mac.
+#     /off ne touche jamais l'écran du Mac ;
+#   - seule exception, l'instance D du cas « message-ecoute » écoute sur « :: »
+#     (toutes interfaces) le temps de lire son message d'écoute, avec un jeton et les
+#     mêmes commandes inertes ; le script ne lui parle que par la boucle locale.
 #
 # Si l'écran est éteint, la session verrouillée ou le Mac en veille au départ, les
 # sections qui dépendent d'un écran allumé sont marquées SAUTÉ, sans compter en
@@ -45,6 +48,7 @@ fi
 PORT_A=19090
 PORT_B=19091
 PORT_C=$((PORT_B + 5))
+PORT_D=19097
 PORT_HB=19099
 # Jeton de l'instance B, valeur d'essai inventée. Passé en en-tête : depuis la tâche 8,
 # le jeton dans l'URL (?token=) est refusé par défaut.
@@ -172,7 +176,7 @@ echo "==> Compilation du binaire"
 swift build --scratch-path "$SCRATCH" >/dev/null 2>"$WORK/build.err" || { cat "$WORK/build.err"; echo "build échouée"; exit 1; }
 BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/macstatusd"
 
-for port in $PORT_A $PORT_B $PORT_C $PORT_HB; do
+for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_HB; do
   port_libre "$port" || { echo "le port $port est déjà occupé : arrêt avant tout lancement"; exit 1; }
 done
 
@@ -260,16 +264,23 @@ JSON
 
 # Instance C : copie de B sur un autre port, pour la reprise après port occupé.
 sed "s/\"port\": $PORT_B/\"port\": $PORT_C/; s|$WORK/b.log|$WORK/c.log|" "$WORK/b.json" > "$WORK/c.json"
+# Instance D : copie de B liée à « :: », pour le seul cas « message-ecoute » (jeton exigé).
+sed "s/\"port\": $PORT_B/\"port\": $PORT_D/; s|$WORK/b.log|$WORK/d.log|; s/\"bind_address\": \"127.0.0.1\"/\"bind_address\": \"::\"/" \
+  "$WORK/b.json" > "$WORK/d.json"
 
 # Garde : aucune instance ne démarre si sa configuration sort du cadre hermétique.
+# Seule D peut écouter sur « :: », et seulement avec le jeton d'essai.
 conformes=1
-for nom in a b c; do
-  python3 - "$WORK/$nom.json" <<'PY' || conformes=0
+for nom in a b c d; do
+  attendu="127.0.0.1"
+  [[ "$nom" == "d" ]] && attendu="::"
+  python3 - "$WORK/$nom.json" "$attendu" "$JETON_B" <<'PY' || conformes=0
 import json, sys
-chemin = sys.argv[1]
+chemin, attendu, jeton = sys.argv[1], sys.argv[2], sys.argv[3]
 c = json.load(open(chemin))
 erreurs = []
-if c.get("bind_address") != "127.0.0.1": erreurs.append("bind_address")
+if c.get("bind_address") != attendu: erreurs.append("bind_address")
+if attendu != "127.0.0.1" and c.get("auth_token") != jeton: erreurs.append("auth_token")
 if not 19000 <= c.get("port", 0) <= 19999: erreurs.append("port")
 if c.get("off_command") != ["/usr/bin/true"]: erreurs.append("off_command")
 if c.get("wake_command") != ["/usr/bin/true"]: erreurs.append("wake_command")
@@ -468,6 +479,96 @@ PIDS+=($!)
 sleep 2
 if grep -q "Address already in use" "$WORK/c.log"; then ok "conflit de port détecté sans crash"; else bad "conflit de port non journalisé"; fi
 if await_http $PORT_C 30; then ok "écoute reprise après libération du port"; else bad "écoute non reprise après libération du port"; fi
+
+echo
+echo "== 8. Adaptateur d'écoute : plafond, délai d'en-têtes, message d'écoute"
+# Client brut : tient des sockets ouvertes, ce que curl ne sait pas faire.
+cat > "$WORK/connexions.py" <<'PY'
+import socket, sys, time
+port, cas = int(sys.argv[1]), sys.argv[2]
+REQUETE = b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+
+def ouvrir():
+    return socket.create_connection(("127.0.0.1", port), timeout=5)
+
+def lire_tout(s, delai):
+    """Octets reçus jusqu'à la fermeture par le serveur ; None si toujours ouverte au délai."""
+    s.settimeout(delai)
+    morceaux = []
+    try:
+        while True:
+            m = s.recv(4096)
+            if not m:
+                break
+            morceaux.append(m)
+    except (ConnectionResetError, BrokenPipeError):
+        pass
+    except socket.timeout:
+        return None
+    return b"".join(morceaux)
+
+if cas == "pair":
+    # 8 connexions muettes depuis 127.0.0.1, puis une 9e qui envoie une vraie requête.
+    tenues = [ouvrir() for _ in range(8)]
+    time.sleep(0.3)
+    neuvieme = ouvrir()
+    try:
+        neuvieme.sendall(REQUETE)
+    except OSError:
+        pass
+    reponse = lire_tout(neuvieme, 1.5)
+    print("9e:" + ("fermee-sans-reponse" if reponse == b"" else "ouverte" if reponse is None else "repondu"))
+    # La 1re des 8 est servie : elles avaient bien été acceptées.
+    tenues[0].sendall(REQUETE)
+    reponse = lire_tout(tenues[0], 1.5) or b""
+    print("1re:" + ("200" if reponse.startswith(b"HTTP/1.1 200") else "autre"))
+    for s in tenues + [neuvieme]:
+        s.close()
+elif cas == "lent":
+    # En-têtes jamais finis : durée jusqu'à la fermeture par le serveur.
+    s = ouvrir()
+    debut = time.monotonic()
+    s.sendall(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+    reponse = lire_tout(s, 6)
+    duree = time.monotonic() - debut
+    s.close()
+    print("ouverte" if reponse is None else "%.2f" % duree)
+PY
+
+RES_PAIR="$(python3 "$WORK/connexions.py" $PORT_A pair 2>&1)"
+check "connexions-pair : 9e connexion de 127.0.0.1 refusée" "9e:fermee-sans-reponse" "$(printf '%s\n' "$RES_PAIR" | grep '^9e:')"
+check "connexions-pair : les 8 premières acceptées" "1re:200" "$(printf '%s\n' "$RES_PAIR" | grep '^1re:')"
+if grep -q "HTTP connexion refusée depuis 127.0.0.1 : plafond atteint" "$WORK/a.log"; then
+  ok "connexions-pair : refus journalisé"
+else
+  bad "connexions-pair : aucun refus 'plafond atteint' dans le journal de A"
+fi
+check "connexions-pair : places rendues après fermeture" "OK" "$(curl -fsS --max-time 2 http://127.0.0.1:$PORT_A/health)"
+
+DUREE="$(python3 "$WORK/connexions.py" $PORT_A lent 2>&1)"
+if python3 -c 'import sys; d = float(sys.argv[1]); sys.exit(0 if 1.8 <= d <= 3.0 else 1)' "$DUREE" 2>/dev/null; then
+  ok "en-tetes-lents : connexion sans en-têtes fermée en $DUREE s"
+else
+  bad "en-tetes-lents : fermeture attendue en 2 à 3 s, obtenu '$DUREE'"
+fi
+
+# Instance D liée à « :: » : lancée ici, arrêtée dès son message d'écoute lu.
+"$BIN" --config "$WORK/d.json" > "$WORK/d.out" 2>&1 &
+PID_D=$!
+PIDS+=($PID_D)
+if await_http $PORT_D 10; then ok "message-ecoute : instance « :: » joignable par 127.0.0.1"; else bad "message-ecoute : instance « :: » injoignable par 127.0.0.1"; fi
+for _ in $(seq 10); do grep -qF "IPv4+IPv6" "$WORK/d.log" 2>/dev/null && break; sleep 0.3; done
+if grep -qF "serveur HTTP à l'écoute sur [::]:$PORT_D (IPv4+IPv6, toutes interfaces)" "$WORK/d.log"; then
+  ok "message-ecoute : le journal contient « [::]:$PORT_D (IPv4+IPv6, toutes interfaces) »"
+else
+  bad "message-ecoute : message IPv4+IPv6 absent du journal de D ($(grep -F "à l'écoute" "$WORK/d.log" | tail -1))"
+fi
+arreter_pid "$PID_D"
+if grep -qF "serveur HTTP à l'écoute sur 127.0.0.1:$PORT_A" "$WORK/a.log"; then
+  ok "message-ecoute : adresse liée exacte pour A (127.0.0.1:$PORT_A)"
+else
+  bad "message-ecoute : message d'écoute de A inexact"
+fi
 
 echo
 echo "==================================="

@@ -178,7 +178,7 @@ falls back to its default without preventing startup.
 | `webhook_base_url` | `""` | e.g. `http://192.0.2.10:51828` |
 | `accessory_id` | `"mac"` | `accessoryId` sent to the plugin |
 | `port` | `9090` | HTTP port |
-| `bind_address` | `""` | `""` = all interfaces, `127.0.0.1` = loopback |
+| `bind_address` | `""` | `""` or `::` = all interfaces, IPv4 and IPv6, `0.0.0.0` = all interfaces, IPv4 only, `127.0.0.1` = loopback; otherwise a literal IP address (invalid value: warning and default) |
 | `auth_token` | `""` | token for commands and for reads from another machine; empty = only loopback clients are served |
 | `allow_query_token` | `false` | also accepts the token as `?token=…` in the URL |
 | `allowed_hosts` | `[]` | extra names accepted in the `Host` header (list of strings) |

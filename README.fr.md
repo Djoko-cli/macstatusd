@@ -177,7 +177,7 @@ absente ou invalide retombe sur son défaut sans empêcher le démarrage.
 | `webhook_base_url` | `""` | ex. `http://192.0.2.10:51828` |
 | `accessory_id` | `"mac"` | `accessoryId` envoyé au plugin |
 | `port` | `9090` | port HTTP |
-| `bind_address` | `""` | `""` = toutes interfaces, `127.0.0.1` = loopback |
+| `bind_address` | `""` | `""` ou `::` = toutes interfaces en IPv4 et IPv6, `0.0.0.0` = toutes interfaces en IPv4 seulement, `127.0.0.1` = loopback ; sinon une adresse IP littérale (valeur invalide : avertissement et défaut) |
 | `auth_token` | `""` | jeton des commandes et des lectures depuis une autre machine ; vide = seuls les clients en boucle locale sont servis |
 | `allow_query_token` | `false` | accepte aussi le jeton sous la forme `?token=…` dans l'URL |
 | `allowed_hosts` | `[]` | noms supplémentaires acceptés dans l'en-tête `Host` (liste de chaînes) |
