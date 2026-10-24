@@ -4,7 +4,8 @@
 #
 # Principe :
 #   - `swift test` joue d'abord les tests unitaires de MacStatusCore ;
-#   - un faux binaire nommé ScreenSaverEngine simule l'économiseur d'écran
+#   - un faux binaire nommé ScreenSaverEngine simule l'économiseur d'écran, sur demande seulement
+#     (SELFTEST_FAUX_ECONOMISEUR=1, daemon réel arrêté : sinon il le verrait aussi)
 #     (c'est exactement ce que l'oracle « process » observe) ;
 #   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks ;
 #   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
@@ -177,8 +178,20 @@ cat > "$WORK/fake.c" <<'C'
 #include <stdlib.h>
 int main(int argc, char **argv) { sleep(argc > 1 ? atoi(argv[1]) : 5); return 0; }
 C
+# Le faux ScreenSaverEngine est visible de TOUT le Mac : un daemon réel en marche le voit aussi,
+# passe à OFF et le pousse vers HomeKit et Home Assistant. Il n'est donc lancé que sur demande
+# explicite (SELFTEST_FAUX_ECONOMISEUR=1) et seulement si aucune instance ne répond sur 9090.
 HAVE_FAKE=0
-if clang -o "$WORK/ScreenSaverEngine" "$WORK/fake.c" 2>/dev/null; then HAVE_FAKE=1; fi
+RAISON_SANS_FAUX="faux économiseur désactivé (SELFTEST_FAUX_ECONOMISEUR=1 pour l'activer, daemon réel arrêté)"
+if [[ "${SELFTEST_FAUX_ECONOMISEUR:-0}" == "1" ]]; then
+  if curl -fsS --max-time 1 "http://127.0.0.1:9090/health" >/dev/null 2>&1; then
+    RAISON_SANS_FAUX="un daemon réel répond sur 9090 : il verrait le faux économiseur et pousserait OFF"
+  elif clang -o "$WORK/ScreenSaverEngine" "$WORK/fake.c" 2>/dev/null; then
+    HAVE_FAKE=1
+  else
+    RAISON_SANS_FAUX="clang indisponible pour construire le faux économiseur"
+  fi
+fi
 
 # Faux récepteur de webhook : note le chemin de chaque requête reçue.
 cat > "$WORK/hbmock.py" <<'PY'
@@ -313,7 +326,7 @@ echo "== 2. Détection de l'économiseur d'écran (oracle process, machine réel
 if [[ $ECRAN_ETEINT -eq 1 ]]; then
   saute "détection de l'économiseur" "$RAISON_SAUT"
 elif [[ $HAVE_FAKE -ne 1 ]]; then
-  saute "détection de l'économiseur" "clang indisponible pour construire le faux économiseur"
+  saute "détection de l'économiseur" "$RAISON_SANS_FAUX"
 else
   "$WORK/ScreenSaverEngine" 8 &
   FAKE_PID=$!
@@ -351,7 +364,7 @@ echo "== 3. Commandes HomeKit confirmées par les faits"
 if [[ $ECRAN_ETEINT -eq 1 ]]; then
   saute "commandes /off puis /on confirmées" "$RAISON_SAUT"
 elif [[ $HAVE_FAKE -ne 1 ]]; then
-  saute "commandes /off puis /on confirmées" "clang indisponible pour construire le faux économiseur"
+  saute "commandes /off puis /on confirmées" "$RAISON_SANS_FAUX"
 else
   # Les commandes de l'instance sont inertes (/usr/bin/true) : c'est le script
   # qui joue l'effet, en lançant puis en arrêtant le faux économiseur.
@@ -401,7 +414,10 @@ echo "== 6. Webhooks (faux récepteur local)"
 if [[ $ECRAN_ETEINT -eq 1 ]]; then
   saute "pushs OFF puis ON reçus" "$RAISON_SAUT"
 else
-  if grep -q "accessoryId=selftest&state=false" "$WORK/hook.log"; then ok "push OFF reçu"; else bad "aucun push state=false reçu"; fi
+  # Le push OFF vient de la section 2 (faux économiseur) : sans lui, rien ne passe à OFF.
+  if [[ $HAVE_FAKE -ne 1 ]]; then
+    saute "push OFF reçu" "$RAISON_SANS_FAUX"
+  elif grep -q "accessoryId=selftest&state=false" "$WORK/hook.log"; then ok "push OFF reçu"; else bad "aucun push state=false reçu"; fi
   if grep -q "accessoryId=selftest&state=true" "$WORK/hook.log"; then ok "push ON reçu"; else bad "aucun push state=true reçu"; fi
 fi
 # Le battement de cœur est de 4 s : on lui laisse le temps de se manifester.
