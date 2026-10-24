@@ -46,6 +46,48 @@ final class SchedulerTests: XCTestCase {
         XCTAssertTrue(lancee)
     }
 
+    func test_planificateurDeTest_tacheQuiSeReplanifie_tourneAutantQueEnTempsReel() {
+        let horloge = TestClock(t: 0)
+        let planificateur = TestScheduler(clock: horloge)
+        var instants: [Double] = []
+        func boucle() {
+            instants.append(horloge.t)
+            // Plafond de sécurité : sans horloge qui avance, la boucle ne finirait jamais.
+            if instants.count < 50 { planificateur.schedule(after: 1) { boucle() } }
+        }
+        planificateur.schedule(after: 1) { boucle() }
+        planificateur.runDue(at: 5)
+        // Chaque exécution voit l'horloge à sa propre échéance, pas à `t`.
+        XCTAssertEqual(instants, [1, 2, 3, 4, 5])
+        XCTAssertEqual(horloge.t, 5)
+    }
+
+    func test_planificateurDeTest_sansHorloge_tacheQuiSeReplanifie_tourneCinqFois() {
+        let planificateur = TestScheduler()
+        var executions = 0
+        func boucle() {
+            executions += 1
+            planificateur.schedule(after: 1) { boucle() }
+        }
+        planificateur.schedule(after: 1) { boucle() }
+        planificateur.runDue(at: 5)
+        XCTAssertEqual(executions, 5)
+    }
+
+    func test_planificateurDeTest_tacheAnnuleeParUneTacheEchueAvantElle_neTournePas() {
+        let planificateur = TestScheduler()
+        var ordre: [String] = []
+        var victime: Cancellable?
+        planificateur.schedule(after: 1) {
+            ordre.append("a")
+            victime?.cancel()
+        }
+        victime = planificateur.schedule(after: 2) { ordre.append("b") }
+        planificateur.schedule(after: 3) { ordre.append("c") }
+        planificateur.runDue(at: 10)
+        XCTAssertEqual(ordre, ["a", "c"])
+    }
+
     func test_planificateurReel_executeSurLaFileDonnee() {
         let file = DispatchQueue(label: "essai.planificateur")
         let planificateur = DispatchScheduler(queue: file)

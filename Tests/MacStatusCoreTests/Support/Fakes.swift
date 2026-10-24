@@ -36,11 +36,22 @@ final class TestClock: Clock {
         t += s
         date = date.addingTimeInterval(s)
     }
+
+    /// Place l'instant monotone à `instant` (même en arrière) et décale l'heure
+    /// murale du même écart. Sert au `TestScheduler`, qui rejoue les échéances.
+    func positionner(_ instant: Double) {
+        advance(instant - t)
+    }
 }
 
 /// Planificateur sans file ni attente réelle : les tâches ne s'exécutent que
 /// lorsque le test appelle `runDue(at:)`. Les échéances se comptent à partir de
-/// l'horloge fournie, ou à défaut du dernier instant passé à `runDue(at:)`.
+/// l'horloge fournie, ou à défaut de l'instant courant du planificateur.
+///
+/// Pendant `runDue(at:)`, l'instant courant (celui du planificateur, et celui de
+/// l'horloge fournie) vaut l'échéance de la tâche en cours : une tâche qui se
+/// replanifie à +n s part donc de son échéance, comme en temps réel. À la fin,
+/// il vaut `t`.
 final class TestScheduler: Scheduler {
     private final class Tache: Cancellable {
         let echeance: Double
@@ -79,15 +90,22 @@ final class TestScheduler: Scheduler {
 
     /// Exécute, dans l'ordre d'échéance (puis de planification), les tâches échues
     /// à l'instant `t`, y compris celles qu'elles planifient et qui sont déjà échues.
+    /// Une tâche annulée par une tâche échue avant elle ne s'exécute pas.
     func runDue(at t: Double) {
-        maintenant = t
         while true {
             let echues = taches.filter { !$0.annulee && $0.echeance <= t }
             guard let prochaine = echues.min(by: { ($0.echeance, $0.ordre) < ($1.echeance, $1.ordre) }) else { break }
             taches.removeAll { $0 === prochaine }
+            positionner(prochaine.echeance)
             prochaine.travail()
         }
+        positionner(t)
         taches.removeAll { $0.annulee }
+    }
+
+    private func positionner(_ instant: Double) {
+        maintenant = instant
+        horloge?.positionner(instant)
     }
 }
 
