@@ -6,8 +6,9 @@
 #
 # La liste locale est garde.local.txt à la racine du dépôt (ignoré par git, une
 # valeur par ligne), ou le fichier désigné par GARDE_LISTE (utilisé par les tests).
-# Sans liste, l'installation échoue et ne règle rien : la garde refuserait de toute
-# façon toute poussée.
+# Sans liste, ou sans aucune ligne utilisable (vide, ou seulement des commentaires et des
+# blancs), l'installation échoue et ne règle rien : la garde refuserait de toute façon toute
+# poussée.
 
 set -eu
 
@@ -26,6 +27,15 @@ fi
 
 if [ ! -f "$liste" ] || [ ! -r "$liste" ]; then
   echo "installer-garde : liste locale introuvable : $origine" >&2
+  exit 1
+fi
+
+# Même nettoyage que la garde : sans retours chariot ni blancs aux extrémités, sans lignes
+# vides ni commentaires. Il doit rester au moins une ligne.
+if ! tr -d '\r' < "$liste" \
+  | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+  | grep -q -v -e '^$' -e '^#'; then
+  echo "installer-garde : liste locale sans ligne utilisable : elle est vide ou ne contient que des commentaires et des blancs (une valeur réelle par ligne)" >&2
   exit 1
 fi
 
