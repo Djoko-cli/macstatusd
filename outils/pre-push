@@ -1,0 +1,169 @@
+#!/bin/bash
+# Garde pre-push : refuse de publier un identifiant réel dans ce dépôt public.
+#
+# Git l'appelle avec <distant> <url> et, sur l'entrée standard, une ligne par
+# référence poussée : <ref locale> <sha local> <ref distante> <sha distant>.
+# Code 0 : tout est propre. Code 1 : au moins un problème, un message par
+# problème sur la sortie d'erreur. Le message nomme le commit (SHA court) et le
+# GENRE du motif trouvé, jamais sa valeur.
+#
+# Commits contrôlés pour chaque référence poussée :
+#   - branche existante : la plage <sha distant>..<sha local> ;
+#   - branche nouvelle (ou sha distant inconnu) : <sha local> --not --remotes=<distant>,
+#     c'est-à-dire tout ce que le distant visé n'a pas encore. Pour contrôler tout
+#     l'historique à la main, passer en premier argument un nom de distant sans
+#     références (par exemple « tout »).
+# La garde inspecte ce qui est poussé (commits), pas l'arbre de travail.
+#
+# Pour chaque commit :
+#   - l'e-mail de l'auteur et celui du committer doivent être des adresses noreply
+#     de GitHub ;
+#   - le message et les lignes ajoutées du diff (git show --unified=0 --text, donc
+#     binaires compris) ne doivent contenir ni une ligne de la liste locale
+#     (chaîne fixe, sans casse), ni une IPv4 privée (10.x, 172.16 à 31.x, 192.168.x ;
+#     les plages de documentation sont permises), ni un chemin personnel
+#     (« /Users/ » suivi d'une lettre), ni une adresse e-mail autre que
+#     *@users.noreply.github.com ou noreply@anthropic.com.
+#
+# La liste locale est garde.local.txt à la racine du dépôt (ignoré par git), ou le
+# fichier désigné par la variable GARDE_LISTE (utilisée par les tests). Une valeur
+# par ligne ; les lignes vides et celles qui commencent par # sont ignorées. Sans
+# liste lisible, la garde refuse (elle ne laisse jamais passer « par défaut »).
+
+set -u
+
+distant=${1:-}
+
+tmp=$(mktemp -d) || {
+  echo "garde pre-push : impossible de créer un dossier temporaire" >&2
+  exit 1
+}
+trap 'rm -rf "$tmp"' EXIT
+
+problemes=0
+
+signaler() { # $1 commit (SHA court), $2 description du problème
+  echo "garde pre-push : commit $1 : $2" >&2
+  problemes=$((problemes + 1))
+}
+
+# --- Liste locale -------------------------------------------------------------
+if [ -n "${GARDE_LISTE:-}" ]; then
+  liste=$GARDE_LISTE
+  origine_liste="GARDE_LISTE ne désigne pas un fichier lisible"
+else
+  racine=$(git rev-parse --show-toplevel 2> /dev/null) || racine=$PWD
+  liste=$racine/garde.local.txt
+  origine_liste="garde.local.txt est absent de la racine du dépôt (lance outils/installer-garde.sh)"
+fi
+if [ ! -f "$liste" ] || [ ! -r "$liste" ]; then
+  echo "garde pre-push : liste locale introuvable : $origine_liste" >&2
+  exit 1
+fi
+
+# Liste nettoyée : sans retours chariot ni blancs aux extrémités, sans lignes vides
+# ni commentaires (une ligne vide donnée à « grep -f » correspondrait à tout).
+tr -d '\r' < "$liste" \
+  | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+  | grep -v -e '^$' -e '^#' > "$tmp/liste" || true
+
+# --- Motifs -------------------------------------------------------------------
+re_ip_privee='(^|[^0-9])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3})'
+re_chemin='/Users/[A-Za-z]'
+re_email='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+'
+re_email_permis='(@users\.noreply\.github\.com|^noreply@anthropic\.com)$'
+re_noreply='^[^[:space:]@]+@users\.noreply\.github\.com$'
+
+# Contrôle un fichier de texte ($1) : $2 dit d'où il vient (« message » ou « diff »),
+# $3 est le SHA court du commit. Aucune valeur trouvée n'est jamais affichée.
+verifier_texte() {
+  local fichier=$1 lieu=$2 court=$3
+  if [ -s "$tmp/liste" ]; then
+    # Deux passes : octets (C) puis UTF-8, pour que « sans casse » vaille aussi pour les accents.
+    if LC_ALL=C grep -a -q -i -F -f "$tmp/liste" "$fichier" \
+      || LC_ALL=en_US.UTF-8 grep -a -q -i -F -f "$tmp/liste" "$fichier"; then
+      signaler "$court" "liste locale ($lieu)"
+    fi
+  fi
+  if LC_ALL=C grep -a -q -E "$re_ip_privee" "$fichier"; then
+    signaler "$court" "IPv4 privée ($lieu)"
+  fi
+  if LC_ALL=C grep -a -q -E "$re_chemin" "$fichier"; then
+    signaler "$court" "chemin personnel ($lieu)"
+  fi
+  # Une adresse se termine par un domaine à extension alphabétique : « mot-de-passe@192.0.2.10 »
+  # (identifiants dans une URL) n'en est pas une.
+  if LC_ALL=C grep -a -o -E "$re_email" "$fichier" \
+    | grep -E '\.[A-Za-z]{2,}$' \
+    | grep -v -i -E "$re_email_permis" \
+    | grep -q .; then
+    signaler "$court" "e-mail ($lieu)"
+  fi
+}
+
+est_noreply() { # $1 adresse
+  printf '%s\n' "$1" | grep -q -i -E "$re_noreply"
+}
+
+est_nul() { # $1 sha : vrai s'il ne contient que des zéros (ou est vide)
+  case $1 in
+    *[!0]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# --- Commits à contrôler ------------------------------------------------------
+cat > "$tmp/entree"
+: > "$tmp/commits"
+
+while read -r ref_locale sha_local ref_distante sha_distant <&3; do
+  # Suppression de branche : rien à publier.
+  if est_nul "$sha_local"; then
+    continue
+  fi
+  if est_nul "$sha_distant" || ! git cat-file -e "${sha_distant}^{commit}" 2> /dev/null; then
+    plage_ok=0
+    git rev-list "$sha_local" --not "--remotes=$distant" >> "$tmp/commits" 2> /dev/null && plage_ok=1
+  else
+    plage_ok=0
+    git rev-list "$sha_distant..$sha_local" >> "$tmp/commits" 2> /dev/null && plage_ok=1
+  fi
+  if [ "$plage_ok" -eq 0 ]; then
+    echo "garde pre-push : impossible de lister les commits de $ref_locale" >&2
+    problemes=$((problemes + 1))
+  fi
+done 3< "$tmp/entree"
+
+sort -u "$tmp/commits" > "$tmp/commits-uniques"
+
+while read -r commit <&4; do
+  court=$(git rev-parse --short "$commit" 2> /dev/null) || court=$commit
+
+  # Identité : auteur et committer doivent avoir une adresse noreply.
+  email_auteur=$(git show -s --format=%ae "$commit" 2> /dev/null)
+  email_committer=$(git show -s --format=%ce "$commit" 2> /dev/null)
+  est_noreply "$email_auteur" || signaler "$court" "e-mail d'auteur non noreply"
+  est_noreply "$email_committer" || signaler "$court" "e-mail de committer non noreply"
+
+  # Message du commit.
+  if git show -s --format=%B "$commit" > "$tmp/message" 2> /dev/null; then
+    verifier_texte "$tmp/message" "message" "$court"
+  else
+    signaler "$court" "message illisible"
+  fi
+
+  # Lignes ajoutées du diff. Le filtre « ^+ » garde aussi l'en-tête « +++ b/chemin » :
+  # un nom de fichier est publié lui aussi.
+  if git show --format= --unified=0 --text --no-ext-diff --no-textconv "$commit" > "$tmp/diff-complet" 2> /dev/null; then
+    LC_ALL=C grep -a '^+' "$tmp/diff-complet" > "$tmp/diff" || true
+    verifier_texte "$tmp/diff" "diff" "$court"
+  else
+    signaler "$court" "diff illisible"
+  fi
+done 4< "$tmp/commits-uniques"
+
+if [ "$problemes" -gt 0 ]; then
+  echo "garde pre-push : poussée refusée ($problemes problème(s)). Corrige ou réécris les commits indiqués ; --no-verify est interdit." >&2
+  exit 1
+fi
+exit 0

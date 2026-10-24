@@ -24,3 +24,7 @@ config.json
 
 # Dossier de travail local (audit détaillé, notes de session) : jamais commité.
 .superpowers/
+
+# Liste locale des valeurs réelles à ne jamais publier (lue par la garde pre-push,
+# outils/pre-push) : jamais commitée.
+garde.local.txt
