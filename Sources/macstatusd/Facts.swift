@@ -2,6 +2,7 @@ import Foundation
 import IOKit
 import CoreGraphics
 import Carbon
+import MacStatusCore
 
 /// Instantané des faits observables. Aucune interprétation ici : uniquement ce
 /// que le système rapporte, avec la provenance de chaque valeur pour /status.

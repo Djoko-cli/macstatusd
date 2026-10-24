@@ -1,7 +1,7 @@
 import Foundation
 
 /// Action déclenchée par HomeKit → OFF.
-enum OffAction: String {
+public enum OffAction: String {
     /// Démarre l'économiseur d'écran : le Mac reste éveillé et joignable (réversible).
     case screensaver
     /// Éteint l'écran : le Mac reste éveillé et joignable (réversible).
@@ -60,63 +60,65 @@ private struct JSONBag {
     }
 }
 
-struct Config {
+public struct Config {
     // --- Webhook Homebridge (compatibilité avec les prototypes 4.x) ---
-    var enabled = false
-    var webhookBaseURL = ""
-    var accessoryID = "mac"
-    var webhookTimeoutMS = 4000
-    var webhookRetries = 3
+    public var enabled = false
+    public var webhookBaseURL = ""
+    public var accessoryID = "mac"
+    public var webhookTimeoutMS = 4000
+    public var webhookRetries = 3
     /// Re‑publication périodique de l'état courant : protège contre un webhook
     /// perdu ou un Homebridge redémarré (0 = désactivé).
-    var heartbeatSeconds = 60
+    public var heartbeatSeconds = 60
 
     // --- Serveur HTTP ---
-    var port: UInt16 = 9090
+    public var port: UInt16 = 9090
     /// "" = toutes les interfaces, "127.0.0.1" = loopback uniquement.
-    var bindAddress = ""
+    public var bindAddress = ""
     /// Si non vide, exigé sur /sleep, /wake et /resync (?token=… ou en‑tête X-Auth-Token).
-    var authToken = ""
+    public var authToken = ""
 
     // --- Moteur d'état ---
-    var pollIntervalMS = 500
+    public var pollIntervalMS = 500
     /// Durée de stabilité exigée avant de publier un changement (anti‑flap).
-    var settleOnMS = 300
-    var settleOffMS = 800
+    public var settleOnMS = 300
+    public var settleOffMS = 800
     /// Si true : verrouillé + écran allumé mais sans champ d'authentification
     /// (secure input inactif) → OFF. Par défaut false : l'écran de verrouillage
     /// visible est une UI accessible, donc ON. Attention, `loginwindow` peut
     /// conserver la saisie sécurisée après un déverrouillage : signal peu fiable.
-    var requireAuthUIWhenLocked = false
+    public var requireAuthUIWhenLocked = false
 
     /// Une activité clavier/souris postérieure au démarrage de l'économiseur
     /// signifie que le panneau d'authentification le recouvre → ON.
-    var saverDismissOnInput = true
+    public var saverDismissOnInput = true
     /// Marge après le démarrage de l'économiseur avant de prendre l'activité en
     /// compte (absorbe l'activité qui a précédé la commande OFF).
-    var saverDismissGraceMS = 1500
+    public var saverDismissGraceMS = 1500
     /// Inactivité au‑delà de laquelle on considère que macOS est revenu à
     /// l'économiseur après un panneau resté sans réponse.
-    var saverRedisplayIdleSeconds = 90
+    public var saverRedisplayIdleSeconds = 90
 
     // --- Commandes ON/OFF ---
-    var offAction: OffAction = .screensaver
+    public var offAction: OffAction = .screensaver
     /// Si l'action OFF n'est pas confirmée par les faits observés, on escalade
     /// vers l'extinction de l'écran.
-    var offEscalateToDisplaySleep = true
+    public var offEscalateToDisplaySleep = true
     /// Délai laissé à une commande pour être confirmée par les faits observés.
-    var commandConfirmTimeoutMS = 12000
+    public var commandConfirmTimeoutMS = 12000
     /// Délai avant d'escalader une commande dont les faits ne montrent aucun effet.
-    var commandEscalateAfterMS = 2500
-    var stopScreensaverOnWake = true
+    public var commandEscalateAfterMS = 2500
+    public var stopScreensaverOnWake = true
     /// Surcharges facultatives : tableau argv, ou chaîne passée à /bin/sh -c.
-    var offCommand: [String] = []
-    var wakeCommand: [String] = []
+    public var offCommand: [String] = []
+    public var wakeCommand: [String] = []
 
     // --- Journalisation ---
-    var logLevel = "info"
+    public var logLevel = "info"
     /// "" = automatique (/opt/macstatusd/logs si root, ~/Library/Logs sinon).
-    var logFile = ""
+    public var logFile = ""
+
+    public init() {}
 
     static let knownKeys: Set<String> = [
         "enabled", "webhook_base_url", "accessory_id", "webhook_timeout_ms", "webhook_retries",
@@ -127,19 +129,32 @@ struct Config {
         "saver_dismiss_on_input", "saver_dismiss_grace_ms", "saver_redisplay_idle_seconds",
     ]
 
-    /// Charge la configuration. Un fichier absent ou illisible n'est pas fatal :
-    /// on repart des défauts (webhooks désactivés) et on le signale.
-    static func load(path: String) -> (config: Config, warnings: [String]) {
+    /// Charge la configuration depuis un fichier. Un fichier absent ou illisible n'est pas
+    /// fatal : on repart des défauts (webhooks désactivés) et on le signale, chemin compris.
+    public static func load(path: String) -> (config: Config, warnings: [String]) {
+        parse(data: FileManager.default.contents(atPath: path), source: path)
+    }
+
+    /// Interprète le contenu d'un fichier de configuration (`nil` = fichier absent).
+    /// Sans effet de bord : ne lit rien, ne journalise rien, renvoie les avertissements.
+    public static func parse(data: Data?) -> (config: Config, warnings: [String]) {
+        parse(data: data, source: nil)
+    }
+
+    /// Variante interne : `source` (chemin du fichier) est cité dans les avertissements
+    /// « introuvable » et « illisible » quand l'appelant le connaît.
+    static func parse(data: Data?, source: String?) -> (config: Config, warnings: [String]) {
         var warnings: [String] = []
         var cfg = Config()
+        let lieu = source.map { "config \($0)" } ?? "config"
 
-        guard let data = FileManager.default.contents(atPath: path) else {
-            warnings.append("config \(path) introuvable → défauts, webhooks désactivés")
+        guard let data else {
+            warnings.append("\(lieu) introuvable → défauts, webhooks désactivés")
             return (cfg, warnings)
         }
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let raw = object as? [String: Any] else {
-            warnings.append("config \(path) illisible (JSON invalide) → défauts, webhooks désactivés")
+            warnings.append("\(lieu) illisible (JSON invalide) → défauts, webhooks désactivés")
             return (cfg, warnings)
         }
 

@@ -1,5 +1,6 @@
 import Foundation
 import IOKit.pwr_mgt
+import MacStatusCore
 
 /// Primitives d'extinction / réveil.
 ///

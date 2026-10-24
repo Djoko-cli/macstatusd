@@ -1,33 +1,11 @@
 import Foundation
 import os
-
-enum LogLevel: Int, Comparable {
-    case error = 0, warn = 1, info = 2, debug = 3
-
-    static func < (lhs: LogLevel, rhs: LogLevel) -> Bool { lhs.rawValue < rhs.rawValue }
-
-    static func parse(_ s: String) -> LogLevel {
-        switch s.lowercased() {
-        case "error": return .error
-        case "warn", "warning": return .warn
-        case "debug", "trace": return .debug
-        default: return .info
-        }
-    }
-
-    var tag: String {
-        switch self {
-        case .error: return "ERROR"
-        case .warn: return "WARN "
-        case .info: return "INFO "
-        case .debug: return "DEBUG"
-        }
-    }
-}
+import MacStatusCore
 
 /// Journalisation sérialisée : fichier avec rotation + os_log + stdout.
 /// Aucune écriture ne peut faire tomber le daemon (échecs silencieux mais signalés une fois).
-final class Log {
+/// C'est le récepteur de `MacStatusCore` : `main.swift` le branche sur `CoreLog.sink`.
+final class Log: LogSink {
     static let shared = Log()
 
     private let queue = DispatchQueue(label: "macstatusd.log", qos: .utility)
@@ -134,8 +112,3 @@ final class Log {
         }
     }
 }
-
-func logError(_ m: String) { Log.shared.log(.error, m) }
-func logWarn(_ m: String) { Log.shared.log(.warn, m) }
-func logInfo(_ m: String) { Log.shared.log(.info, m) }
-func logDebug(_ m: String) { Log.shared.log(.debug, m) }

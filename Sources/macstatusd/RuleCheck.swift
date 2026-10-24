@@ -1,4 +1,5 @@
 import Foundation
+import MacStatusCore
 
 /// Vérification de la règle de décision de l'économiseur d'écran, sans
 /// économiseur réel et sans dépendre d'une frappe humaine : les sources sont

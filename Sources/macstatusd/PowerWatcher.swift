@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import IOKit
+import MacStatusCore
 
 // iokit_common_msg(x) == 0xE0000000 | x — les macros IOMessage.h ne sont pas
 // exposées à Swift, on les redéclare.

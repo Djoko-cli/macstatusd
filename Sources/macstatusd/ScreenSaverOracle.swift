@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import MacStatusCore
 
 /// Détermine si l'économiseur d'écran **occupe seul l'écran**.
 ///

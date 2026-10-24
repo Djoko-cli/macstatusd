@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import MacStatusCore
 
 /// Moteur d'état : transforme les faits observés en un état ON/OFF stable.
 ///

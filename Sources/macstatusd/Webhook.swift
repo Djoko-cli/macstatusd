@@ -1,4 +1,5 @@
 import Foundation
+import MacStatusCore
 
 /// Pousse l'état vers Homebridge (plugin http‑webhooks) avec réessais,
 /// fusion des changements et suivi de ce qui a réellement été confirmé.

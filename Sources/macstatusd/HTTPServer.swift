@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import MacStatusCore
 
 struct HTTPRequest {
     var method = "GET"

@@ -1,5 +1,9 @@
 import Foundation
 import CoreGraphics
+import MacStatusCore
+
+// Les messages de la bibliothèque passent par ce journal : à brancher avant tout le reste.
+CoreLog.sink = Log.shared
 
 // MARK: - Arguments
 
