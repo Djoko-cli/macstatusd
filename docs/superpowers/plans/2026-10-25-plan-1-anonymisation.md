@@ -133,29 +133,29 @@ Remplacements, liste fermée, appliqués aux arbres et aux messages :
 | « La version 5 » / « Version 5 » | « La 0.5 » / « Version 0.5 » | `README*.md` |
 | « La version 4 déduisait » / « Version 4 inferred » | « Les prototypes 4.x déduisaient » / « The 4.x prototypes inferred » | `README*.md` |
 
-- [ ] **Étape 1 : sauvegarder** l'état actuel : `git bundle create .superpowers/historique-origine.bundle --all`,
+- [x] **Étape 1 : sauvegarder** l'état actuel : `git bundle create .superpowers/historique-origine.bundle --all`,
   puis copier hors du dépôt les fichiers non commités (spec, plans, `outils/`, `.gitignore`) dans
   `.superpowers/en-cours/`.
-- [ ] **Étape 2 : écrire `.superpowers/ops/reecrire-historique.sh`.** Pour chaque commit d'origine, dans
+- [x] **Étape 2 : écrire `.superpowers/ops/reecrire-historique.sh`.** Pour chaque commit d'origine, dans
   l'ordre :
   - extraire son arbre dans un dossier temporaire ;
   - appliquer les remplacements (`sed` sur les fichiers texte, `git mv` du plist) ;
   - committer sur la branche orpheline `reecrit`, avec `GIT_AUTHOR_DATE` et `GIT_COMMITTER_DATE`
     d'origine, l'identité noreply et le message transformé.
-- [ ] **Étape 3 : lancer le script** (`bash .superpowers/ops/reecrire-historique.sh`), puis vérifier :
+- [x] **Étape 3 : lancer le script** (`bash .superpowers/ops/reecrire-historique.sh`), puis vérifier :
   - `git log --format='%an <%ae> | %cn <%ce>' reecrit` → deux lignes, toutes en noreply ;
   - pour chaque paire, l'arbre réécrit est identique à l'arbre d'origine transformé (le script le refait
     dans un dossier témoin et compare par `diff -r`) — attendu : aucune différence ;
   - `git grep -I -n -i -f garde.local.txt reecrit` → aucune ligne ; `git log --format=%B reecrit | grep -i -f garde.local.txt` → aucune ligne ;
   - `git grep -n 5.0.0 reecrit` → aucune ligne.
-- [ ] **Étape 4 : basculer `main`** sur la nouvelle racine : `git branch -f main reecrit`, `git checkout main`,
+- [x] **Étape 4 : basculer `main`** sur la nouvelle racine : `git branch -f main reecrit`, `git checkout main`,
   puis supprimer `reecrit`.
-- [ ] **Étape 5 : remettre le travail en cours** depuis `.superpowers/en-cours/`, et vérifier que
+- [x] **Étape 5 : remettre le travail en cours** (fait autrement : les commits du chantier sont rejoués par cherry-pick) depuis `.superpowers/en-cours/`, et vérifier que
   `git status` liste exactement la spec, les plans, `outils/` et `.gitignore`.
-- [ ] **Étape 6 : commiter** en deux commits : `outils/` et `.gitignore` (« Garde pre-push : identité
+- [x] **Étape 6 : commiter** (fait par le même cherry-pick) en deux commits : `outils/` et `.gitignore` (« Garde pre-push : identité
   noreply et valeurs réelles »), puis la spec et les plans (« Conception et plans des correctifs de
   l'audit »). Chaque message se termine par la ligne d'attribution du projet.
-- [ ] **Étape 7 : vérifier la garde sur tout le nouvel historique :**
+- [x] **Étape 7 : vérifier la garde sur tout le nouvel historique :**
   `printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" 0000000000000000000000000000000000000000 | bash outils/pre-push origin x`
   — attendu : code 0.
 
