@@ -83,10 +83,10 @@ C9, C12, C14 à C16). Détail des constats, local : `.superpowers/audit/audit-20
   - `let macstatusdVersion = "0.6.0-dev"`.
 - Produit (`Tests/.../Support/Fakes.swift`) : `final class CaptureLog: LogSink { var lines: [(LogLevel, String)] }`.
 
-- [ ] **Étape 1 : `Package.swift`** — trois cibles : `.target(name: "MacStatusCore", path: "Sources/MacStatusCore")`,
+- [x] **Étape 1 : `Package.swift`** — trois cibles : `.target(name: "MacStatusCore", path: "Sources/MacStatusCore")`,
   `.executableTarget(name: "macstatusd", dependencies: ["MacStatusCore"], path: "Sources/macstatusd")`,
   `.testTarget(name: "MacStatusCoreTests", dependencies: ["MacStatusCore"], path: "Tests/MacStatusCoreTests")`.
-- [ ] **Étape 2 : tests de caractérisation de la config**, écrits contre le comportement actuel :
+- [x] **Étape 2 : tests de caractérisation de la config**, écrits contre le comportement actuel :
 
 ```swift
 func test_fichierAbsent_donneLesDefautsEtUnAvertissement() {
@@ -112,12 +112,12 @@ func test_offActionInconnue_garderLeDefaut() {
 }
 ```
 
-- [ ] **Étape 3 : `swift test --filter ConfigTests`** — attendu : échec de compilation (`MacStatusCore`
+- [x] **Étape 3 : `swift test --filter ConfigTests`** — attendu : échec de compilation (`MacStatusCore`
   absent).
-- [ ] **Étape 4 : déplacer et rendre public** `Config.swift`, `Version.swift` et le niveau de journal ;
+- [x] **Étape 4 : déplacer et rendre public** `Config.swift`, `Version.swift` et le niveau de journal ;
   `Log.swift` (exécutable) implémente `LogSink` et `main.swift` fait `CoreLog.sink = Log.shared`.
-- [ ] **Étape 5 : `swift build && swift test --filter ConfigTests`** — attendu : build OK, 5 tests OK.
-- [ ] **Étape 6 : commit** « Socle : cible MacStatusCore, config et journal ».
+- [x] **Étape 5 : `swift build && swift test --filter ConfigTests`** — attendu : build OK, 5 tests OK.
+- [x] **Étape 6 : commit** « Socle : cible MacStatusCore, config et journal ».
 
 ### Tâche 2 : horloge, planificateur et oracle de l'économiseur
 
@@ -150,14 +150,14 @@ func test_offActionInconnue_garderLeDefaut() {
   - `final class TestScheduler: Scheduler { func runDue(at t: Double) }` : exécute les tâches échues, dans l'ordre ;
   - `final class FakeSignals: SystemSignals` : champs mutables, un par méthode.
 
-- [ ] **Étape 1 : porter les 17 vérifications de `RuleCheck.swift`** en tests XCTest, une par
+- [x] **Étape 1 : porter les 17 vérifications de `RuleCheck.swift`** en tests XCTest, une par
   vérification. Mêmes scénarios, mêmes valeurs : grâce 1,5 s, réaffichage à 90 s, PID 4242 puis 5000.
   Noms en `test_<scénario>` (exemple : `test_activiteApresDemarrage_ecarteEtDoncON`).
-- [ ] **Étape 2 : `swift test --filter ScreenSaverOracleTests`** — attendu : échec de compilation.
-- [ ] **Étape 3 : déplacer l'oracle et introduire les protocoles** ; `LiveSystemSignals` réunit
+- [x] **Étape 2 : `swift test --filter ScreenSaverOracleTests`** — attendu : échec de compilation.
+- [x] **Étape 3 : déplacer l'oracle et introduire les protocoles** ; `LiveSystemSignals` réunit
   `SignalReader`, `runningProcesses()` et la lecture des fenêtres.
-- [ ] **Étape 4 : `swift test --filter ScreenSaverOracleTests`** — attendu : 17 tests OK.
-- [ ] **Étape 5 : commit** « Socle : horloge, signaux injectés, oracle testé par XCTest ».
+- [x] **Étape 4 : `swift test --filter ScreenSaverOracleTests`** — attendu : 17 tests OK.
+- [x] **Étape 5 : commit** « Socle : horloge, signaux injectés, oracle testé par XCTest ».
 
 ### Tâche 3 : moteur d'état extrait (`EngineCore`) et son exécuteur
 

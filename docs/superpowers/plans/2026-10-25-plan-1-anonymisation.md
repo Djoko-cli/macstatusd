@@ -69,7 +69,7 @@ nouvelle), la garde contrôle :
   - le motif `/Users/[A-Za-z]` ;
   - toute adresse e-mail qui n'est pas en `users.noreply.github.com` ou `noreply@anthropic.com`.
 
-- [ ] **Étape 1 : écrire `outils/tests/test-garde.sh`**
+- [x] **Étape 1 : écrire `outils/tests/test-garde.sh`**
 
   Le script crée un dépôt nu « distant » et un clone dans un dossier temporaire (`mktemp -d`), installe
   la garde dans le clone avec une liste d'essai contenant `Prenom-Essai`, puis enchaîne les cas
@@ -96,17 +96,17 @@ nouvelle), la garde contrôle :
   de publier le script lui-même. Le cas `propre-script` le vérifie : la garde, appliquée au commit qui
   ajoute `outils/`, accepte.
 
-- [ ] **Étape 2 : lancer `bash outils/tests/test-garde.sh`** — attendu : échec (la garde n'existe pas).
-- [ ] **Étape 3 : écrire `outils/pre-push` et `outils/installer-garde.sh`** selon l'interface ci-dessus.
-- [ ] **Étape 4 : relancer `bash outils/tests/test-garde.sh`** — attendu : 14 cas `OK`, code 0.
-- [ ] **Étape 5 : écrire `garde.local.txt`** à la racine (valeurs réelles : prénom, nom, e-mail personnel,
+- [x] **Étape 2 : lancer `bash outils/tests/test-garde.sh`** — attendu : échec (la garde n'existe pas).
+- [x] **Étape 3 : écrire `outils/pre-push` et `outils/installer-garde.sh`** selon l'interface ci-dessus.
+- [x] **Étape 4 : relancer `bash outils/tests/test-garde.sh`** — attendu : 14 cas `OK`, code 0.
+- [x] **Étape 5 : écrire `garde.local.txt`** à la racine (valeurs réelles : prénom, nom, e-mail personnel,
   IP réelles connues du LAN, noms d'hôte réels), droits 600, sans afficher son contenu. Ajouter
   `garde.local.txt` au `.gitignore`. Lancer `bash outils/installer-garde.sh` — attendu :
   `core.hooksPath = outils`.
-- [ ] **Étape 6 : vérifier que la garde refuse l'historique actuel**, qui contient de vraies fuites :
+- [x] **Étape 6 : vérifier que la garde refuse l'historique actuel**, qui contient de vraies fuites :
   `printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" 0000000000000000000000000000000000000000 | bash outils/pre-push origin x`
   — attendu : code 1, des messages sur les deux commits publiés, aucune valeur affichée.
-- [ ] **Étape 7 : commit** — les fichiers `outils/` et `.gitignore` sont prêts, mais **on ne commite rien
+- [x] **Étape 7 : commit** — les fichiers `outils/` et `.gitignore` sont prêts, mais **on ne commite rien
   ici** : la tâche 2 réécrit l'historique, et ce travail sera commité par-dessus la nouvelle racine
   (tâche 2, étape 6).
 
