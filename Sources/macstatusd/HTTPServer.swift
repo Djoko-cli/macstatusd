@@ -163,7 +163,7 @@ final class HTTPServer {
                     switch parsed {
                     case .success(let request):
                         method = request.method
-                        logDebug("HTTP \(request.method) \(escapeForLog(request.path)) depuis \(peer)")
+                        logDebug("HTTP \(escapeForLog(request.method, limit: 16)) \(escapeForLog(request.path)) depuis \(peer)")
                     case .failure(let error):
                         // Ligne de requête reçue, échappée : jamais de caractère de contrôle au journal.
                         var firstLine = head.prefix { $0 != 0x0A }

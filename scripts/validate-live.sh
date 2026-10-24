@@ -66,7 +66,13 @@ horodatage() { python3 -c 'import datetime; print(datetime.datetime.now().strfti
 # le retour au bureau.
 window_start() {
   MARK=$(wc -l < "$REC" | tr -d ' ')
-  LOGSTART="$(horodatage)"
+  LOGSTART="$(horodatage)" || LOGSTART=""
+  # Un début vide ferait passer toutes les lignes du journal dans le filtre : arrêt net plutôt
+  # qu'une validation qui réussit sans rien prouver.
+  if [[ ! "$LOGSTART" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$ ]]; then
+    echo "!! horodatage() a échoué ou renvoyé « $LOGSTART » : validation interrompue." >&2
+    exit 1
+  fi
 }
 # Ne cherche que dans ce que le daemon a journalisé pendant l'étape. On filtre par
 # horodatage (et non par numéro de ligne) et on lit aussi `<journal>.1` : si le

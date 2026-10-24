@@ -135,9 +135,37 @@ configuration and logs).
 | `GET /wake` (`/on`) | HomeKit ON command |
 | `GET /resync` | republishes the current state to Homebridge |
 
-If `auth_token` is set, `/sleep`, `/wake` and `/resync` require `?token=…` or
-the `X-Auth-Token` header. `/state`, `/status` and `/health` stay public
-(Homebridge reads `/state` without a token).
+### Access control
+
+`/health` is always served, without any check. Every other route goes through
+these checks, in this order (the first refusal answers):
+
+1. **`Host` header.** Accepted: an IPv4 or IPv6 literal, `localhost`, the Mac's
+   own `.local` names (Bonjour name and host name) and the names listed in
+   `allowed_hosts`. Any other name gets `403` (protection against DNS
+   rebinding). A request without `Host` (HTTP/1.0) passes; an empty or
+   malformed `Host` is refused.
+2. **Browser requests.** An `Origin` header, or a `Sec-Fetch-Site` other than
+   `none`, gets `403`: a web page open on the Mac cannot drive the daemon, with
+   or without the token.
+3. **Method.** Commands accept `GET` only; `/state` and `/status` accept `GET`
+   and `HEAD`. Anything else gets `405`.
+4. **Token.** Sent in the `X-Auth-Token` header or as
+   `Authorization: Bearer <token>`. `?token=` in the URL is refused unless
+   `allow_query_token` is `true` (a token in a URL ends up in logs and
+   history).
+   - With `auth_token` set: a command needs the right token (`401`
+     otherwise). `/state` and `/status` are free from the loopback interface
+     and need the token from any other machine.
+   - Without `auth_token`: only loopback clients are served; every other
+     client gets `403`, for commands and reads alike.
+
+Unknown paths get `404`, whoever asks.
+
+```bash
+curl -H "X-Auth-Token: jeton-essai-0123456789abcdef" http://192.0.2.10:9090/wake
+curl -H "Authorization: Bearer jeton-essai-0123456789abcdef" http://192.0.2.10:9090/state
+```
 
 ## Configuration
 
@@ -151,7 +179,9 @@ falls back to its default without preventing startup.
 | `accessory_id` | `"mac"` | `accessoryId` sent to the plugin |
 | `port` | `9090` | HTTP port |
 | `bind_address` | `""` | `""` = all interfaces, `127.0.0.1` = loopback |
-| `auth_token` | `""` | protects commands |
+| `auth_token` | `""` | token for commands and for reads from another machine; empty = only loopback clients are served |
+| `allow_query_token` | `false` | also accepts the token as `?token=…` in the URL |
+| `allowed_hosts` | `[]` | extra names accepted in the `Host` header (list of strings) |
 | `off_action` | `"screensaver"` | `screensaver`, `display_sleep` or `system_sleep` |
 | `off_escalate_to_display_sleep` | `true` | if the OFF action has no observed effect |
 | `stop_screensaver_on_wake` | `true` | terminates the screen saver on ON |
@@ -212,6 +242,10 @@ Plugin `homebridge-http-webhooks`, switch accessory:
 `webhook_base_url` in `config.json` must point to that `webhook_port`, and
 `accessory_id` must match `id`.
 
+Commands sent from another machine require `auth_token` to be set and sent in a
+header (see [Access control](#access-control)): without a token, only loopback
+clients are served.
+
 ## Diagnostics
 
 ```bash
@@ -231,7 +265,7 @@ launchctl print gui/$UID/com.djoko.macstatusd
 
 ```bash
 swift test                               # unit tests of MacStatusCore (rules, engine, webhook, HTTP)
-./scripts/selftest.sh                    # runs swift test, then 29 checks on isolated test instances
+./scripts/selftest.sh                    # runs swift test, then checks on isolated test instances
 ./scripts/validate-live.sh               # guided validation through the real states
 # Diagnostic probe: triggers a real OFF (screen saver) at t≈4 s
 swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 60
@@ -240,14 +274,31 @@ swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 
 `selftest.sh` runs `swift test` first, then starts test instances that are
 sealed off from the real daemon: they listen on 127.0.0.1 on ports 19000-19999,
 their commands are inert (`/usr/bin/true`) and the webhooks go to a local fake
-receiver. If the display is off, the session locked or the Mac asleep, the
-sections that need a lit display are marked SKIPPED instead of failing
-(`SELFTEST_FORCER_ECRAN_ETEINT=1` forces that branch without turning anything
-off). It simulates the screen saver with a fake binary named
-`ScreenSaverEngine` (exactly what the "process" oracle observes) and a local
-HTTP server playing Homebridge; it also checks the honest fallback of a command
-with no effect, authentication, HTTP errors, webhook retries and server recovery
-when the port is already taken.
+receiver. It checks the honest fallback of a command with no effect,
+authentication and access control, HTTP errors, webhook retries and server
+recovery when the port is already taken.
+
+By default it is non-intrusive and **does not start any fake screen saver**: a
+fake `ScreenSaverEngine` process is visible to the whole Mac, so a running real
+daemon would see it too, switch to OFF and push that to HomeKit and Home
+Assistant. The sections that need it (screen saver detection, HomeKit commands
+confirmed by the facts, the OFF push) are marked SKIPPED. Environment variables:
+
+- `SELFTEST_FAUX_ECONOMISEUR=1`: plays the fake screen saver, a binary named
+  `ScreenSaverEngine` (exactly what the "process" oracle observes). Only with
+  the real daemon **stopped**: the script refuses if anything answers on port
+  9090.
+- `SELFTEST_IGNORER_VERROU=1`: a locked session no longer makes the sections
+  that need a lit display be skipped (for example from a remote session).
+- `SELFTEST_FORCER_ECRAN_ETEINT=1`: forces the "display off" branch without
+  turning anything off.
+- `SWIFT_SCRATCH=<folder>`: Swift build folder, kept after the run (otherwise a
+  temporary folder, deleted on exit). It must stay outside `~/Documents`: the
+  `.xctest` signature fails under iCloud.
+
+If the display is off, the session locked (unless `SELFTEST_IGNORER_VERROU=1`)
+or the Mac asleep, the sections that need a lit display are marked SKIPPED
+instead of failing.
 
 `validate-live.sh` (run it without `sudo`) asks you to perform the real actions
 (lock, start the screen saver, turn the display off, sleep) and automatically

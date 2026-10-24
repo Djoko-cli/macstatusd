@@ -44,12 +44,12 @@ public final class Router {
     }
 
     public func handle(_ request: HTTPRequest) -> HTTPResponse {
-        let routeClass = RouteClass.classify(path: request.path)
-        guard routeClass != .unknown else { return .text("not found", status: 404) }
+        guard let route = Route(rawValue: request.path) else { return .text("not found", status: 404) }
+        let routeClass = route.routeClass
 
         if case .deny(let status, let reason) = policy.decide(request) {
             // Jamais le jeton ni les en-têtes : seulement le motif, constante du code.
-            logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(escapeForLog(request.method)) "
+            logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(escapeForLog(request.method, limit: 16)) "
                     + "\(escapeForLog(request.path)) depuis \(escapeForLog(request.peer))")
             return Self.denial(status: status, routeClass: routeClass)
         }
@@ -58,30 +58,27 @@ public final class Router {
             return .methodNotAllowed(allow: Self.allow(for: routeClass))
         }
 
-        switch request.path {
-        case "/state":
+        switch route {
+        case .state:
             return .text(engine.currentState ? "1" : "0")
 
-        case "/status":
+        case .status:
             return .json(engine.statusSnapshot())
 
-        case "/health":
+        case .health:
             return .text("OK")
 
-        case "/sleep", "/off":
+        case .sleep, .off:
             engine.requestOff(source: request.peer)
             return .text("OK")
 
-        case "/wake", "/on":
+        case .wake, .on:
             engine.requestOn(source: request.peer)
             return .text("OK")
 
-        case "/resync":
+        case .resync:
             engine.resync()
             return .text("OK")
-
-        default:
-            return .text("not found", status: 404)
         }
     }
 

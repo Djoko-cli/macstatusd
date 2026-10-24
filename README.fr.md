@@ -134,9 +134,37 @@ aussi la configuration et les journaux).
 | `GET /wake` (`/on`) | commande HomeKit ON |
 | `GET /resync` | republie l'état courant vers Homebridge |
 
-Si `auth_token` est renseigné, `/sleep`, `/wake` et `/resync` exigent
-`?token=…` ou l'en‑tête `X-Auth-Token`. `/state`, `/status` et `/health` restent
-publics (Homebridge lit `/state` sans jeton).
+### Contrôle d'accès
+
+`/health` est toujours servi, sans aucun contrôle. Toute autre route passe par
+ces contrôles, dans cet ordre (le premier refus répond) :
+
+1. **En-tête `Host`.** Acceptés : un littéral IPv4 ou IPv6, `localhost`, les
+   noms `.local` du Mac lui-même (nom Bonjour et nom d'hôte) et les noms de
+   `allowed_hosts`. Tout autre nom reçoit `403` (protection contre le DNS
+   rebinding). Une requête sans `Host` (HTTP/1.0) passe ; un `Host` vide ou mal
+   formé est refusé.
+2. **Requêtes de navigateur.** Un en-tête `Origin`, ou un `Sec-Fetch-Site`
+   autre que `none`, reçoit `403` : une page web ouverte sur le Mac ne peut pas
+   piloter le daemon, avec ou sans jeton.
+3. **Méthode.** Les commandes n'acceptent que `GET` ; `/state` et `/status`
+   acceptent `GET` et `HEAD`. Tout autre cas reçoit `405`.
+4. **Jeton.** Envoyé dans l'en-tête `X-Auth-Token` ou sous la forme
+   `Authorization: Bearer <jeton>`. Le `?token=` dans l'URL est refusé, sauf si
+   `allow_query_token` vaut `true` (un jeton dans une URL finit dans les
+   journaux et l'historique).
+   - Avec `auth_token` : une commande exige le bon jeton (`401` sinon).
+     `/state` et `/status` sont libres depuis la boucle locale et exigent le
+     jeton depuis toute autre machine.
+   - Sans `auth_token` : seuls les clients en boucle locale sont servis ; tout
+     autre client reçoit `403`, pour les commandes comme pour les lectures.
+
+Un chemin inconnu reçoit `404`, quel que soit le demandeur.
+
+```bash
+curl -H "X-Auth-Token: jeton-essai-0123456789abcdef" http://192.0.2.10:9090/wake
+curl -H "Authorization: Bearer jeton-essai-0123456789abcdef" http://192.0.2.10:9090/state
+```
 
 ## Configuration
 
@@ -150,7 +178,9 @@ absente ou invalide retombe sur son défaut sans empêcher le démarrage.
 | `accessory_id` | `"mac"` | `accessoryId` envoyé au plugin |
 | `port` | `9090` | port HTTP |
 | `bind_address` | `""` | `""` = toutes interfaces, `127.0.0.1` = loopback |
-| `auth_token` | `""` | protège les commandes |
+| `auth_token` | `""` | jeton des commandes et des lectures depuis une autre machine ; vide = seuls les clients en boucle locale sont servis |
+| `allow_query_token` | `false` | accepte aussi le jeton sous la forme `?token=…` dans l'URL |
+| `allowed_hosts` | `[]` | noms supplémentaires acceptés dans l'en-tête `Host` (liste de chaînes) |
 | `off_action` | `"screensaver"` | `screensaver`, `display_sleep` ou `system_sleep` |
 | `off_escalate_to_display_sleep` | `true` | si l'action OFF reste sans effet observé |
 | `stop_screensaver_on_wake` | `true` | termine l'économiseur lors d'un ON |
@@ -211,6 +241,10 @@ Plugin `homebridge-http-webhooks`, accessoire de type switch :
 `webhook_base_url` dans `config.json` doit pointer vers ce `webhook_port`, et
 `accessory_id` correspondre à `id`.
 
+Les commandes envoyées depuis une autre machine exigent un `auth_token` renseigné et
+envoyé dans un en-tête (voir [Contrôle d'accès](#contrôle-daccès)) : sans jeton,
+seuls les clients en boucle locale sont servis.
+
 ## Diagnostic
 
 ```bash
@@ -230,7 +264,7 @@ launchctl print gui/$UID/com.djoko.macstatusd
 
 ```bash
 swift test                               # tests unitaires de MacStatusCore (règles, moteur, webhook, HTTP)
-./scripts/selftest.sh                    # lance swift test, puis 29 vérifications sur des instances d'essai isolées
+./scripts/selftest.sh                    # lance swift test, puis des vérifications sur des instances d'essai isolées
 ./scripts/validate-live.sh               # validation guidée en passant par les vrais états
 # Sonde de diagnostic : déclenche un vrai OFF (économiseur) à t≈4 s
 swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 60
@@ -239,14 +273,33 @@ swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 
 `selftest.sh` lance d'abord `swift test`, puis démarre des instances d'essai
 isolées du vrai daemon : elles écoutent sur 127.0.0.1, sur les ports 19000 à
 19999, leurs commandes sont inertes (`/usr/bin/true`) et les webhooks vont vers
-un faux récepteur local. Si l'écran est éteint, la session verrouillée ou le Mac
-en veille, les sections qui exigent un écran allumé sont marquées SAUTÉ au lieu
-d'échouer (`SELFTEST_FORCER_ECRAN_ETEINT=1` force cette branche sans rien
-éteindre). Il simule l'économiseur d'écran avec un faux binaire nommé
-`ScreenSaverEngine` (exactement ce que l'oracle « process » observe) et un
-serveur HTTP local jouant Homebridge ; il vérifie aussi le retour honnête d'une
-commande sans effet, l'authentification, les erreurs HTTP, les réessais de
-webhook et la reprise du serveur quand le port est occupé.
+un faux récepteur local. Il vérifie le retour honnête d'une commande sans
+effet, l'authentification et le contrôle d'accès, les erreurs HTTP, les réessais
+de webhook et la reprise du serveur quand le port est occupé.
+
+Par défaut il est non intrusif et **ne lance aucun faux économiseur** : un faux
+processus `ScreenSaverEngine` est visible de tout le Mac, donc un vrai daemon en
+marche le verrait aussi, passerait à OFF et le pousserait vers HomeKit et Home
+Assistant. Les sections qui en ont besoin (détection de l'économiseur, commandes
+HomeKit confirmées par les faits, push OFF) sont marquées SAUTÉ. Variables
+d'environnement :
+
+- `SELFTEST_FAUX_ECONOMISEUR=1` : joue le faux économiseur, un binaire nommé
+  `ScreenSaverEngine` (exactement ce que l'oracle « process » observe). Seulement
+  avec le vrai daemon **arrêté** : le script refuse si quelque chose répond sur
+  le port 9090.
+- `SELFTEST_IGNORER_VERROU=1` : une session verrouillée ne fait plus sauter les
+  sections qui exigent un écran allumé (par exemple depuis une session
+  distante).
+- `SELFTEST_FORCER_ECRAN_ETEINT=1` : force la branche « écran éteint » sans rien
+  éteindre.
+- `SWIFT_SCRATCH=<dossier>` : dossier de compilation de Swift, conservé après
+  l'exécution (sinon un dossier temporaire, supprimé à la sortie). Il doit
+  rester hors de `~/Documents` : la signature du `.xctest` échoue sous iCloud.
+
+Si l'écran est éteint, la session verrouillée (sauf `SELFTEST_IGNORER_VERROU=1`)
+ou le Mac en veille, les sections qui exigent un écran allumé sont marquées
+SAUTÉ au lieu d'échouer.
 
 `validate-live.sh` (à lancer sans `sudo`) demande d'effectuer les vraies actions (verrouiller, lancer
 l'économiseur, éteindre l'écran, mettre en veille) et vérifie automatiquement ce

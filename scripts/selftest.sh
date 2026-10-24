@@ -5,8 +5,8 @@
 # Principe :
 #   - `swift test` joue d'abord les tests unitaires de MacStatusCore ;
 #   - un faux binaire nommé ScreenSaverEngine simule l'économiseur d'écran, sur demande seulement
-#     (SELFTEST_FAUX_ECONOMISEUR=1, daemon réel arrêté : sinon il le verrait aussi)
-#     (c'est exactement ce que l'oracle « process » observe) ;
+#     (SELFTEST_FAUX_ECONOMISEUR=1, daemon réel arrêté : sinon il le verrait aussi ; c'est
+#     exactement ce que l'oracle « process » observe) ;
 #   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks ;
 #   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
 #     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
@@ -18,8 +18,9 @@
 #
 #   SELFTEST_FORCER_ECRAN_ETEINT=1 ./scripts/selftest.sh
 #
-# Une session verrouillée mais écran allumé suffit aux sections concernées ; si
-# tu veux les jouer malgré le verrou (par exemple depuis une session distante) :
+# Une session verrouillée fait elle aussi SAUTER ces sections par défaut. Seul
+# SELFTEST_IGNORER_VERROU=1 les rend jouables malgré le verrou (par exemple depuis
+# une session distante) :
 #
 #   SELFTEST_IGNORER_VERROU=1 ./scripts/selftest.sh
 #
@@ -383,8 +384,14 @@ else
   check "état toujours OFF" "0" "$(state $PORT_A)"
   curl -fsS --max-time 2 "http://127.0.0.1:$PORT_A/on" >/dev/null
   arreter_pid "$FAKE_PID"; FAKE_PID=""
-  if await_state $PORT_A 1 5; then ok "ON confirmé après /on"; else bad "ON non confirmé après /on"; fi
-  check "commande ON confirmée" "" "$(field $PORT_A pending_command.source)"
+  # /on rend l'état optimiste : /state passe à 1 aussitôt et ne prouve rien. La confirmation
+  # vient des faits (verdict à 1) et de la fin de la commande en attente, attendues l'une et l'autre.
+  if await_field $PORT_A facts_verdict 1 5; then ok "ON confirmé par les faits après /on"; else bad "ON non confirmé par les faits après /on"; fi
+  if await_field $PORT_A pending_command.source "" 5; then
+    ok "commande ON confirmée (plus de commande en attente)"
+  else
+    bad "commande ON non confirmée par les faits"
+  fi
 fi
 
 echo
@@ -440,6 +447,9 @@ DESIRE="$(field $PORT_A webhook.desired)"
 CONFIRME="$(field $PORT_A webhook.confirmed)"
 if [[ "$DESIRE" == "__ERREUR__" || "$CONFIRME" == "__ERREUR__" ]]; then
   bad "webhook synchronisé : /status illisible"
+elif [[ -z "$DESIRE" ]]; then
+  # Une clé absente rendrait deux chaînes vides égales : ce ne serait pas une synchronisation.
+  bad "webhook synchronisé : état voulu (webhook.desired) absent de /status"
 else
   check "webhook synchronisé (voulu == confirmé)" "$DESIRE" "$CONFIRME"
 fi

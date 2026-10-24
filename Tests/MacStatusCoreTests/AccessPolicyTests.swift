@@ -257,6 +257,16 @@ final class AccessPolicyTests: XCTestCase {
         }
     }
 
+    func test_tableDesRoutes_estLaSeuleSourceDesChemins() {
+        // Les huit chemins servis, ni plus ni moins : ajouter une route change ce test à dessein.
+        XCTAssertEqual(Set(Route.allCases.map { $0.rawValue }),
+                       ["/health", "/state", "/status", "/sleep", "/off", "/wake", "/on", "/resync"])
+        for route in Route.allCases {
+            XCTAssertEqual(RouteClass.classify(path: route.rawValue), route.routeClass, route.rawValue)
+            XCTAssertNotEqual(route.routeClass, .unknown, route.rawValue)
+        }
+    }
+
     func test_cheminInconnu_refuseParPrudence() {
         // Le routeur répond 404 sans appeler `decide` ; appelée quand même, elle ferme.
         XCTAssertEqual(politique().decide(requete("/inconnu", headers: ["x-auth-token": jeton], local: true)),

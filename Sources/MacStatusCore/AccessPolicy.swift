@@ -13,11 +13,28 @@ public enum RouteClass: Equatable {
 
     /// Classe d'un chemin brut, comparé tel quel (sensible à la casse, sans `/` final).
     public static func classify(path: String) -> RouteClass {
-        switch path {
-        case "/health": return .health
-        case "/state", "/status": return .read
-        case "/sleep", "/off", "/wake", "/on", "/resync": return .command
-        default: return .unknown
+        Route(rawValue: path)?.routeClass ?? .unknown
+    }
+}
+
+/// Table unique des routes servies : le chemin (valeur brute) et sa classe. Le routeur et la
+/// politique d'accès en dérivent tous deux ; ajouter une route, c'est ajouter un cas ici, et le
+/// compilateur désigne alors le routeur à compléter.
+public enum Route: String, CaseIterable {
+    case health = "/health"
+    case state = "/state"
+    case status = "/status"
+    case sleep = "/sleep"
+    case off = "/off"
+    case wake = "/wake"
+    case on = "/on"
+    case resync = "/resync"
+
+    public var routeClass: RouteClass {
+        switch self {
+        case .health: return .health
+        case .state, .status: return .read
+        case .sleep, .off, .wake, .on, .resync: return .command
         }
     }
 }

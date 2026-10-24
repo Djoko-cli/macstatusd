@@ -44,18 +44,31 @@ public func logDebug(_ m: String) { CoreLog.sink?.log(.debug, m) }
 
 /// Rend une donnée reçue (chemin, ligne de requête…) sûre pour le journal.
 ///
-/// Les caractères de contrôle C0 sauf la tabulation, `U+007F`–`U+009F`, `U+2028` et
-/// `U+2029` deviennent `\u{..}` (hexadécimal en majuscules, au moins deux chiffres) :
-/// une donnée ne peut ni couper une ligne du journal, ni y glisser une séquence de
-/// terminal. Le résultat garde au plus `limit` caractères, suivis de `…` s'il a fallu
-/// couper ; un échappement n'est jamais coupé en deux.
+/// Deviennent `\u{..}` (hexadécimal en majuscules, au moins deux chiffres) :
+/// - les caractères de contrôle C0 sauf la tabulation, `U+007F`–`U+009F`, `U+2028` et `U+2029` ;
+/// - les marques bidirectionnelles `U+202A`–`U+202E` et `U+2066`–`U+2069`, qui réordonnent
+///   l'affichage d'une ligne dans un terminal ou un éditeur.
+///
+/// L'antislash littéral est doublé (`\` devient `\\`) : un `\u{0A}` reçu tel quel ne peut donc pas
+/// passer pour l'échappement d'une vraie fin de ligne. Une donnée ne peut ni couper une ligne du
+/// journal, ni y glisser une séquence de terminal, ni tromper le lecteur sur ce qui a été reçu.
+/// Le résultat garde au plus `limit` caractères, suivis de `…` s'il a fallu couper ; un
+/// échappement n'est jamais coupé en deux.
 public func escapeForLog(_ s: String, limit: Int = 200) -> String {
     var out = String.UnicodeScalarView()
     var count = 0
     for scalar in s.unicodeScalars {
         let v = scalar.value
         let escaped = (v < 0x20 && v != 0x09) || (0x7F...0x9F).contains(v) || v == 0x2028 || v == 0x2029
-        let piece = escaped ? "\\u{\(String(format: "%02X", v))}".unicodeScalars : String(scalar).unicodeScalars
+            || (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v)
+        let piece: String.UnicodeScalarView
+        if escaped {
+            piece = "\\u{\(String(format: "%02X", v))}".unicodeScalars
+        } else if v == 0x5C {
+            piece = "\\\\".unicodeScalars
+        } else {
+            piece = String(scalar).unicodeScalars
+        }
         guard count + piece.count <= limit else {
             out.append("…")
             return String(out)

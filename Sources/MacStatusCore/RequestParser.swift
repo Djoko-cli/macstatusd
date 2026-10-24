@@ -32,6 +32,11 @@ public enum ParseError: Error, Equatable {
 ///   uniques ;
 /// - le chemin reste brut (non décodé), mais ses `%` doivent être bien formés.
 ///
+/// Écarts voulus, plus stricts que la RFC (qui admet ou conseille d'ignorer ces cas) :
+/// - la forme absolue de la cible (`http://hôte/…`) est refusée, seule la forme d'origine passe ;
+/// - une ligne vide avant la ligne de requête est refusée, au lieu d'être ignorée ;
+/// - un `\n` seul comme fin de ligne est refusé, seul `\r\n` sépare les lignes.
+///
 /// L'en-tête peut se terminer ou non par `\r\n\r\n` ; ce qui suit cette fin est ignoré.
 /// Aucune limite de taille ici : l'adaptateur borne déjà l'en-tête.
 /// `peer` et `peerIsLoopback` sont à renseigner par l'appelant.

@@ -40,9 +40,39 @@ final class LoggingTests: XCTestCase {
 
     func test_escapeForLog_tabulationEtTexteOrdinaireGardes() {
         XCTAssertEqual(escapeForLog("a\tb"), "a\tb")
-        XCTAssertEqual(escapeForLog("Pièce 1 → /wake?action=WAKE \\u{1B}"), "Pièce 1 → /wake?action=WAKE \\u{1B}")
+        XCTAssertEqual(escapeForLog("Pièce 1 → /wake?action=WAKE"), "Pièce 1 → /wake?action=WAKE")
         XCTAssertEqual(escapeForLog("\u{A0}é"), "\u{A0}é")
         XCTAssertEqual(escapeForLog(""), "")
+    }
+
+    func test_escapeForLog_antislashDouble_uneCibleLitteraleNImitePasUnEchappement() {
+        // Un antislash littéral est doublé : `\u{0A}` au journal est une vraie fin de ligne,
+        // `\\u{0A}` le texte « \u{0A} » reçu tel quel.
+        XCTAssertEqual(escapeForLog("\\"), "\\\\")
+        XCTAssertEqual(escapeForLog("a\\u{0A}b"), "a\\\\u{0A}b")
+        XCTAssertEqual(escapeForLog("\n"), "\\u{0A}")
+        XCTAssertNotEqual(escapeForLog("\\u{0A}"), escapeForLog("\n"))
+        // Le doublement compte dans la limite, et ne se coupe pas en deux.
+        XCTAssertEqual(escapeForLog("a\\b", limit: 3), "a\\\\…")
+        XCTAssertEqual(escapeForLog("a\\b", limit: 2), "a…")
+    }
+
+    func test_escapeForLog_marquesBidirectionnelles() {
+        // U+202A–U+202E (incorporations et remplacements) et U+2066–U+2069 (isolats) :
+        // elles réordonnent l'affichage d'un journal lu dans un terminal ou un éditeur.
+        XCTAssertEqual(escapeForLog("a\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}b"),
+                       "a\\u{202A}\\u{202B}\\u{202C}\\u{202D}\\u{202E}b")
+        XCTAssertEqual(escapeForLog("\u{2066}\u{2067}\u{2068}\u{2069}"),
+                       "\\u{2066}\\u{2067}\\u{2068}\\u{2069}")
+        // Les voisins immédiats des deux plages restent intacts.
+        XCTAssertEqual(escapeForLog("\u{2065}\u{206A}\u{2029}\u{202F}"), "\u{2065}\u{206A}\\u{2029}\u{202F}")
+    }
+
+    func test_escapeForLog_methodeLongue_estBorneAvecLaLimiteDe16() {
+        // Cas du journal HTTP : la méthode (lettres majuscules, sans autre borne) est coupée à 16.
+        XCTAssertEqual(escapeForLog(String(repeating: "A", count: 5000), limit: 16),
+                       String(repeating: "A", count: 16) + "…")
+        XCTAssertEqual(escapeForLog("GET", limit: 16), "GET")
     }
 
     func test_escapeForLog_troncature() {
@@ -61,6 +91,7 @@ final class LoggingTests: XCTestCase {
         let sortie = escapeForLog(tout, limit: Int.max)
         XCTAssertFalse(sortie.unicodeScalars.contains {
             ($0.value < 0x20 && $0 != "\t") || (0x7F...0x9F).contains($0.value) || $0.value == 0x2028 || $0.value == 0x2029
+                || (0x202A...0x202E).contains($0.value) || (0x2066...0x2069).contains($0.value)
         })
     }
 
