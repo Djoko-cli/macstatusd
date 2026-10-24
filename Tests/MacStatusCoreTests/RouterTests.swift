@@ -1,8 +1,8 @@
 import XCTest
 @testable import MacStatusCore
 
-/// Routage HTTP : caractérisation du comportement historique (routes, codes, corps,
-/// types de contenu, authentification actuelle). Aucune règle nouvelle ici.
+/// Routage HTTP : routes, codes, corps, types de contenu et authentification actuelle.
+/// Depuis la tâche 7 : 400 pour toute `ParseError`, 404 avant 405, 405 avec `Allow`.
 final class RouterTests: XCTestCase {
     private let jeton = "jeton-essai-0123456789abcdef"
     private var moteur: FakeEngine!
@@ -76,9 +76,32 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(head.headers, get.headers)
     }
 
-    func test_methodeEnMinuscules_estDejaMajusculeParLAnalyseur() throws {
-        let analysee = try XCTUnwrap(RequestParser.parse(head: Data("head /health HTTP/1.1".utf8)))
-        XCTAssertEqual(routeur().handle(analysee).status, 200)
+    func test_methodeEnMinuscules_400() {
+        // R22 (e) : la méthode est sensible à la casse ; `head` est refusée dès l'analyse.
+        let analysee = RequestParser.parse(head: Data("head /health HTTP/1.1\r\nHost: 192.0.2.10:9090".utf8))
+        XCTAssertEqual(analysee, .failure(.invalidMethod))
+        let reponse = routeur().handle(analysee)
+        XCTAssertEqual(reponse.status, 400)
+        XCTAssertEqual(texte(reponse), "bad request")
+        XCTAssertTrue(moteur.appels.isEmpty)
+    }
+
+    func test_appelReelDeHA_analyseEtRoute_200() {
+        let r = routeur(jeton: jeton)
+        let analysee = RequestParser.parse(head: Data(("GET /wake?action=WAKE HTTP/1.1\r\nHost: 192.0.2.10:9090\r\n"
+            + "X-Auth-Token: \(jeton)\r\n\r\n").utf8)).map { requete -> HTTPRequest in
+            var requete = requete
+            requete.peer = "192.0.2.10"
+            return requete
+        }
+        let reponse = r.handle(analysee)
+        XCTAssertEqual(reponse.status, 200)
+        XCTAssertEqual(texte(reponse), "OK")
+        XCTAssertEqual(moteur.appels, [.on("192.0.2.10")])
+    }
+
+    func test_http10SansHost_route() {
+        XCTAssertEqual(routeur().handle(RequestParser.parse(head: Data("GET /state HTTP/1.0".utf8))).status, 200)
     }
 
     // MARK: - Commandes
@@ -154,16 +177,74 @@ final class RouterTests: XCTestCase {
         XCTAssertTrue(moteur.appels.isEmpty)
     }
 
-    func test_post_405() {
+    func test_cheminConnu_autreMethode_405AvecAllow() {
+        // R22 (d)
         let r = routeur(jeton: jeton)
-        for methode in ["POST", "PUT", "DELETE", "OPTIONS", "PATCH"] {
-            for chemin in ["/state", "/wake", "/inconnu"] {
+        for methode in ["POST", "PUT", "DELETE", "OPTIONS", "PATCH", "TRACE", "CONNECT"] {
+            for chemin in ["/state", "/status", "/health", "/sleep", "/off", "/wake", "/on", "/resync"] {
                 let reponse = r.handle(requete(chemin, methode: methode, headers: ["x-auth-token": jeton]))
                 XCTAssertEqual(reponse.status, 405, "\(methode) \(chemin)")
                 XCTAssertEqual(texte(reponse), "method not allowed")
+                XCTAssertEqual(reponse.headers, ["Allow": "GET, HEAD"], "\(methode) \(chemin)")
             }
         }
         XCTAssertTrue(moteur.appels.isEmpty)
+    }
+
+    func test_cheminInconnu_404_quelleQueSoitLaMethode() {
+        // R22 (d) : le 404 passe avant le 405.
+        let r = routeur(jeton: jeton)
+        for methode in ["GET", "HEAD", "POST", "DELETE", "OPTIONS"] {
+            for chemin in ["/inconnu", "/", "/STATE"] {
+                let reponse = r.handle(requete(chemin, methode: methode))
+                XCTAssertEqual(reponse.status, 404, "\(methode) \(chemin)")
+                XCTAssertTrue(reponse.headers.isEmpty)
+            }
+        }
+        XCTAssertTrue(moteur.appels.isEmpty)
+    }
+
+    func test_toutParseError_400() {
+        let erreurs: [ParseError] = [.malformedRequestLine, .unsupportedVersion, .invalidMethod, .invalidTarget,
+                                     .missingHost, .malformedHeader]
+        for erreur in erreurs {
+            let reponse = routeur().handle(.failure(erreur))
+            XCTAssertEqual(reponse.status, 400, "\(erreur)")
+            XCTAssertEqual(texte(reponse), "bad request")
+            XCTAssertEqual(reponse.contentType, "text/plain; charset=utf-8")
+            XCTAssertTrue(reponse.headers.isEmpty)
+        }
+        XCTAssertTrue(moteur.appels.isEmpty)
+    }
+
+    func test_methodNotAllowed() {
+        let reponse = HTTPResponse.methodNotAllowed(allow: "GET, HEAD")
+        XCTAssertEqual(reponse.status, 405)
+        XCTAssertEqual(reponse.reasonPhrase, "Method Not Allowed")
+        XCTAssertEqual(reponse.headers, ["Allow": "GET, HEAD"])
+        XCTAssertEqual(texte(reponse), "method not allowed")
+    }
+
+    func test_enTeteDeReponse_serialise() {
+        let reponse = HTTPResponse.methodNotAllowed(allow: "GET, HEAD")
+        XCTAssertEqual(reponse.serializedHead(),
+                       "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                       + "Content-Length: 18\r\nCache-Control: no-store\r\nAllow: GET, HEAD\r\n"
+                       + "Connection: close\r\n\r\n")
+    }
+
+    func test_enTeteDeReponse_CRLFFiltres() {
+        var reponse = HTTPResponse.text("OK")
+        reponse.headers = ["X-Injecte": "a\r\nSet-Cookie: x=1", "X-\nNom": "v", "X-Sain": "ok", "X-Cr": "a\rb"]
+        let tete = reponse.serializedHead()
+        XCTAssertFalse(tete.contains("Set-Cookie"))
+        XCTAssertFalse(tete.contains("X-Injecte"))
+        XCTAssertFalse(tete.contains("Nom"))
+        XCTAssertFalse(tete.contains("X-Cr"))
+        XCTAssertTrue(tete.contains("X-Sain: ok\r\n"))
+        // Seuls les CRLF de structure restent : 6 lignes et la ligne vide finale.
+        XCTAssertEqual(tete.utf8.filter { $0 == 0x0A }.count, 7)
+        XCTAssertEqual(tete.utf8.filter { $0 == 0x0D }.count, 7)
     }
 
     func test_libellesDesCodes() {

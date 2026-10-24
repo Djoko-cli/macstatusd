@@ -1,7 +1,7 @@
 import Foundation
 
 /// Requête HTTP analysée. Les noms d'en-têtes sont en minuscules.
-public struct HTTPRequest {
+public struct HTTPRequest: Equatable {
     public var method: String
     /// Cible brute de la ligne de requête (chemin et requête), telle que reçue.
     public var target: String
@@ -52,6 +52,34 @@ public struct HTTPResponse {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]))
             ?? Data("{}".utf8)
         return HTTPResponse(status: status, contentType: "application/json; charset=utf-8", body: data)
+    }
+
+    /// 405, avec l'en-tête `Allow`. `allow` doit être une constante du code
+    /// (par exemple `"GET, HEAD"`), jamais une donnée reçue.
+    public static func methodNotAllowed(allow: String) -> HTTPResponse {
+        var response = HTTPResponse.text("method not allowed", status: 405)
+        response.headers["Allow"] = allow
+        return response
+    }
+
+    /// Ligne de statut et en-têtes, jusqu'à la ligne vide comprise. Les en-têtes fixes
+    /// viennent d'abord, puis `headers` triés par nom. Par précaution, un en-tête dont le
+    /// nom ou la valeur contient `\r` ou `\n` est écarté : il ne peut pas en injecter d'autres.
+    public func serializedHead() -> String {
+        var head = "HTTP/1.1 \(status) \(reasonPhrase)\r\n"
+        head += "Content-Type: \(contentType)\r\n"
+        head += "Content-Length: \(body.count)\r\n"
+        head += "Cache-Control: no-store\r\n"
+        for (name, value) in headers.sorted(by: { $0.key < $1.key })
+        where !Self.hasLineBreak(name) && !Self.hasLineBreak(value) {
+            head += "\(name): \(value)\r\n"
+        }
+        head += "Connection: close\r\n\r\n"
+        return head
+    }
+
+    private static func hasLineBreak(_ s: String) -> Bool {
+        s.unicodeScalars.contains { $0 == "\r" || $0 == "\n" }
     }
 
     public var reasonPhrase: String {

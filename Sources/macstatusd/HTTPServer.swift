@@ -154,15 +154,24 @@ final class HTTPServer {
                 }
                 if let range = buffer.range(of: Data("\r\n\r\n".utf8)) ?? buffer.range(of: Data("\n\n".utf8)) {
                     let head = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
-                    guard var request = RequestParser.parse(head: head) else {
-                        complete(.text("bad request", status: 400))
-                        return
+                    let parsed = RequestParser.parse(head: head).map { request -> HTTPRequest in
+                        var request = request
+                        request.peer = peer
+                        request.peerIsLoopback = peerIsLoopback
+                        return request
                     }
-                    request.peer = peer
-                    request.peerIsLoopback = peerIsLoopback
-                    method = request.method
-                    logDebug("HTTP \(request.method) \(request.path) depuis \(peer)")
-                    complete(router.handle(request))
+                    switch parsed {
+                    case .success(let request):
+                        method = request.method
+                        logDebug("HTTP \(request.method) \(escapeForLog(request.path)) depuis \(peer)")
+                    case .failure(let error):
+                        // Ligne de requête reçue, échappée : jamais de caractère de contrôle au journal.
+                        var firstLine = head.prefix { $0 != 0x0A }
+                        if firstLine.last == 0x0D { firstLine = firstLine.dropLast() }
+                        logDebug("HTTP refusée (\(error)) « \(escapeForLog(String(decoding: firstLine, as: UTF8.self))) » "
+                            + "depuis \(peer)")
+                    }
+                    complete(router.handle(parsed))
                     return
                 }
                 if error != nil || isComplete {
@@ -184,14 +193,8 @@ final class HTTPServer {
     }
 
     private func send(_ response: HTTPResponse, on connection: NWConnection, includeBody: Bool = true) {
-        var head = "HTTP/1.1 \(response.status) \(response.reasonPhrase)\r\n"
-        head += "Content-Type: \(response.contentType)\r\n"
-        head += "Content-Length: \(response.body.count)\r\n"
-        head += "Cache-Control: no-store\r\n"
-        for (name, value) in response.headers.sorted(by: { $0.key < $1.key }) {
-            head += "\(name): \(value)\r\n"
-        }
-        head += "Connection: close\r\n\r\n"
+        // En-têtes construits par `HTTPResponse`, qui écarte tout en-tête contenant CR ou LF.
+        let head = response.serializedHead()
 
         var payload = Data(head.utf8)
         if includeBody { payload.append(response.body) }

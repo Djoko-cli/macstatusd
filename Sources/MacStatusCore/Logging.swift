@@ -41,3 +41,27 @@ public func logError(_ m: String) { CoreLog.sink?.log(.error, m) }
 public func logWarn(_ m: String) { CoreLog.sink?.log(.warn, m) }
 public func logInfo(_ m: String) { CoreLog.sink?.log(.info, m) }
 public func logDebug(_ m: String) { CoreLog.sink?.log(.debug, m) }
+
+/// Rend une donnée reçue (chemin, ligne de requête…) sûre pour le journal.
+///
+/// Les caractères de contrôle C0 sauf la tabulation, `U+007F`–`U+009F`, `U+2028` et
+/// `U+2029` deviennent `\u{..}` (hexadécimal en majuscules, au moins deux chiffres) :
+/// une donnée ne peut ni couper une ligne du journal, ni y glisser une séquence de
+/// terminal. Le résultat garde au plus `limit` caractères, suivis de `…` s'il a fallu
+/// couper ; un échappement n'est jamais coupé en deux.
+public func escapeForLog(_ s: String, limit: Int = 200) -> String {
+    var out = String.UnicodeScalarView()
+    var count = 0
+    for scalar in s.unicodeScalars {
+        let v = scalar.value
+        let escaped = (v < 0x20 && v != 0x09) || (0x7F...0x9F).contains(v) || v == 0x2028 || v == 0x2029
+        let piece = escaped ? "\\u{\(String(format: "%02X", v))}".unicodeScalars : String(scalar).unicodeScalars
+        guard count + piece.count <= limit else {
+            out.append("…")
+            return String(out)
+        }
+        out.append(contentsOf: piece)
+        count += piece.count
+    }
+    return String(out)
+}

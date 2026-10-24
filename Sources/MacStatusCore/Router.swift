@@ -11,9 +11,15 @@ public protocol EngineFacade: AnyObject {
     func resync()
 }
 
-/// Routage des requêtes HTTP. Caractérisation du comportement historique : aucune
-/// règle de sécurité nouvelle ici (voir les tâches suivantes du plan).
+/// Routage des requêtes HTTP. Depuis la tâche 7 : 400 pour toute requête refusée par
+/// l'analyseur, 404 pour un chemin inconnu quelle que soit la méthode, 405 avec `Allow`
+/// pour un chemin connu demandé autrement qu'en GET ou HEAD. La politique d'accès
+/// (jeton, lectures publiques) reste celle d'origine.
 public final class Router {
+    /// Méthodes servies, pour l'en-tête `Allow` des 405.
+    public static let allowedMethods = "GET, HEAD"
+    private static let knownPaths: Set<String> = ["/state", "/status", "/health", "/sleep", "/off", "/wake", "/on", "/resync"]
+
     private let config: Config
     private let engine: EngineFacade
 
@@ -22,9 +28,20 @@ public final class Router {
         self.engine = engine
     }
 
+    /// Résultat de `RequestParser.parse` : 400 pour toute `ParseError`, sinon routage.
+    public func handle(_ parsed: Result<HTTPRequest, ParseError>) -> HTTPResponse {
+        switch parsed {
+        case .success(let request): return handle(request)
+        case .failure: return .text("bad request", status: 400)
+        }
+    }
+
     public func handle(_ request: HTTPRequest) -> HTTPResponse {
+        guard Self.knownPaths.contains(request.path) else {
+            return .text("not found", status: 404)
+        }
         guard request.method == "GET" || request.method == "HEAD" else {
-            return .text("method not allowed", status: 405)
+            return .methodNotAllowed(allow: Self.allowedMethods)
         }
 
         switch request.path {
