@@ -21,3 +21,6 @@ macstatusd-debugv6
 # config.json réel : contient webhook_base_url / auth_token de l'installation.
 # config.example.json (versionné) sert de modèle.
 config.json
+
+# Dossier de travail local (audit détaillé, notes de session) : jamais commité.
+.superpowers/
