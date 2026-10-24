@@ -24,6 +24,25 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(r.warnings.contains { $0.contains("prot") })
     }
 
+    func test_accesHTTP_defautsEtLecture() {
+        let defauts = Config.parse(data: Data("{}".utf8)).config
+        XCTAssertFalse(defauts.allowQueryToken)
+        XCTAssertEqual(defauts.allowedHosts, [])
+        let json = #"{"allow_query_token":true,"allowed_hosts":["Passerelle.Example","mac-essai.example"]}"#
+        let r = Config.parse(data: Data(json.utf8))
+        XCTAssertTrue(r.config.allowQueryToken)
+        XCTAssertEqual(r.config.allowedHosts, ["Passerelle.Example", "mac-essai.example"])
+        XCTAssertTrue(r.warnings.isEmpty, "\(r.warnings)")
+    }
+
+    func test_allowedHosts_dUnAutreType_defautEtAvertissement() {
+        for json in [#"{"allowed_hosts":"passerelle.example"}"#, #"{"allowed_hosts":[1,2]}"#] {
+            let r = Config.parse(data: Data(json.utf8))
+            XCTAssertEqual(r.config.allowedHosts, [], json)
+            XCTAssertTrue(r.warnings.contains { $0.contains("allowed_hosts") }, json)
+        }
+    }
+
     func test_offActionInconnue_garderLeDefaut() {
         XCTAssertEqual(Config.parse(data: Data(#"{"off_action":"nimporte"}"#.utf8)).config.offAction, .screensaver)
     }

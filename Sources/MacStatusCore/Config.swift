@@ -51,6 +51,11 @@ private struct JSONBag {
         }
     }
 
+    /// Liste de chaînes, et rien d'autre (`nil` si la clé est absente ou d'un autre type).
+    func stringList(_ key: String) -> [String]? {
+        raw[key] as? [String]
+    }
+
     func strings(_ key: String, _ fallback: [String]) -> [String] {
         switch raw[key] {
         case let v as [String]: return v
@@ -75,8 +80,16 @@ public struct Config {
     public var port: UInt16 = 9090
     /// "" = toutes les interfaces, "127.0.0.1" = loopback uniquement.
     public var bindAddress = ""
-    /// Si non vide, exigé sur /sleep, /wake et /resync (?token=… ou en‑tête X-Auth-Token).
+    /// Jeton d'accès. Exigé sur les commandes, et sur les lectures venues d'ailleurs que de
+    /// la boucle locale ; passé par l'en-tête `X-Auth-Token` ou `Authorization: Bearer …`.
+    /// Vide : seules les requêtes de la boucle locale sont servies (voir `AccessPolicy`).
     public var authToken = ""
+    /// Accepte aussi le jeton dans l'URL (`?token=…`). Désactivé par défaut : une URL finit
+    /// dans les journaux, l'historique et les en-têtes `Referer`.
+    public var allowQueryToken = false
+    /// Noms d'hôte acceptés dans l'en-tête `Host`, en plus des adresses littérales, de
+    /// `localhost` et des noms `.local` du Mac (comparaison sans casse, sans le port).
+    public var allowedHosts: [String] = []
 
     // --- Moteur d'état ---
     public var pollIntervalMS = 500
@@ -122,7 +135,8 @@ public struct Config {
 
     static let knownKeys: Set<String> = [
         "enabled", "webhook_base_url", "accessory_id", "webhook_timeout_ms", "webhook_retries",
-        "heartbeat_seconds", "port", "bind_address", "auth_token", "poll_interval_ms",
+        "heartbeat_seconds", "port", "bind_address", "auth_token", "allow_query_token", "allowed_hosts",
+        "poll_interval_ms",
         "settle_on_ms", "settle_off_ms", "require_auth_ui_when_locked", "off_action",
         "off_escalate_to_display_sleep", "command_confirm_timeout_ms", "command_escalate_after_ms",
         "stop_screensaver_on_wake", "off_command", "wake_command", "log_level", "log_file",
@@ -173,6 +187,12 @@ public struct Config {
         cfg.port = UInt16(bag.int("port", Int(cfg.port), min: 1, max: 65_535))
         cfg.bindAddress = bag.string("bind_address", cfg.bindAddress)
         cfg.authToken = bag.string("auth_token", cfg.authToken)
+        cfg.allowQueryToken = bag.bool("allow_query_token", cfg.allowQueryToken)
+        if let hosts = bag.stringList("allowed_hosts") {
+            cfg.allowedHosts = hosts
+        } else if bag.raw["allowed_hosts"] != nil {
+            warnings.append("allowed_hosts doit être une liste de noms → []")
+        }
 
         cfg.pollIntervalMS = bag.int("poll_interval_ms", cfg.pollIntervalMS, min: 100, max: 5_000)
         cfg.settleOnMS = bag.int("settle_on_ms", cfg.settleOnMS, min: 0, max: 10_000)

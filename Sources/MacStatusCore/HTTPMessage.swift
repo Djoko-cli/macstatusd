@@ -12,7 +12,8 @@ public struct HTTPRequest: Equatable {
     /// Adresse du pair, pour le journal.
     public var peer: String
     /// Vrai si le pair est en boucle locale. Calculé par l'adaptateur réseau à partir
-    /// du `NWEndpoint`, jamais à partir d'une chaîne. Le routeur ne s'en sert pas encore.
+    /// du `NWEndpoint`, jamais à partir d'une chaîne (`isLoopbackAddress`). `AccessPolicy`
+    /// s'en sert pour les lectures, et pour tout quand aucun jeton n'est configuré.
     public var peerIsLoopback: Bool
 
     public init(method: String = "GET", target: String = "/", path: String = "/", version: String = "",
@@ -87,6 +88,7 @@ public struct HTTPResponse {
         case 200: return "OK"
         case 400: return "Bad Request"
         case 401: return "Unauthorized"
+        case 403: return "Forbidden"
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
         case 413: return "Payload Too Large"

@@ -219,17 +219,17 @@ final class HTTPServer {
         return "\(endpoint)"
     }
 
-    /// Vrai si le pair est en boucle locale, d'après le `NWEndpoint` lui-même
-    /// (IPv4 127.0.0.0/8, IPv6 ::1, ou IPv4 mappée en IPv6), jamais d'après une chaîne.
-    /// Un nom d'hôte ou un autre type de point d'accès n'est pas une boucle locale.
+    /// Vrai si le pair est en boucle locale, d'après les octets de l'adresse du `NWEndpoint`
+    /// (décision dans `isLoopbackAddress` : 127.0.0.0/8, `::1`, `::ffff:127.x.y.z`), jamais
+    /// d'après une chaîne. Un nom d'hôte ou un autre type de point d'accès (`.service`…)
+    /// n'est pas une boucle locale.
     static func isLoopback(endpoint: NWEndpoint) -> Bool {
         guard case .hostPort(let host, _) = endpoint else { return false }
         switch host {
         case .ipv4(let address):
-            return address.isLoopback
+            return isLoopbackAddress([UInt8](address.rawValue))
         case .ipv6(let address):
-            if address.isIPv4Mapped, let mapped = address.asIPv4 { return mapped.isLoopback }
-            return address.isLoopback
+            return isLoopbackAddress([UInt8](address.rawValue))
         case .name:
             return false
         @unknown default:

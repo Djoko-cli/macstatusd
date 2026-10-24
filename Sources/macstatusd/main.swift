@@ -64,6 +64,10 @@ func parseOptions() -> Options {
               GET /sleep    HomeKit OFF   (alias /off)
               GET /wake     HomeKit ON    (alias /on)
               GET /resync   republie l'état courant vers Homebridge
+
+            Accès : jeton par l'en-tête X-Auth-Token ou Authorization: Bearer (auth_token).
+            Commandes : jeton exigé. Lectures : jeton exigé hors boucle locale.
+            Sans jeton configuré : boucle locale seulement. /health est toujours servi.
             """)
             exit(0)
         default:
@@ -163,7 +167,23 @@ engine.start()
 
 // MARK: - Serveur HTTP
 
-let router = Router(config: config, engine: engine)
+let localNames = LocalNames.current()
+// Ni les noms ni le jeton au journal : seulement leur nombre et la présence du jeton.
+logInfo("contrôle de Host : \(localNames.count) nom(s) local(aux) du Mac, "
+        + "\(config.allowedHosts.count) hôte(s) autorisé(s) par la config, "
+        + "jeton dans l'URL \(config.allowQueryToken ? "accepté" : "refusé")")
+if config.authToken.isEmpty {
+    if bindAddressIsLoopbackOnly(config.bindAddress) {
+        logWarn("aucun jeton configuré (auth_token) : seules les requêtes de la boucle locale sont servies")
+    } else {
+        let bind = config.bindAddress.isEmpty ? "0.0.0.0" : config.bindAddress
+        logError("aucun jeton configuré (auth_token) alors que l'écoute est ouverte sur \(escapeForLog(bind)) : "
+                 + "toute requête venue du réseau sera refusée (403), Home Assistant et Homebridge compris. "
+                 + "Définir auth_token, ou bind_address à 127.0.0.1.")
+    }
+}
+
+let router = Router(config: config, engine: engine, localNames: localNames)
 let server = HTTPServer(port: config.port, bindAddress: config.bindAddress, router: router)
 server.start()
 

@@ -11,21 +11,28 @@ public protocol EngineFacade: AnyObject {
     func resync()
 }
 
-/// Routage des requêtes HTTP. Depuis la tâche 7 : 400 pour toute requête refusée par
-/// l'analyseur, 404 pour un chemin inconnu quelle que soit la méthode, 405 avec `Allow`
-/// pour un chemin connu demandé autrement qu'en GET ou HEAD. La politique d'accès
-/// (jeton, lectures publiques) reste celle d'origine.
+/// Routage des requêtes HTTP, dans cet ordre :
+/// 1. 400 pour toute requête refusée par l'analyseur ;
+/// 2. 404 pour un chemin inconnu, quelle que soit la méthode, sans autre contrôle : la même
+///    réponse sort pour tout le monde ;
+/// 3. `AccessPolicy.decide` : un refus donne 401, 403 ou 405 (avec `Allow`) et une ligne WARN ;
+/// 4. 405 avec `Allow` pour `/health` demandé autrement qu'en GET ou HEAD ;
+/// 5. la route.
 public final class Router {
-    /// Méthodes servies, pour l'en-tête `Allow` des 405.
+    /// Méthodes servies par les lectures et `/health`, pour l'en-tête `Allow` des 405.
     public static let allowedMethods = "GET, HEAD"
-    private static let knownPaths: Set<String> = ["/state", "/status", "/health", "/sleep", "/off", "/wake", "/on", "/resync"]
+    /// Méthodes servies par les commandes.
+    public static let commandAllowedMethods = "GET"
 
-    private let config: Config
     private let engine: EngineFacade
+    private let policy: AccessPolicy
 
-    public init(config: Config, engine: EngineFacade) {
-        self.config = config
+    /// `localNames` : noms du Mac acceptés dans l'en-tête `Host` (par exemple son nom `.local`),
+    /// lus une fois au démarrage par l'exécutable.
+    public init(config: Config, engine: EngineFacade, localNames: [String] = []) {
         self.engine = engine
+        self.policy = AccessPolicy(authToken: config.authToken, allowQueryToken: config.allowQueryToken,
+                                   allowedHosts: config.allowedHosts, localNames: localNames)
     }
 
     /// Résultat de `RequestParser.parse` : 400 pour toute `ParseError`, sinon routage.
@@ -37,11 +44,18 @@ public final class Router {
     }
 
     public func handle(_ request: HTTPRequest) -> HTTPResponse {
-        guard Self.knownPaths.contains(request.path) else {
-            return .text("not found", status: 404)
+        let routeClass = RouteClass.classify(path: request.path)
+        guard routeClass != .unknown else { return .text("not found", status: 404) }
+
+        if case .deny(let status, let reason) = policy.decide(request) {
+            // Jamais le jeton ni les en-têtes : seulement le motif, constante du code.
+            logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(escapeForLog(request.method)) "
+                    + "\(escapeForLog(request.path)) depuis \(escapeForLog(request.peer))")
+            return Self.denial(status: status, routeClass: routeClass)
         }
+
         guard request.method == "GET" || request.method == "HEAD" else {
-            return .methodNotAllowed(allow: Self.allowedMethods)
+            return .methodNotAllowed(allow: Self.allow(for: routeClass))
         }
 
         switch request.path {
@@ -55,17 +69,14 @@ public final class Router {
             return .text("OK")
 
         case "/sleep", "/off":
-            guard isAuthorized(request) else { return .text("unauthorized", status: 401) }
             engine.requestOff(source: request.peer)
             return .text("OK")
 
         case "/wake", "/on":
-            guard isAuthorized(request) else { return .text("unauthorized", status: 401) }
             engine.requestOn(source: request.peer)
             return .text("OK")
 
         case "/resync":
-            guard isAuthorized(request) else { return .text("unauthorized", status: 401) }
             engine.resync()
             return .text("OK")
 
@@ -74,12 +85,16 @@ public final class Router {
         }
     }
 
-    /// Comportement historique : sans jeton configuré, tout passe ; sinon le jeton
-    /// vient de `?token=` ou, à défaut, de `X-Auth-Token`.
-    private func isAuthorized(_ request: HTTPRequest) -> Bool {
-        guard !config.authToken.isEmpty else { return true }
-        let provided = request.query["token"] ?? request.headers["x-auth-token"] ?? ""
-        guard provided.utf8.count == config.authToken.utf8.count else { return false }
-        return provided == config.authToken
+    private static func allow(for routeClass: RouteClass) -> String {
+        routeClass == .command ? commandAllowedMethods : allowedMethods
+    }
+
+    private static func denial(status: Int, routeClass: RouteClass) -> HTTPResponse {
+        switch status {
+        case 401: return .text("unauthorized", status: 401)
+        case 404: return .text("not found", status: 404)
+        case 405: return .methodNotAllowed(allow: allow(for: routeClass))
+        default: return .text("forbidden", status: 403)
+        }
     }
 }

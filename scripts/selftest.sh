@@ -45,6 +45,9 @@ PORT_A=19090
 PORT_B=19091
 PORT_C=$((PORT_B + 5))
 PORT_HB=19099
+# Jeton de l'instance B, valeur d'essai inventée. Passé en en-tête : depuis la tâche 8,
+# le jeton dans l'URL (?token=) est refusé par défaut.
+JETON_B="jeton-essai-0123456789abcdef"
 PASS=0
 FAIL=0
 SKIP=0
@@ -244,7 +247,7 @@ JSON
   cat <<JSON
   "enabled": false,
   "port": $PORT_B,
-  "auth_token": "jeton-test",
+  "auth_token": "$JETON_B",
   "poll_interval_ms": 250,
   "settle_off_ms": 200,
   "command_confirm_timeout_ms": 2000,
@@ -389,7 +392,7 @@ echo "== 4. Commande sans effet : retour honnête aux faits"
 if [[ $ECRAN_ETEINT -eq 1 ]]; then
   saute "retour à l'état réel après une commande sans effet" "$RAISON_SAUT"
 else
-  curl -fsS --max-time 2 "http://127.0.0.1:$PORT_B/off?token=jeton-test" >/dev/null
+  curl -fsS --max-time 2 -H "X-Auth-Token: $JETON_B" "http://127.0.0.1:$PORT_B/off" >/dev/null
   sleep 0.4
   check "OFF affiché pendant la commande" "0" "$(state $PORT_B)"
   if await_state $PORT_B 1 6; then ok "retour à l'état réel après expiration"; else bad "état non revenu à ON après expiration"; fi
@@ -402,8 +405,17 @@ check "route inconnue → 404" "404" "$(code http://127.0.0.1:$PORT_A/inconnu)"
 check "POST → 405" "405" "$(code -X POST http://127.0.0.1:$PORT_A/state)"
 check "requête surdimensionnée → 413" "413" "$(code "http://127.0.0.1:$PORT_A/state?x=$(python3 -c 'print("a"*65000)')")"
 check "commande sans jeton → 401" "401" "$(code http://127.0.0.1:$PORT_B/off)"
-check "commande avec jeton → 200" "200" "$(code "http://127.0.0.1:$PORT_B/off?token=jeton-test")"
-check "/state reste public" "200" "$(code http://127.0.0.1:$PORT_B/state)"
+check "commande avec jeton en en-tête → 200" "200" "$(code -H "X-Auth-Token: $JETON_B" "http://127.0.0.1:$PORT_B/off")"
+check "commande avec Authorization: Bearer → 200" "200" "$(code -H "Authorization: Bearer $JETON_B" "http://127.0.0.1:$PORT_B/off")"
+check "jeton dans l'URL refusé par défaut → 401" "401" "$(code "http://127.0.0.1:$PORT_B/off?token=$JETON_B")"
+check "commande avec Origin → 403" "403" "$(code -H "X-Auth-Token: $JETON_B" -H "Origin: http://evil.example" "http://127.0.0.1:$PORT_B/off")"
+check "commande avec Sec-Fetch-Site: cross-site → 403" "403" "$(code -H "X-Auth-Token: $JETON_B" -H "Sec-Fetch-Site: cross-site" "http://127.0.0.1:$PORT_B/off")"
+check "Host rebindé → 403" "403" "$(code -H "X-Auth-Token: $JETON_B" -H "Host: evil.example:$PORT_B" "http://127.0.0.1:$PORT_B/off")"
+check "commande en HEAD → 405" "405" "$(code -I -H "X-Auth-Token: $JETON_B" "http://127.0.0.1:$PORT_B/off")"
+check "lecture en boucle locale sans jeton → 200" "200" "$(code http://127.0.0.1:$PORT_B/state)"
+check "instance sans jeton, boucle locale → 200" "200" "$(code http://127.0.0.1:$PORT_A/state)"
+if grep -q "HTTP refusée 401 (token)" "$WORK/b.log"; then ok "refus journalisé (WARN)"; else bad "aucun refus 'HTTP refusée 401 (token)' dans le journal de B"; fi
+if grep -q "$JETON_B" "$WORK/b.log"; then bad "le jeton apparaît dans le journal de B"; else ok "jeton absent du journal"; fi
 REQ_PIDS=()
 for _ in $(seq 10); do state $PORT_A > /dev/null & REQ_PIDS+=($!); done
 for pid in "${REQ_PIDS[@]}"; do wait "$pid"; done
