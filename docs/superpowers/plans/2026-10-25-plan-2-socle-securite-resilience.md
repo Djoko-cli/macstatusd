@@ -376,7 +376,7 @@ F01, F02, F06, F25 ; décisions C5, C6, C7.
      - Avec jeton : `.command` exige un jeton égal (`constantTimeEquals`), sinon `deny(401, "token")` ;
        `.read` passe si `peerIsLoopback` ou si le jeton est égal, sinon `deny(401, "token")`.
 
-- [ ] **Étape 1 : tests**, dont les trois premiers points de vigilance :
+- [x] **Étape 1 : tests**, dont les trois premiers points de vigilance :
   - `test_appelReelDeHA_accepte` : GET `/wake?action=WAKE`, `Host: 192.0.2.10:9090`, bon jeton, pair non
     local → `allow` ;
   - `test_requeteNavigateurCrossSite_refusee` : `Host: 127.0.0.1:9090`, `Sec-Fetch-Site: cross-site`,
@@ -392,13 +392,13 @@ F01, F02, F06, F25 ; décisions C5, C6, C7.
   - `test_head_surCommande_405` ;
   - `test_sansJetonConfigure_distant_403_local_allow` ;
   - `test_constantTimeEquals` : vrai seulement à l'égalité, longueurs différentes comprises.
-- [ ] **Étape 2 : `swift test --filter "AccessPolicyTests|RouterTests"`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.** `Router` appelle `decide` avant toute route. Au démarrage, si aucun
+- [x] **Étape 2 : `swift test --filter "AccessPolicyTests|RouterTests"`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.** `Router` appelle `decide` avant toute route. Au démarrage, si aucun
   jeton n'est configuré, le daemon journalise un WARN (un ERROR si l'écoute n'est pas limitée à la
   boucle locale).
-- [ ] **Étape 4 : `swift test`, puis `bash scripts/selftest.sh`**, cas jeton mis à jour : instance B
+- [x] **Étape 4 : `swift test`, puis `bash scripts/selftest.sh`**, cas jeton mis à jour : instance B
   avec `jeton-essai-0123456789abcdef` en en-tête — attendu : OK.
-- [ ] **Étape 5 : commit** « HTTP : jeton par en-tête, contrôle de Host et d'origine ».
+- [x] **Étape 5 : commit** « HTTP : jeton par en-tête, contrôle de Host et d'origine ».
 
 ### Tâche 9 : limites de débit et commandes idempotentes
 
@@ -418,22 +418,22 @@ traités ici parce qu'ils touchent le même code.
 - Valeurs : seau des commandes 5/s, rafale 10 ; échecs 10 en 60 s, puis interdiction pendant 60 s.
 - Réponse : 429 `too many requests`.
 
-- [ ] **Étape 1 : tests :**
+- [x] **Étape 1 : tests :**
   - `test_seau_rafaleDe10_puis429_puisRecharge5ParSeconde` ;
   - `test_dixEchecsEn60s_interditPendant60s` ;
   - `test_journalDesEchecs_uneLigneParPairEtParMinute` ;
   - `EngineCoreTests.test_doublonOff_pendantUneCommandeOff_aucuneActionEtEcheanceInchangee` ;
   - `EngineCoreTests.test_onPuisOff_rapides_leDernierGagne` ;
   - `EngineCoreTests.test_onQuandDejaOn_aucuneAction`.
-- [ ] **Étape 2 : `swift test`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.** `Router` consulte le traqueur avant la politique (pair interdit →
+- [x] **Étape 2 : `swift test`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.** `Router` consulte le traqueur avant la politique (pair interdit →
   429) et le seau avant une commande. `EngineCore` :
   - ignore un doublon de même sens tant que l'intention est en cours ;
   - laisse une commande de sens opposé remplacer l'intention en cours ;
   - rafraîchit les faits avant un ON et ne fait rien si l'état est déjà ON et qu'aucune intention OFF
     n'est en cours.
-- [ ] **Étape 4 : `swift test`** — attendu : OK.
-- [ ] **Étape 5 : commit** « HTTP : limites de débit ; commandes idempotentes ».
+- [x] **Étape 4 : `swift test`** — attendu : OK.
+- [x] **Étape 5 : commit** « HTTP : limites de débit ; commandes idempotentes ».
 
 ### Tâche 10 : adaptateur d'écoute durci
 
@@ -458,15 +458,15 @@ même fichier.
   - le gestionnaire d'état ne touche `listener` que si c'est bien l'instance courante ;
   - message « à l'écoute sur … » exact : `[::]:<port> (IPv4+IPv6, toutes interfaces)`, ou l'adresse liée.
 
-- [ ] **Étape 1 : tests unitaires** : `test_limite32Total_8ParPair`, `test_releaseLibereUnePlace`. Puis
+- [x] **Étape 1 : tests unitaires** : `test_limite32Total_8ParPair`, `test_releaseLibereUnePlace`. Puis
   `selftest.sh`, avec 3 nouveaux cas :
   - `connexions-pair` : 9 connexions ouvertes depuis 127.0.0.1, la 9e est refusée ;
   - `en-tetes-lents` : une connexion sans en-têtes est fermée en 2 à 3 s ;
   - `message-ecoute` : le journal contient `IPv4+IPv6`.
-- [ ] **Étape 2 : lancer les tests** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
-- [ ] **Étape 5 : commit** « HTTP : plafond de connexions, délai d'en-têtes, écoute exacte ».
+- [x] **Étape 2 : lancer les tests** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
+- [x] **Étape 5 : commit** « HTTP : plafond de connexions, délai d'en-têtes, écoute exacte ».
 
 ---
 
