@@ -31,6 +31,20 @@ final class ConnectionLimiterTests: XCTestCase {
         XCTAssertEqual(limiteur.count(peer: "192.0.2.99"), 0, "un refus ne compte pas")
     }
 
+    func test_ipv6_neufAdressesDuMemePrefixe64_laNeuviemeRefusee() {
+        // R29 : un hôte IPv6 qui tourne sur les adresses de son /64 reste un seul pair.
+        let limiteur = ConnectionLimiter(maxTotal: 32, maxPerPeer: 8)
+        for i in 1...8 {
+            XCTAssertTrue(limiteur.acquire(peer: "[2001:db8:0:1::\(i)]:5100\(i)"), "connexion \(i)")
+        }
+        XCTAssertFalse(limiteur.acquire(peer: "2001:db8:0:1:ffff::9"), "9e adresse du même /64")
+        XCTAssertEqual(limiteur.count(peer: "2001:db8:0:1::42"), 8)
+        // Un autre /64 garde ses 8 places ; la libération par une autre adresse du /64 rend une place.
+        XCTAssertTrue(limiteur.acquire(peer: "2001:db8:0:2::1"))
+        limiteur.release(peer: "2001:db8:0:1::abcd")
+        XCTAssertTrue(limiteur.acquire(peer: "2001:db8:0:1::9"))
+    }
+
     func test_releaseLibereUnePlace() {
         let limiteur = ConnectionLimiter(maxTotal: 32, maxPerPeer: 8)
         for _ in 1...8 { XCTAssertTrue(limiteur.acquire(peer: "192.0.2.10")) }

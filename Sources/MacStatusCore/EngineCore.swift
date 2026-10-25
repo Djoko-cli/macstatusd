@@ -317,7 +317,10 @@ public final class EngineCore {
 
     /// Commande ON. Idempotente : un doublon reçu pendant une intention ON en cours ne fait
     /// rien ; une intention OFF en cours est remplacée. Les faits sont relus d'abord : déjà ON et
-    /// sans intention OFF en cours, rien n'est lancé (ni réveil, ni arrêt de l'économiseur).
+    /// sans intention OFF en cours, rien n'est lancé (ni réveil, ni arrêt de l'économiseur), sauf
+    /// si l'économiseur tourne encore (Ruling R30) : l'oracle le dit « écarté » jusqu'à 90 s
+    /// après une frappe, alors que macOS a pu revenir à l'économiseur. Dans ce cas, un réveil
+    /// est envoyé, sans intention (rien à confirmer : les faits disent déjà ON).
     public func requestOn(source: String) {
         if isPending(target: true) {
             logInfo("commande ON (\(source)) → commande ON déjà en cours, ignorée")
@@ -326,8 +329,14 @@ public final class EngineCore {
         refreshFacts()
         let factual = factsVerdict()
         if factual.state, !isPending(target: false) {
-            logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)), aucune action")
             intent = nil
+            if facts.screenSaverRunning {
+                logInfo("commande ON (\(source)) → ON selon les faits (\(factual.reason)), mais économiseur "
+                        + "en marche (\(facts.screenSaverEvidence)) → réveil, sans intention")
+                actions.wake()
+            } else {
+                logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)), aucune action")
+            }
             evaluate(immediate: true)
             return
         }

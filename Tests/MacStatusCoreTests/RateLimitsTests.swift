@@ -182,7 +182,7 @@ final class RateLimitsTests: XCTestCase {
         XCTAssertTrue(moteur.appels.isEmpty)
     }
 
-    func test_traqueur_plafonne_evinceLePlusAncien() {
+    func test_traqueur_plafonne_evinceLePlusAncienNonInterdit() {
         let traqueur = AuthFailureTracker(limit: 10, window: 60, banFor: 60, clock: horloge, maxPeers: 4)
         // Le pair 0 est interdit, puis les pairs 1 à 3 échouent une fois chacun.
         for _ in 0..<10 { _ = traqueur.recordFailure(peer: "pair-0") }
@@ -192,16 +192,45 @@ final class RateLimitsTests: XCTestCase {
             _ = traqueur.recordFailure(peer: "pair-\(i)")
         }
         XCTAssertEqual(traqueur.peerCount, 4)
-        // Un cinquième pair : le plus ancien (pair-0) est évincé, la table reste à 4.
+        // Un cinquième pair : le plus ancien NON interdit (pair-1) est évincé, pas pair-0,
+        // dont l'activité est pourtant la plus ancienne. La table reste à 4.
         horloge.advance(1)
         _ = traqueur.recordFailure(peer: "pair-4")
         XCTAssertEqual(traqueur.peerCount, 4)
-        XCTAssertFalse(traqueur.isBanned(peer: "pair-0"))
+        XCTAssertTrue(traqueur.isBanned(peer: "pair-0"))
         XCTAssertEqual(traqueur.recordFailure(peer: "pair-2").count, 2)
 
-        // 5 000 pairs distincts : jamais plus de 4 entrées.
+        // 5 000 pairs distincts : jamais plus de 4 entrées, et pair-0 reste interdit.
         for i in 0..<5000 { _ = traqueur.recordFailure(peer: "autre-\(i)") }
         XCTAssertEqual(traqueur.peerCount, 4)
+        XCTAssertTrue(traqueur.isBanned(peer: "pair-0"))
+    }
+
+    func test_traqueur_pairInterdit_resteInterditApres1024AutresPairs() {
+        let traqueur = AuthFailureTracker(limit: 10, window: 60, banFor: 60, clock: horloge)
+        for _ in 0..<10 { _ = traqueur.recordFailure(peer: "192.0.2.10") }
+        XCTAssertTrue(traqueur.isBanned(peer: "192.0.2.10"))
+        for i in 0..<3000 { _ = traqueur.recordFailure(peer: "198.51.100.\(i)") }
+        XCTAssertEqual(traqueur.peerCount, 1024)
+        XCTAssertTrue(traqueur.isBanned(peer: "192.0.2.10"))
+    }
+
+    func test_traqueur_tousInterdits_evinceLInterdictionQuiFinitLePlusTot() {
+        let traqueur = AuthFailureTracker(limit: 10, window: 60, banFor: 60, clock: horloge, maxPeers: 3)
+        // pair-b est interdit le premier, puis pair-a, puis pair-c ; pair-b a ensuite une
+        // activité plus récente que pair-a (un échec de plus), sans changer son échéance :
+        // c'est pair-b qu'on évince (échéance la plus proche), pas pair-a (activité la plus ancienne).
+        for nom in ["pair-b", "pair-a", "pair-c"] {
+            for _ in 0..<10 { _ = traqueur.recordFailure(peer: nom) }
+            horloge.advance(1)
+        }
+        _ = traqueur.recordFailure(peer: "pair-b")
+        horloge.advance(1)
+        _ = traqueur.recordFailure(peer: "pair-d")
+        XCTAssertEqual(traqueur.peerCount, 3)
+        XCTAssertFalse(traqueur.isBanned(peer: "pair-b"))
+        XCTAssertTrue(traqueur.isBanned(peer: "pair-a"))
+        XCTAssertTrue(traqueur.isBanned(peer: "pair-c"))
     }
 
     func test_traqueur_plafondParDefaut_1024() {
@@ -268,19 +297,77 @@ final class RateLimitsTests: XCTestCase {
         }
     }
 
-    func test_identiteDuPair() {
+    func test_adresseCanonique() {
+        XCTAssertEqual(canonicalAddress("192.0.2.10"), "192.0.2.10")
+        XCTAssertEqual(canonicalAddress("192.0.2.10:51234"), "192.0.2.10")
+        XCTAssertEqual(canonicalAddress("::ffff:192.0.2.10"), "192.0.2.10")
+        XCTAssertEqual(canonicalAddress("::ffff:c000:20a"), "192.0.2.10")
+        XCTAssertEqual(canonicalAddress("[::ffff:192.0.2.10]:8080"), "192.0.2.10")
+        XCTAssertEqual(canonicalAddress("2001:DB8:0:0::1"), "2001:db8::1")
+        XCTAssertEqual(canonicalAddress("[2001:db8::1]:443"), "2001:db8::1")
+        XCTAssertEqual(canonicalAddress("fe80::1%en0"), "fe80::1")
+        XCTAssertEqual(canonicalAddress("::1"), "::1")
+        // Ni IPv4 ni IPv6 : gardé tel quel, borné.
+        XCTAssertEqual(canonicalAddress("?"), "?")
+        XCTAssertEqual(canonicalAddress(String(repeating: "x", count: 500)).count, 128)
+    }
+
+    func test_identiteDuPair_ipv6ParPrefixe64_ipv4ParAdresse() {
+        XCTAssertEqual(peerIdentity("2001:db8:0:1::5"), "2001:db8:0:1::/64")
+        XCTAssertEqual(peerIdentity("2001:DB8:0:1:ffff:ffff:ffff:ffff"), "2001:db8:0:1::/64")
+        XCTAssertEqual(peerIdentity("[2001:db8::1]:443"), "2001:db8::/64")
+        XCTAssertEqual(peerIdentity("fe80::1%en0"), "fe80::/64")
+        XCTAssertEqual(peerIdentity("fe80::abcd:1%en1"), "fe80::/64")
+        XCTAssertEqual(peerIdentity("::1"), "::/64")
+        // IPv4 et IPv4 mappée : l'adresse, comme `canonicalAddress`.
         XCTAssertEqual(peerIdentity("192.0.2.10"), "192.0.2.10")
         XCTAssertEqual(peerIdentity("192.0.2.10:51234"), "192.0.2.10")
         XCTAssertEqual(peerIdentity("::ffff:192.0.2.10"), "192.0.2.10")
-        XCTAssertEqual(peerIdentity("::ffff:c000:20a"), "192.0.2.10")
-        XCTAssertEqual(peerIdentity("[::ffff:192.0.2.10]:8080"), "192.0.2.10")
-        XCTAssertEqual(peerIdentity("2001:DB8:0:0::1"), "2001:db8::1")
-        XCTAssertEqual(peerIdentity("[2001:db8::1]:443"), "2001:db8::1")
-        XCTAssertEqual(peerIdentity("fe80::1%en0"), "fe80::1")
-        XCTAssertEqual(peerIdentity("::1"), "::1")
+        XCTAssertEqual(peerIdentity("[::ffff:c000:20a]:8080"), "192.0.2.10")
         // Ni IPv4 ni IPv6 : gardé tel quel, borné.
         XCTAssertEqual(peerIdentity("?"), "?")
         XCTAssertEqual(peerIdentity(String(repeating: "x", count: 500)).count, 128)
+    }
+
+    func test_ipv6_onzeAdressesDuMemePrefixe64_interdit() {
+        let r = routeur()
+        for i in 0..<11 {
+            let pair = "2001:db8:0:1::\(String(i + 1, radix: 16))"
+            XCTAssertEqual(r.handle(requete("/off", jeton: "faux", pair: pair)).status, i < 10 ? 401 : 429, pair)
+        }
+        // Le journal écrit l'adresse reçue, suivie du /64 qui sert de clé.
+        let interdiction = avertissements.first { $0.contains("interdit") } ?? ""
+        XCTAssertTrue(interdiction.contains("pair 2001:db8:0:1::a (2001:db8:0:1::/64) interdit"), interdiction)
+        // Toute adresse du même /64 est interdite ; un autre /64 est indépendant.
+        XCTAssertEqual(r.handle(requete("/health", pair: "2001:db8:0:1:aaaa::1")).status, 429)
+        XCTAssertEqual(r.handle(requete("/wake", jeton: jeton, pair: "2001:db8:0:2::1")).status, 200)
+        XCTAssertEqual(r.handle(requete("/health", pair: "[2001:db8:0:2::1]:51234")).status, 200)
+    }
+
+    func test_ipv6_deuxPrefixes64_independants() {
+        let r = routeur()
+        for i in 0..<9 {
+            XCTAssertEqual(r.handle(requete("/off", jeton: "faux", pair: "2001:db8:0:a::\(i + 1)")).status, 401)
+            XCTAssertEqual(r.handle(requete("/off", jeton: "faux", pair: "2001:db8:0:b::\(i + 1)")).status, 401)
+        }
+        // 18 échecs en tout, mais 9 par /64 : aucun des deux n'est interdit.
+        XCTAssertEqual(r.handle(requete("/health", pair: "2001:db8:0:a::1")).status, 200)
+        XCTAssertEqual(r.handle(requete("/health", pair: "2001:db8:0:b::1")).status, 200)
+    }
+
+    func test_ipv6_rotationDansLienLocal_interditeMalgre500Adresses() {
+        // 5 000 mauvais jetons depuis 500 adresses `fe80::` (zones diverses) : un seul pair.
+        let r = routeur()
+        var codes: [Int] = []
+        for tour in 0..<10 {
+            for i in 0..<500 {
+                let pair = "fe80::\(String(i + 1, radix: 16)):\(tour + 1)%en\(i % 3)"
+                codes.append(r.handle(requete("/off", jeton: "faux", pair: pair)).status)
+            }
+        }
+        XCTAssertEqual(Array(codes.prefix(10)), Array(repeating: 401, count: 10))
+        XCTAssertEqual(Set(codes.dropFirst(10)), [429])
+        XCTAssertTrue(moteur.appels.isEmpty)
     }
 
     func test_journalDuTraqueur_echappeLePair() {
@@ -299,11 +386,26 @@ final class RateLimitsTests: XCTestCase {
     func test_journal_pairsNombreux_debitGlobalBorne() {
         // Beaucoup d'adresses (IPv6 du LAN, par exemple) : le journal reste borné.
         let r = routeur()
-        for i in 0..<1000 { _ = r.handle(requete("/off", jeton: "faux", pair: "2001:db8::\(String(i, radix: 16))")) }
+        for i in 0..<1000 { _ = r.handle(requete("/off", jeton: "faux", pair: "2001:db8:\(String(i, radix: 16))::1")) }
         XCTAssertLessThanOrEqual(avertissements.count, 31, "\(avertissements.count)")
         // Une minute plus tard, une ligne signale les lignes omises.
         horloge.advance(60)
-        _ = r.handle(requete("/off", jeton: "faux", pair: "2001:db8::ffff"))
+        _ = r.handle(requete("/off", jeton: "faux", pair: "2001:db8:ffff::1"))
         XCTAssertTrue(avertissements.last?.contains("omise") ?? false, avertissements.last ?? "")
+    }
+
+    func test_journal_ligneDInterdiction_hors_seauGlobal() {
+        // Le seau global des lignes est vidé par les premiers refus de 40 pairs distincts…
+        let r = routeur()
+        for i in 0..<40 { _ = r.handle(requete("/off", jeton: "faux", pair: "198.51.100.\(i)")) }
+        XCTAssertEqual(avertissements.count, 30)
+        // … la ligne d'interdiction d'un pair est écrite quand même, une fois.
+        for _ in 0..<10 { _ = r.handle(requete("/off", jeton: "faux", pair: "203.0.113.7")) }
+        let interdictions = avertissements.filter { $0.contains("203.0.113.7") && $0.contains("interdit") }
+        XCTAssertEqual(interdictions.count, 1, "\(avertissements.suffix(3))")
+        // Une deuxième interdiction (après la première) écrit sa ligne, elle aussi.
+        horloge.advance(60)
+        for _ in 0..<10 { _ = r.handle(requete("/off", jeton: "faux", pair: "203.0.113.7")) }
+        XCTAssertEqual(avertissements.filter { $0.contains("203.0.113.7") && $0.contains("interdit") }.count, 2)
     }
 }

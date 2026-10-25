@@ -4,7 +4,7 @@ import Foundation
 
 /// Plafond des connexions HTTP ouvertes en même temps : `maxTotal` en tout, `maxPerPeer` par
 /// pair. Le pair est identifié comme pour les limites de débit (`peerIdentity`) : son adresse,
-/// sans le port ni la zone, une IPv4 mappée valant l'IPv4.
+/// sans le port ni la zone, une IPv4 mappée valant l'IPv4, une IPv6 comptant pour son /64.
 ///
 /// `acquire` est appelé à l'acceptation de la connexion, avant toute lecture ; chaque `acquire`
 /// réussi doit être suivi d'un seul `release`, à l'état final de la connexion. Un `release` sans

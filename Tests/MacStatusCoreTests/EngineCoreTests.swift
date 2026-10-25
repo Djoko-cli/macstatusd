@@ -383,6 +383,40 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertNotNil(commandeEnAttente(core))
     }
 
+    func test_onSousUnEconomiseurEcarte_reveilSansIntention() {
+        // R30 : l'oracle dit « écarté » (ON) jusqu'à 90 s après une frappe, alors que macOS a pu
+        // revenir à l'économiseur. Tant qu'il tourne, /wake réveille quand même, sans intention.
+        let core = moteur()
+        core.start()
+        signaux.pidEconomiseur = 4242
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        // Une frappe : le panneau d'authentification recouvre l'économiseur, qui tourne encore.
+        signaux.inactiviteHID = 0
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        // 60 s sans activité : toujours « écarté » pour l'oracle (réaffichage à 90 s).
+        for _ in 0..<120 {
+            signaux.inactiviteHID += 0.5
+            scruter(core, 0.5)
+        }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["facts"].flatMap { ($0 as? [String: Any])?["screensaver_running"] as? Bool }, true)
+        XCTAssertEqual(actions.appels, [])
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(core.currentState)
+        XCTAssertTrue(journalContient("économiseur en marche"), "\(journal.lines.map { $0.1 })")
+
+        // Sans économiseur, le court-circuit « déjà ON » reste sans action.
+        signaux.pidEconomiseur = 0
+        scruter(core, 0.5)
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+    }
+
     // MARK: - Resynchronisation et battement de cœur
 
     func test_trouDeScrutation_au_dela_de_10s_resynchronise() {

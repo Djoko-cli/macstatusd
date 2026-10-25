@@ -281,7 +281,7 @@ public enum ListenAddress: Equatable {
         if text.lowercased() == "localhost" { self = .ipv4("127.0.0.1"); return }
         guard ipv4Bytes(text) != nil || ipv6Bytes(text) != nil else { return nil }
         // Forme canonique ; une IPv4 mappée (`::ffff:a.b.c.d`) devient l'IPv4.
-        let canonical = peerIdentity(text)
+        let canonical = canonicalAddress(text)
         if canonical == "::" {
             self = .dualStack
         } else if canonical == "0.0.0.0" {

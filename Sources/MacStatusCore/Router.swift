@@ -15,7 +15,8 @@ public protocol EngineFacade: AnyObject {
 /// 1. 400 pour toute requête refusée par l'analyseur ;
 /// 2. 404 pour un chemin inconnu, quelle que soit la méthode, sans autre contrôle : la même
 ///    réponse sort pour tout le monde ;
-/// 3. 429 pour un pair interdit par le traqueur des échecs (`/health` compris) ;
+/// 3. 429 pour un pair interdit par le traqueur des échecs (`/health` compris) ; le pair y est
+///    compté par `peerIdentity` (une IPv6 par son /64, Ruling R29) ;
 /// 4. `AccessPolicy.decide` : un refus donne 401, 403 ou 405 (avec `Allow`) ; un 401 ou un 403
 ///    compte comme un échec du pair (10 en 60 s : interdit pendant 60 s) ;
 /// 5. 405 avec `Allow` pour `/health` demandé autrement qu'en GET ou HEAD ;
@@ -24,9 +25,10 @@ public protocol EngineFacade: AnyObject {
 /// 7. la route.
 ///
 /// Journal borné : pour un pair, une ligne au premier refus, une au début de chaque interdiction,
-/// puis au plus une par minute (avec le nombre d'échecs) ; toutes ces lignes passent en outre par
-/// un seau global (rafale de 30, puis une toutes les 2 s), et la ligne suivante dit combien ont été
-/// omises. Le seau des commandes écrit une ligne à son premier refus, puis au plus une par minute.
+/// puis au plus une par minute (avec le nombre d'échecs). Ces lignes passent en outre par un seau
+/// global (rafale de 30, puis une toutes les 2 s), et la ligne suivante dit combien ont été omises ;
+/// seule la ligne qui ouvre une interdiction y échappe : elle est toujours écrite, une fois par
+/// pair et par interdiction. Le seau des commandes écrit une ligne à son premier refus, puis au plus une par minute.
 /// Aucune ligne pour un 429 d'interdiction. Toute donnée du client passe par `escapeForLog`.
 ///
 /// Appelé depuis la file série du serveur HTTP ; le seau et le traqueur ont leur propre verrou.
@@ -131,10 +133,17 @@ public final class Router {
     /// ni les en-têtes : seulement le motif (constante du code), la méthode, le chemin et le pair.
     private func recordFailure(_ request: HTTPRequest, peer: String, status: Int, reason: String) {
         let result = failures.recordFailure(peer: peer)
-        guard result.shouldLog, let omitted = takeRefusalLogSlot() else { return }
+        guard result.shouldLog else { return }
+        let omitted: Int
+        if result.banStarted {
+            omitted = takeOmittedRefusalLines()
+        } else {
+            guard let slot = takeRefusalLogSlot() else { return }
+            omitted = slot
+        }
         let suffix = omitted > 0 ? " (\(omitted) ligne(s) de refus omise(s))" : ""
         if result.banned {
-            logWarn("HTTP pair \(escapeForLog(peer)) interdit pendant \(Int(Self.banDuration)) s : "
+            logWarn("HTTP pair \(Self.peerForLog(request.peer, key: peer)) interdit pendant \(Int(Self.banDuration)) s : "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s, dernier refus \(status) "
                     + "(\(escapeForLog(reason))) sur \(escapeForLog(redactingQuery(request.path)))\(suffix)")
         } else {
@@ -142,6 +151,12 @@ public final class Router {
                     + "\(escapeForLog(redactingQuery(request.path))) depuis \(escapeForLog(request.peer)) — "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s\(suffix)")
         }
+    }
+
+    /// Adresse reçue (échappée), suivie de la clé du traqueur quand elle en diffère (un /64).
+    private static func peerForLog(_ address: String, key: String) -> String {
+        let escaped = escapeForLog(address)
+        return key.hasSuffix("/64") ? "\(escaped) (\(escapeForLog(key)))" : escaped
     }
 
     private static func failureCount(_ count: Int) -> String { "\(count) échec\(count > 1 ? "s" : "")" }
@@ -154,6 +169,14 @@ public final class Router {
             omittedRefusalLines += 1
             return nil
         }
+        defer { omittedRefusalLines = 0 }
+        return omittedRefusalLines
+    }
+
+    /// Ligne écrite hors du seau global (début d'une interdiction) : rend et remet à zéro le
+    /// nombre de lignes omises, qu'elle annonce à son tour.
+    private func takeOmittedRefusalLines() -> Int {
+        logLock.lock(); defer { logLock.unlock() }
         defer { omittedRefusalLines = 0 }
         return omittedRefusalLines
     }
