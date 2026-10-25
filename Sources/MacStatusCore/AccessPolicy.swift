@@ -53,8 +53,9 @@ public enum AccessDecision: Equatable {
 ///
 /// `decide` applique ces règles, dans l'ordre :
 /// 1. `.health` → `allow` ;
-/// 2. `Host` (sans le port ni les crochets IPv6) : littéral IPv4 ou IPv6 (hors `0.0.0.0` et `::`), `localhost`,
-///    un des `localNames` ou un des `allowedHosts`, sans casse ; sinon 403 `host`.
+/// 2. `Host` (sans le port ni les crochets IPv6) : littéral IPv4 ou IPv6 (hors `0.0.0.0`, `::` et
+///    `::ffff:0.0.0.0`), `localhost`, un des `localNames` ou un des `allowedHosts`, sans casse ;
+///    sinon 403 `host`.
 ///    Un `Host` absent (HTTP/1.0) passe ; un `Host` vide ou mal formé est refusé ;
 /// 3. en-tête `Origin` présent, ou `Sec-Fetch-Site` présent et autre que `none` → 403 `origin` ;
 /// 4. méthode : GET seulement pour une commande, GET ou HEAD pour une lecture ; sinon 405 `method` ;
@@ -133,13 +134,18 @@ public struct AccessPolicy {
 
     /// Vrai si `Host` désigne le Mac par une adresse littérale ou par un nom connu.
     /// Aucune résolution DNS : un nom inconnu est refusé, quelle que soit son adresse.
-    /// Une adresse non spécifiée (`0.0.0.0`, `[::]`) ne désigne aucun hôte : refusée.
+    /// Une adresse non spécifiée (`0.0.0.0`, `[::]`, `[::ffff:0.0.0.0]`) ne désigne aucun hôte : refusée.
     func isAcceptedHost(_ value: String) -> Bool {
         guard let host = Self.hostWithoutPort(value) else { return false }
         let specified: ([UInt8]) -> Bool = { $0.contains { $0 != 0 } }
         switch host {
         case .ipv6Literal(let text):
-            return ipv6Bytes(text).map(specified) ?? false
+            guard let bytes = ipv6Bytes(text) else { return false }
+            // IPv4 mappée : c'est l'IPv4 qui doit être spécifiée (`[::ffff:0.0.0.0]`, `[::ffff:0:0]`).
+            if bytes[0..<10].allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF {
+                return specified(Array(bytes[12..<16]))
+            }
+            return specified(bytes)
         case .name(let text):
             if let bytes = ipv4Bytes(text) { return specified(bytes) }
             return acceptedNames.contains(text.lowercased())

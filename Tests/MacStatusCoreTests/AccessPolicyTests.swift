@@ -220,7 +220,10 @@ final class AccessPolicyTests: XCTestCase {
                      "[evil.example]:9090", "[192.0.2.10]:9090", "999.0.0.1", "192.0.2", "192.0.2.10.",
                      "1234.0.0.1", "+1.2.3.4", "[fe80::1%25en0]:9090", "[fe80::1%en0]", "localhost.", " localhost",
                      // Adresses non spécifiées (tâche 8, tour 1) : elles ne désignent aucun hôte.
-                     "0.0.0.0", "0.0.0.0:9090", "[::]", "[::]:9090", "[0:0:0:0:0:0:0:0]:9090"] {
+                     "0.0.0.0", "0.0.0.0:9090", "[::]", "[::]:9090", "[0:0:0:0:0:0:0:0]:9090",
+                     // Non spécifiée mappée (tâche 8, tour 2) : `::ffff:0.0.0.0`, sous toute écriture.
+                     "[::ffff:0.0.0.0]", "[::ffff:0.0.0.0]:9090", "[::ffff:0:0]", "[::FFFF:0:0]:9090",
+                     "[0:0:0:0:0:ffff:0:0]:9090"] {
             XCTAssertEqual(p.decide(requete("/wake", host: host, headers: ["x-auth-token": jeton])),
                            .deny(status: 403, reason: "host"), host)
         }

@@ -342,6 +342,77 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(redactingQuery("/wake?action=WAKE"), "/wake?…")
         XCTAssertEqual(redactingQuery("GET /off HTTP/1.1"), "GET /off HTTP/1.1")
         XCTAssertEqual(redactingQuery("?"), "?…")
+        // Tâche 8, tour 2 : `?` suivi d'un caractère combinant (un seul graphème, qui n'est pas
+        // « ? »), et `?` encodé `%3F` ou `%3f`.
+        XCTAssertEqual(redactingQuery("/wake?\u{0301}token=\(jeton)"), "/wake?…")
+        XCTAssertEqual(redactingQuery("/wake%3Ftoken=\(jeton)"), "/wake?…")
+        XCTAssertEqual(redactingQuery("/wake%3ftoken=\(jeton)"), "/wake?…")
+        XCTAssertEqual(redactingQuery("/a%3F?b"), "/a?…")
+        XCTAssertEqual(redactingQuery("/a?b%3Fc"), "/a?…")
+        XCTAssertEqual(redactingQuery("/a%3"), "/a%3")
+        XCTAssertEqual(redactingQuery("/a%2F"), "/a%2F")
+    }
+
+    func test_cheminJournalise_routeConnueSeulement() {
+        XCTAssertEqual(loggablePath("/wake"), "/wake")
+        XCTAssertEqual(loggablePath("/state"), "/state")
+        for chemin in ["/wake%3Ftoken=\(jeton)", "/inconnu/\(jeton)", "/WAKE", "/wake/", "", "/wake?token=\(jeton)"] {
+            XCTAssertEqual(loggablePath(chemin), "<inconnu>", chemin)
+        }
+    }
+
+    func test_journal_formesPiegees_neContiennentJamaisLeJeton() {
+        // Tâche 8, tour 2 : chaque forme qui faisait passer le jeton au journal DEBUG.
+        let r = routeur(jeton: jeton)
+        let tetes = [
+            "GET /wake?\u{0301}token=\(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",   // ? + combinant
+            "GET /wake%3Ftoken=\(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",         // ? encodé %3F
+            "GET /wake%3ftoken=\(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",         // ? encodé %3f
+            "X-Auth-Token: \(jeton)\r\nHost: 192.0.2.10\r\n\r\n",                       // en-tête en 1re ligne
+            "X-Auth-Token: \(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",              // idem, en trois mots
+            "GET /inconnu/\(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",              // cible inconnue
+            "GET /\(jeton) HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",                       // cible inconnue
+        ]
+        for tete in tetes {
+            let octets = Data(tete.utf8)
+            let analysee = RequestParser.parse(head: octets).map { requete -> HTTPRequest in
+                var requete = requete
+                requete.peer = "192.0.2.10"
+                return requete
+            }
+            logReceivedRequest(analysee, head: octets, peer: "192.0.2.10")
+            XCTAssertTrue([400, 404].contains(r.handle(analysee).status), tete)
+        }
+        XCTAssertEqual(capture.lines.count, tetes.count, "\(capture.lines)")
+        XCTAssertFalse(capture.lines.contains { $0.1.contains("jeton-essai") }, "\(capture.lines)")
+        XCTAssertFalse(capture.lines.contains { $0.1.contains("token") }, "\(capture.lines)")
+        // Refusée par l'analyseur : motif, méthode si elle est valide, longueur, pair.
+        let refus = capture.lines[0].1
+        XCTAssertTrue(refus.contains("invalidTarget") && refus.contains("GET") && refus.contains("octets")
+                      && refus.contains("192.0.2.10"), refus)
+        let entete = capture.lines[3].1
+        XCTAssertTrue(entete.contains("malformedRequestLine") && !entete.contains("X-Auth"), entete)
+        // Acceptée par l'analyseur, chemin inconnu : `<inconnu>`.
+        XCTAssertTrue(capture.lines[1].1.contains("GET <inconnu>"), capture.lines[1].1)
+        XCTAssertTrue(capture.lines[5].1.contains("GET <inconnu>"), capture.lines[5].1)
+    }
+
+    func test_journal_routeur_cheminDeLaRouteSeulement_jamaisLaCible() {
+        // La cible et la requête portent le jeton ; le routeur ne journalise que la route. Ce test
+        // échoue si le routeur journalise `target` (ou toute forme non réduite à la route).
+        let r = routeur(jeton: jeton)
+        func piegee(_ jetonEntete: String, pair: String) -> HTTPRequest {
+            HTTPRequest(method: "GET", target: "/wake?token=\(jeton)", path: "/wake", version: "HTTP/1.1",
+                        query: ["token": jeton], headers: ["host": "192.0.2.10:9090", "x-auth-token": jetonEntete],
+                        peer: pair, peerIsLoopback: false)
+        }
+        // Refus 401 (premier refus, puis interdiction) et refus du seau des commandes.
+        for _ in 0..<10 { XCTAssertEqual(r.handle(piegee("faux", pair: "192.0.2.10")).status, 401) }
+        let codes = (0..<11).map { _ in r.handle(piegee(jeton, pair: "192.0.2.20")).status }
+        XCTAssertEqual(codes.last, 429)
+        XCTAssertEqual(avertissements.count, 3, "\(avertissements)")
+        XCTAssertTrue(avertissements.allSatisfy { $0.contains("/wake") }, "\(avertissements)")
+        XCTAssertFalse(avertissements.contains { $0.contains("jeton-essai") || $0.contains("?") }, "\(avertissements)")
     }
 
     func test_journal_requeteMalFormee_neContientJamaisLeJeton() {
@@ -363,7 +434,10 @@ final class RouterTests: XCTestCase {
             XCTAssertEqual(r.handle(analysee).status, 400, tete)
         }
         XCTAssertEqual(capture.lines.count, tetes.count)
-        XCTAssertTrue(capture.lines.allSatisfy { $0.1.contains("/off?…") }, "\(capture.lines)")
+        // Ni la cible ni la ligne de requête : seulement le motif, la méthode, la longueur, le pair.
+        XCTAssertTrue(capture.lines.allSatisfy { $0.1.hasPrefix("HTTP refusée (") && $0.1.contains("octets") },
+                      "\(capture.lines)")
+        XCTAssertFalse(capture.lines.contains { $0.1.contains("/off") }, "\(capture.lines)")
         XCTAssertFalse(capture.lines.contains { $0.1.contains("jeton-essai") }, "\(capture.lines)")
         XCTAssertFalse(capture.lines.contains { $0.1.contains("\u{1B}") })
     }

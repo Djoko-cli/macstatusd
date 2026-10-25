@@ -29,7 +29,8 @@ public protocol EngineFacade: AnyObject {
 /// global (rafale de 30, puis une toutes les 2 s), et la ligne suivante dit combien ont été omises ;
 /// seule la ligne qui ouvre une interdiction y échappe : elle est toujours écrite, une fois par
 /// pair et par interdiction. Le seau des commandes écrit une ligne à son premier refus, puis au plus une par minute.
-/// Aucune ligne pour un 429 d'interdiction. Toute donnée du client passe par `escapeForLog`.
+/// Aucune ligne pour un 429 d'interdiction. Le chemin écrit est celui de la route (`Route`), jamais
+/// la cible reçue ; toute autre donnée du client passe par `escapeForLog`.
 ///
 /// Appelé depuis la file série du serveur HTTP ; le seau et le traqueur ont leur propre verrou.
 public final class Router {
@@ -88,7 +89,9 @@ public final class Router {
         if failures.isBanned(peer: peer) { return Self.tooManyRequests }
 
         if case .deny(let status, let reason) = policy.decide(request) {
-            if status == 401 || status == 403 { recordFailure(request, peer: peer, status: status, reason: reason) }
+            if status == 401 || status == 403 {
+                recordFailure(request, route: route, peer: peer, status: status, reason: reason)
+            }
             return Self.denial(status: status, routeClass: routeClass)
         }
 
@@ -97,7 +100,7 @@ public final class Router {
         }
 
         if routeClass == .command, !commandBucket.take() {
-            noteBucketRefusal(request)
+            noteBucketRefusal(request, route: route)
             return Self.tooManyRequests
         }
 
@@ -129,9 +132,10 @@ public final class Router {
 
     // MARK: - Journal borné
 
-    /// Note un refus d'accès et l'écrit au journal si le traqueur le demande. Jamais le jeton
-    /// ni les en-têtes : seulement le motif (constante du code), la méthode, le chemin et le pair.
-    private func recordFailure(_ request: HTTPRequest, peer: String, status: Int, reason: String) {
+    /// Note un refus d'accès et l'écrit au journal si le traqueur le demande. Jamais le jeton,
+    /// la cible ni les en-têtes : seulement le motif (constante du code), la méthode, la route
+    /// (valeur de `Route`, jamais le chemin reçu) et le pair.
+    private func recordFailure(_ request: HTTPRequest, route: Route, peer: String, status: Int, reason: String) {
         let result = failures.recordFailure(peer: peer)
         guard result.shouldLog else { return }
         let omitted: Int
@@ -145,10 +149,10 @@ public final class Router {
         if result.banned {
             logWarn("HTTP pair \(Self.peerForLog(request.peer, key: peer)) interdit pendant \(Int(Self.banDuration)) s : "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s, dernier refus \(status) "
-                    + "(\(escapeForLog(reason))) sur \(escapeForLog(redactingQuery(request.path)))\(suffix)")
+                    + "(\(escapeForLog(reason))) sur \(route.rawValue)\(suffix)")
         } else {
             logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(escapeForLog(request.method, limit: 16)) "
-                    + "\(escapeForLog(redactingQuery(request.path))) depuis \(escapeForLog(request.peer)) — "
+                    + "\(route.rawValue) depuis \(escapeForLog(request.peer)) — "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s\(suffix)")
         }
     }
@@ -182,8 +186,8 @@ public final class Router {
     }
 
     /// Commande refusée par le seau : une ligne au premier refus, puis au plus une par minute,
-    /// avec le nombre de commandes refusées depuis la précédente.
-    private func noteBucketRefusal(_ request: HTTPRequest) {
+    /// avec le nombre de commandes refusées depuis la précédente. La route, jamais la cible.
+    private func noteBucketRefusal(_ request: HTTPRequest, route: Route) {
         logLock.lock()
         bucketRefusalsSinceLog += 1
         let now = clock.monotonic()
@@ -197,7 +201,7 @@ public final class Router {
         guard due else { return }
         logWarn("HTTP 429 : débit des commandes dépassé (\(Int(Self.commandRate))/s, rafale de \(Self.commandBurst)), "
                 + "\(count) commande(s) refusée(s) depuis la dernière ligne ; dernière : "
-                + "\(escapeForLog(redactingQuery(request.path))) depuis \(escapeForLog(request.peer))")
+                + "\(route.rawValue) depuis \(escapeForLog(request.peer))")
     }
 
     private static func allow(for routeClass: RouteClass) -> String {
