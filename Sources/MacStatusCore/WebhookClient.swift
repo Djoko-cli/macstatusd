@@ -107,19 +107,20 @@ public final class WebhookClient: StatePublisher {
         sendIfIdle()
     }
 
-    /// Prévient `completion` dès que l'état voulu est confirmé (`true`), que
-    /// l'envoi est abandonné ou que `timeout` secondes se sont écoulées (`false`).
-    /// Si rien n'est à livrer, `completion` part tout de suite avec `true`.
+    /// Prévient `done` dès que l'état voulu est confirmé (`true`), que l'envoi est abandonné
+    /// ou que `timeout` secondes se sont écoulées (`false`). Si rien n'est à livrer, `done`
+    /// part tout de suite avec `true`. `done` est appelé exactement une fois, et l'attente est
+    /// retirée de la liste à l'échéance.
     ///
-    /// Ne bloque jamais : c'est un rappel, pas une attente. Le client partage la
-    /// file du moteur, et une attente bloquante l'empêcherait de recevoir la
-    /// réponse qu'elle attend. `completion` s'exécute sur la file du moteur.
-    public func waitForDelivery(timeout: TimeInterval, then completion: @escaping (Bool) -> Void) {
+    /// Ne bloque jamais : c'est un rappel, pas une attente. Le client partage la file du
+    /// moteur, et une attente bloquante l'empêcherait de recevoir la réponse qu'elle attend.
+    /// `done` s'exécute sur la file du moteur.
+    public func notifyWhenDelivered(timeout: Double, _ done: @escaping (Bool) -> Void) {
         guard enabled, let desired, desired != confirmed else {
-            completion(true)
+            done(true)
             return
         }
-        let waiter = DeliveryWaiter(completion)
+        let waiter = DeliveryWaiter(done)
         waiters.append(waiter)
         waiter.timeout = scheduler.schedule(after: timeout) { [weak self, weak waiter] in
             guard let self, let waiter else { return }
@@ -127,6 +128,9 @@ public final class WebhookClient: StatePublisher {
             waiter.finish(false)
         }
     }
+
+    /// Attentes de livraison en cours (diagnostic et tests).
+    var pendingDeliveryNotifications: Int { waiters.count }
 
     private func sendIfIdle() {
         guard !inFlight, let state = desired else { return }

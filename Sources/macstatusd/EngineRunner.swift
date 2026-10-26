@@ -78,12 +78,10 @@ final class EngineRunner: EngineFacade {
         watcher.onWillSleep = { [weak self] allow in
             guard let self else { allow(); return }
             dispatchPrecondition(condition: .onQueue(queue))
-            // Comme avant l'extraction : la veille n'est autorisée qu'une fois
-            // l'état OFF livré à Homebridge, ou après 1,5 s au plus. L'attente est
-            // un rappel : elle ne bloque pas la file, qui doit recevoir la réponse.
-            core.willSleep { [webhook] in
-                webhook.waitForDelivery(timeout: 1.5) { _ in allow() }
-            }
+            // La veille n'est autorisée qu'une fois l'état OFF livré à Homebridge, ou
+            // après 1,5 s au plus : `willSleep` attend par `notifyWhenDelivered`, un
+            // rappel qui ne bloque pas la file (elle doit recevoir la réponse).
+            core.willSleep(allow)
         }
 
         watcher.onEvent = { [weak self] event in

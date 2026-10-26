@@ -146,17 +146,65 @@ final class FakeActions: CommandActions {
     func stopScreenSaver() { appels.append(.stopScreenSaver) }
 }
 
-/// Publieur simulé : garde chaque état publié, avec son drapeau `force`.
+/// Publieur simulé : garde chaque état publié, avec son drapeau `force`, et simule la
+/// livraison comme le client webhook.
+///
+/// Un appel à `publish` n'est un *envoi* (`envois`) que si l'état diffère de l'état confirmé,
+/// ou avec `force`. Par défaut, chaque envoi est confirmé aussitôt. Avec `livraisonManuelle`,
+/// il reste en attente jusqu'à `livrer()` (confirmé) ou `terminerSansLivrer()` (échec définitif
+/// ou délai écoulé) : les tests pilotent ainsi le moment où `notifyWhenDelivered` rappelle.
 final class FakePublisher: StatePublisher {
     struct Publication: Equatable {
         let etat: Bool
         let force: Bool
     }
 
+    /// Chaque appel à `publish`, envoyé ou non.
     private(set) var publications: [Publication] = []
+    /// Les appels qu'un client réel aurait transmis.
+    private(set) var envois: [Publication] = []
+    var livraisonManuelle = false
+    private(set) var voulu: Bool?
+    private(set) var confirme: Bool?
+    /// Délai passé à chaque `notifyWhenDelivered`, dans l'ordre.
+    private(set) var delaisDemandes: [Double] = []
+    private var attentes: [(Bool) -> Void] = []
+
+    /// Attentes de livraison pas encore rappelées.
+    var attentesEnCours: Int { attentes.count }
 
     func publish(_ state: Bool, force: Bool) {
         publications.append(Publication(etat: state, force: force))
+        voulu = state
+        guard force || state != confirme else { return }
+        envois.append(Publication(etat: state, force: force))
+        confirme = livraisonManuelle ? nil : state
+    }
+
+    func notifyWhenDelivered(timeout: Double, _ done: @escaping (Bool) -> Void) {
+        delaisDemandes.append(timeout)
+        guard let voulu, voulu != confirme else {
+            done(true)
+            return
+        }
+        attentes.append(done)
+    }
+
+    /// L'état voulu est confirmé : les attentes rappellent `true`, une fois chacune.
+    func livrer() {
+        confirme = voulu
+        terminer(true)
+    }
+
+    /// Échec définitif ou délai écoulé : les attentes rappellent `false`, une fois chacune.
+    func terminerSansLivrer() {
+        terminer(false)
+    }
+
+    private func terminer(_ livre: Bool) {
+        let enCours = attentes
+        attentes.removeAll()
+        enCours.forEach { $0(livre) }
     }
 
     var statusDictionary: [String: Any] { ["faux": true] }

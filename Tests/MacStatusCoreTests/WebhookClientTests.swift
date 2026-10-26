@@ -218,7 +218,7 @@ final class WebhookClientTests: XCTestCase {
     func test_attente_riefALivrer_repondTouDeSuite() {
         let client = creerClient()
         var resultat: Bool?
-        client.waitForDelivery(timeout: 1.5) { resultat = $0 }
+        client.notifyWhenDelivered(timeout: 1.5) { resultat = $0 }
         XCTAssertEqual(resultat, true)
     }
 
@@ -227,7 +227,7 @@ final class WebhookClientTests: XCTestCase {
         let client = creerClient()
         client.publish(false, force: false)
         var reponses: [Bool] = []
-        client.waitForDelivery(timeout: 1.5) { reponses.append($0) }
+        client.notifyWhenDelivered(timeout: 1.5) { reponses.append($0) }
         XCTAssertTrue(reponses.isEmpty, "rien tant que l'envoi est en vol")
 
         transport.terminerEnAttente()
@@ -241,7 +241,7 @@ final class WebhookClientTests: XCTestCase {
         let client = creerClient()
         client.publish(false, force: false)
         var reponses: [Bool] = []
-        client.waitForDelivery(timeout: 1.5) { reponses.append($0) }
+        client.notifyWhenDelivered(timeout: 1.5) { reponses.append($0) }
 
         planificateur.runDue(at: 1.4)
         XCTAssertTrue(reponses.isEmpty)
@@ -252,6 +252,26 @@ final class WebhookClientTests: XCTestCase {
         XCTAssertEqual(reponses, [false])
     }
 
+    func test_attente_retireeALEcheance() {
+        transport.differe = true
+        let client = creerClient()
+        client.publish(false, force: false)
+        var reponses: [Bool] = []
+        client.notifyWhenDelivered(timeout: 1.5) { reponses.append($0) }
+        client.notifyWhenDelivered(timeout: 3) { reponses.append($0) }
+        XCTAssertEqual(client.pendingDeliveryNotifications, 2)
+
+        planificateur.runDue(at: 1.5)
+        XCTAssertEqual(reponses, [false])
+        XCTAssertEqual(client.pendingDeliveryNotifications, 1)
+
+        transport.terminerEnAttente()
+        XCTAssertEqual(reponses, [false, true])
+        XCTAssertEqual(client.pendingDeliveryNotifications, 0)
+        planificateur.runDue(at: 10)
+        XCTAssertEqual(reponses, [false, true])
+    }
+
     func test_attente_echecDefinitif_repondFauxSansAttendreLeDelai() {
         transport.reponseParDefaut = .failed(detail: "hors ligne")
         let client = creerClient(essais: 0)
@@ -260,7 +280,7 @@ final class WebhookClientTests: XCTestCase {
         transport.differe = true
         client.publish(false, force: false)
         var reponses: [Bool] = []
-        client.waitForDelivery(timeout: 1.5) { reponses.append($0) }
+        client.notifyWhenDelivered(timeout: 1.5) { reponses.append($0) }
         transport.terminerEnAttente()
         XCTAssertEqual(reponses, [false])
     }
@@ -283,7 +303,7 @@ final class WebhookClientTests: XCTestCase {
         var reponse: Bool?
         file.async {
             client.publish(false, force: false)
-            client.waitForDelivery(timeout: 1.5) {
+            client.notifyWhenDelivered(timeout: 1.5) {
                 reponse = $0
                 terminee.fulfill()
             }

@@ -28,6 +28,13 @@ public final class EngineCore {
 
     private var facts = Facts()
     private var systemAsleep = false
+    /// Instant monotone de la dernière veille annoncée par `willSleep`, effacé au réveil.
+    private var sleepStartedAt: Double?
+
+    /// Délai maximal d'attente de la livraison OFF avant d'autoriser la veille.
+    static let sleepDeliveryTimeout: Double = 1.5
+    /// En deçà de cette durée de veille, le réveil ne force pas la republication.
+    static let longSleepThreshold: Double = 30
 
     private var published: Bool?
     private var publishedReason = "startup"
@@ -162,7 +169,9 @@ public final class EngineCore {
         return (true, "desktop-ui")
     }
 
-    private func evaluate(immediate: Bool, force: Bool = false) {
+    /// Vrai si l'évaluation a appelé le publieur.
+    @discardableResult
+    private func evaluate(immediate: Bool, force: Bool = false) -> Bool {
         let now = clock.monotonic()
         let factual = factsVerdict()
         var resolved = factual
@@ -201,7 +210,7 @@ public final class EngineCore {
         let stableFor = (now - candidateSince) * 1000
         let settled = bypassSettle || stableFor >= Double(settleMS)
 
-        guard settled else { return }
+        guard settled else { return false }
 
         if published != resolved.state {
             let previous = published
@@ -212,10 +221,20 @@ public final class EngineCore {
             logInfo("état \(previous.map { $0 ? "ON" : "OFF" } ?? "—") → "
                     + "\(resolved.state ? "ON" : "OFF") (\(resolved.reason)) — faits: \(factsSummary())")
             publisher.publish(resolved.state, force: false)
+            return true
         } else if force, let state = published {
             publishedReason = resolved.reason
             publisher.publish(state, force: true)
+            return true
         }
+        return false
+    }
+
+    /// Redemande l'état publié, sans `force` : le publieur n'envoie que si l'état confirmé
+    /// diffère (envoi perdu, abandonné ou encore en vol), et ne fait rien sinon.
+    private func ensurePublished() {
+        guard let state = published else { return }
+        publisher.publish(state, force: false)
     }
 
     /// Une commande dont les faits ne confirment pas l'effet est réessayée une
@@ -241,26 +260,63 @@ public final class EngineCore {
 
     // MARK: - Événements système
 
-    /// Veille imminente : OFF est publié avant le gel du daemon, puis `allow()`
-    /// est appelé, une fois, avant le retour. C'est à l'appelant d'y attendre la
-    /// livraison de l'état s'il le souhaite (l'exécuteur le fait, borné à 1,5 s).
+    /// Veille imminente. OFF est publié tout de suite, puis `allow` est appelé une fois la
+    /// livraison confirmée, ou au plus tard après `sleepDeliveryTimeout` (1,5 s). L'attente est
+    /// un rappel (`notifyWhenDelivered`) : `willSleep` rend la main aussitôt et la file reste
+    /// libre de recevoir la réponse du webhook. OFF déjà confirmé : rien n'est envoyé et `allow`
+    /// part sans attendre.
+    ///
+    /// La commande en cours est oubliée : la veille l'emporte sur elle, et un ON en attente ne
+    /// doit pas être publié au moment où le Mac s'endort.
     public func willSleep(_ allow: @escaping () -> Void) {
         logInfo("veille imminente → publication OFF avant gel du daemon")
         systemAsleep = true
+        sleepStartedAt = clock.monotonic()
         intent = nil
         refreshFacts()
-        evaluate(immediate: true)
-        allow()
+        if !evaluate(immediate: true) {
+            // OFF était déjà publié : on s'assure seulement qu'il est confirmé.
+            ensurePublished()
+        }
+        publisher.notifyWhenDelivered(timeout: Self.sleepDeliveryTimeout) { delivered in
+            if delivered {
+                logInfo("veille : OFF confirmé → veille autorisée")
+            } else {
+                logWarn("veille : OFF non confirmé en \(Self.sleepDeliveryTimeout) s → veille autorisée quand même")
+            }
+            allow()
+        }
     }
 
     public func handle(_ event: SystemEvent) {
         switch event {
         case .systemDidWake:
+            // La commande en cours est gardée : un /wake réveille le Mac, et ce réveil ne doit
+            // pas effacer la commande qui l'a causé (elle s'escalade et attend les faits).
+            let now = clock.monotonic()
+            let slept = sleepStartedAt.map { now - $0 }
+            sleepStartedAt = nil
             systemAsleep = false
-            intent = nil
             saver.noteNotification(active: false)
             refreshFacts()
-            evaluate(immediate: true, force: true)
+            // Après une veille longue, Homebridge a pu perdre l'état : on le force. Après une
+            // veille courte (ou de durée inconnue : second avis de réveil), on ne renvoie que si
+            // l'état confirmé diffère. Les trous de scrutation restent rattrapés par `tick()`.
+            let long = slept.map { $0 >= Self.longSleepThreshold } ?? false
+            if let slept {
+                logInfo("réveil après \(String(format: "%.1f", slept)) s de veille"
+                        + (long ? " → republication forcée" : ""))
+            }
+            if !evaluate(immediate: true, force: long) {
+                ensurePublished()
+            }
+        case .systemWillNotSleep:
+            // Veille annulée : ni réveil ni nouvel état. La commande en cours et la notification
+            // de l'économiseur restent ; l'état revient par le lissage habituel.
+            systemAsleep = false
+            sleepStartedAt = nil
+            refreshFacts()
+            evaluate(immediate: false)
         case .screenSaverDidStart:
             saver.noteNotification(active: true)
             refreshFacts()

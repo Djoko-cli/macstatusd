@@ -4,7 +4,9 @@ import IOKit
 import MacStatusCore
 
 // iokit_common_msg(x) == 0xE0000000 | x — les macros IOMessage.h ne sont pas
-// exposées à Swift, on les redéclare.
+// exposées à Swift, on les redéclare. Valeurs vérifiées le 26/10/2026 par un témoin C
+// compilé contre le SDK (printf des macros kIOMessage*) : 0xE0000270, 0xE0000280,
+// 0xE0000290, 0xE0000300, 0xE0000320.
 private let messageCanSystemSleep: UInt32 = 0xE000_0270
 private let messageSystemWillSleep: UInt32 = 0xE000_0280
 private let messageSystemWillNotSleep: UInt32 = 0xE000_0290
@@ -38,11 +40,18 @@ final class PowerWatcher {
     var onWillSleep: ((_ allow: @escaping () -> Void) -> Void)?
     var onEvent: ((SystemEvent) -> Void)?
 
+    /// Délai du garde‑fou : la veille n'est jamais retenue plus longtemps.
+    private static let sleepGuardDelay: Double = 2.0
+    /// Un `NSWorkspace.didWake` reçu moins de 5 s après un réveil IOKit est un doublon.
+    private static let workspaceWakeDedupWindow: Double = 5.0
+
     private let queue: DispatchQueue
+    private let clock = SystemClock()
     private var rootPort: io_connect_t = 0
     private var notifyPort: IONotificationPortRef?
     private var notifier: io_object_t = 0
-    private var pendingSleepAcknowledged = Set<Int>()
+    /// Instant monotone du dernier réveil IOKit (`HasPoweredOn`) transmis au moteur.
+    private var lastIOKitWakeAt: Double?
     private var observers: [NSObjectProtocol] = []
 
     init(queue: DispatchQueue) {
@@ -67,7 +76,9 @@ final class PowerWatcher {
         logInfo("surveillance IOKit de l'alimentation active")
     }
 
+    /// Rappelé par IOKit sur `queue` (`IONotificationPortSetDispatchQueue`).
     fileprivate func handle(messageType: UInt32, argument: UnsafeMutableRawPointer?) {
+        dispatchPrecondition(condition: .onQueue(queue))
         let notificationID = Int(bitPattern: argument)
 
         switch messageType {
@@ -77,45 +88,55 @@ final class PowerWatcher {
 
         case messageSystemWillSleep:
             logInfo("IOKit: veille imminente")
-            guard let onWillSleep else {
+            // Une seule autorisation par veille, que la demande vienne du moteur (livraison
+            // confirmée ou délai de 1,5 s) ou du garde‑fou : la seconde est sans effet.
+            let acknowledgement = OnceCallback { [weak self] in
+                guard let self else { return }
                 IOAllowPowerChange(rootPort, notificationID)
+            }
+            guard let onWillSleep else {
+                acknowledgement.run()
                 return
             }
-            pendingSleepAcknowledged.remove(notificationID)
             let allow: () -> Void = { [weak self] in
-                self?.queue.async { self?.acknowledgeSleep(notificationID) }
+                // Au prochain tour de file, jamais depuis l'intérieur du rappel IOKit.
+                self?.queue.async { acknowledgement.run() }
             }
             onWillSleep(allow)
             // Garde‑fou : ne jamais retenir la veille plus de 2 s.
-            queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                self?.acknowledgeSleep(notificationID)
+            queue.asyncAfter(deadline: .now() + Self.sleepGuardDelay) {
+                if acknowledgement.run() {
+                    logWarn("IOKit: garde‑fou de \(Self.sleepGuardDelay) s → veille autorisée sans réponse du moteur")
+                }
             }
 
-        case messageSystemWillPowerOn, messageSystemHasPoweredOn:
+        case messageSystemWillPowerOn:
+            // Le réveil n'est pas encore fait (les pilotes se rallument) : seul
+            // HasPoweredOn le confirme.
+            logDebug("IOKit: réveil en cours (WillPowerOn)")
+
+        case messageSystemHasPoweredOn:
             logInfo("IOKit: réveil système")
+            lastIOKitWakeAt = clock.monotonic()
             onEvent?(.systemDidWake)
 
         case messageSystemWillNotSleep:
             logInfo("IOKit: veille annulée")
-            onEvent?(.systemDidWake)
+            onEvent?(.systemWillNotSleep)
 
         default:
             break
         }
     }
 
-    private func acknowledgeSleep(_ notificationID: Int) {
-        guard !pendingSleepAcknowledged.contains(notificationID) else { return }
-        pendingSleepAcknowledged.insert(notificationID)
-        if pendingSleepAcknowledged.count > 32 { pendingSleepAcknowledged.removeAll() }
-        IOAllowPowerChange(rootPort, notificationID)
-    }
-
     // MARK: - Notifications AppKit / distribuées
 
     private func startNotifications() {
         let workspace = NSWorkspace.shared.notificationCenter
-        observe(workspace, NSWorkspace.didWakeNotification, .systemDidWake)
+        observers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification,
+                                               object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.workspaceDidWake() }
+        })
         observe(workspace, NSWorkspace.screensDidSleepNotification, .screensDidSleep)
         observe(workspace, NSWorkspace.screensDidWakeNotification, .screensDidWake)
         observe(workspace, NSWorkspace.sessionDidBecomeActiveNotification, .sessionActive)
@@ -136,6 +157,21 @@ final class PowerWatcher {
         observe(distributed, NSNotification.Name("com.apple.screensaver.didstop"), .screenSaverDidStop)
         observe(distributed, NSNotification.Name("com.apple.screenIsLocked"), .screenLocked)
         observe(distributed, NSNotification.Name("com.apple.screenIsUnlocked"), .screenUnlocked)
+    }
+
+    /// `NSWorkspace.didWake` double le réveil IOKit ; il ne sert que si IOKit s'est tu.
+    private func workspaceDidWake() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        if let last = lastIOKitWakeAt {
+            let elapsed = clock.monotonic() - last
+            if elapsed < Self.workspaceWakeDedupWindow {
+                logDebug("NSWorkspace: réveil ignoré, réveil IOKit traité il y a "
+                         + "\(String(format: "%.1f", elapsed)) s")
+                return
+            }
+        }
+        logDebug("événement système: \(SystemEvent.systemDidWake.rawValue) (NSWorkspace)")
+        onEvent?(.systemDidWake)
     }
 
     private func observe(_ center: NotificationCenter, _ name: NSNotification.Name, _ event: SystemEvent) {

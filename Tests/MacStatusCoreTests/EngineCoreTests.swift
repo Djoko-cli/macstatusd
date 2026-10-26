@@ -484,6 +484,285 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
     }
 
+    // MARK: - Veille et réveil (tâche 13)
+
+    /// Client webhook réel sur un transport simulé : la livraison et les délais sont pilotés
+    /// par le test (`terminerEnAttente`, `runDue`).
+    private func clientWebhook(_ transport: FakeTransport, _ planificateur: TestScheduler) -> WebhookClient {
+        var config = Config()
+        config.enabled = true
+        config.webhookBaseURL = "http://192.0.2.10:51828/"
+        config.accessoryID = "mac"
+        return WebhookClient(config: config, transport: transport, scheduler: planificateur, clock: horloge)
+    }
+
+    private func moteur(publieur autre: StatePublisher) -> EngineCore {
+        let config = Config()
+        let oracle = ScreenSaverOracle(
+            minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
+            dismissOnInput: config.saverDismissOnInput,
+            dismissGrace: Double(config.saverDismissGraceMS) / 1000,
+            redisplayIdle: Double(config.saverRedisplayIdleSeconds),
+            signals: signaux
+        )
+        return EngineCore(config: config, clock: horloge, signals: signaux, oracle: oracle,
+                          actions: actions, publisher: autre)
+    }
+
+    /// F11 : `/wake` réveille le Mac, puis IOKit annonce le réveil. Ce réveil n'efface plus la
+    /// commande ON : elle tient l'état ON, s'escalade et attend la confirmation des faits.
+    func test_reveilPendantUneCommandeOn_conserveLIntention() {
+        let core = moteur()
+        core.start()
+        core.willSleep {}
+        XCTAssertFalse(core.currentState)
+        horloge.advance(40)
+
+        // La commande arrive au sortir de la veille, écran encore éteint.
+        signaux.etatEcran.asleep = true
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertTrue(core.currentState)
+
+        core.handle(.systemDidWake)
+        XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "on")
+        XCTAssertEqual(commandeEnAttente(core)?["age_seconds"] as? Int, 0)
+        XCTAssertTrue(core.currentState)
+        // Le réveil système n'ajoute aucune action.
+        XCTAssertEqual(actions.appels, [.wake])
+
+        // L'écran reste éteint : la commande tient ON et s'escalade à 2,5 s.
+        for _ in 0..<5 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(actions.appels, [.wake, .wake])
+        XCTAssertEqual(commandeEnAttente(core)?["escalated"] as? Bool, true)
+
+        // L'écran se rallume : les faits confirment la commande.
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("commande on confirmée par les faits"))
+        XCTAssertTrue(core.currentState)
+    }
+
+    /// F12 : `kIOMessageSystemWillNotSleep` (veille annulée) n'est pas un réveil. Il lève la
+    /// veille, s'il y en avait une, par une évaluation lissée, sans effacer la commande en
+    /// cours ni oublier une notification `didstart` de l'économiseur.
+    func test_veilleAnnulee_neToucheNiIntentionNiNotification() {
+        // Commande en cours : intacte.
+        let core = moteur()
+        core.start()
+        core.requestOff(source: "essai")
+        scruter(core, 0.5)
+        let avant = publieur.publications
+        core.handle(.systemWillNotSleep)
+        XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/screensaver")
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(publieur.publications, avant)
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
+
+        // Notification de l'économiseur : intacte (l'oracle des fenêtres ne tranche pas).
+        signaux = Self.signauxDeBureau()
+        signaux.fenetreEconomiseur = .unavailable
+        publieur = FakePublisher()
+        let autre = moteur()
+        autre.start()
+        autre.handle(.screenSaverDidStart)
+        scruter(autre, 0.5)
+        scruter(autre, 0.5)
+        XCTAssertFalse(autre.currentState)
+        XCTAssertEqual(autre.statusSnapshot()["reason"] as? String, "screensaver:notification")
+        let publicationsAvant = publieur.publications
+        autre.handle(.systemWillNotSleep)
+        for _ in 0..<4 { scruter(autre, 0.5) }
+        XCTAssertFalse(autre.currentState)
+        XCTAssertEqual(autre.statusSnapshot()["reason"] as? String, "screensaver:notification")
+        XCTAssertEqual(publieur.publications, publicationsAvant)
+
+        // Après une veille annoncée : la veille est levée, mais par le lissage (300 ms), sans
+        // publication forcée.
+        signaux = Self.signauxDeBureau()
+        publieur = FakePublisher()
+        let troisieme = moteur()
+        troisieme.start()
+        troisieme.willSleep {}
+        XCTAssertFalse(troisieme.currentState)
+        troisieme.handle(.systemWillNotSleep)
+        XCTAssertFalse(troisieme.currentState, "évaluation non immédiate")
+        scruter(troisieme, 0.5)
+        XCTAssertTrue(troisieme.currentState)
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
+                                               Publication(etat: false, force: false),
+                                               Publication(etat: true, force: false)])
+    }
+
+    /// F39 : l'attente de la livraison OFF ne bloque plus la file. `willSleep` rend la main
+    /// tout de suite ; `allow` part à l'échéance de 1,5 s, une seule fois, même si la
+    /// livraison arrive ensuite.
+    func test_veille_attenteAsynchrone_allowAppeleUneSeuleFois() {
+        let planificateur = TestScheduler(clock: horloge)
+        let transport = FakeTransport(clock: horloge)
+        transport.differe = true
+        let client = clientWebhook(transport, planificateur)
+        let core = moteur(publieur: client)
+        core.start()
+        transport.terminerEnAttente()
+        XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "1")
+
+        var autorisations = 0
+        let debut = horloge.t
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(autorisations, 0, "willSleep rend la main avant la livraison")
+        XCTAssertEqual(transport.requetes.count, 2)
+        XCTAssertTrue(transport.requetes.last?.url.absoluteString.hasSuffix("state=false") ?? false)
+
+        planificateur.runDue(at: debut + 1.4)
+        XCTAssertEqual(autorisations, 0)
+        planificateur.runDue(at: debut + 1.5)
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertEqual(client.pendingDeliveryNotifications, 0)
+
+        // La livraison tardive, puis le temps qui passe, ne rappellent pas une seconde fois.
+        transport.terminerEnAttente()
+        planificateur.runDue(at: debut + 10)
+        XCTAssertEqual(autorisations, 1)
+    }
+
+    /// Ruling R19 (1) : OFF est publié avant `allow()`, et `allow()` attend la confirmation.
+    func test_veille_offPublieAvantAllow_allowALaLivraison() {
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+
+        var autorisations = 0
+        var publieeAuMomentDAllow: Publication?
+        core.willSleep { [publieur] in
+            autorisations += 1
+            publieeAuMomentDAllow = publieur?.publications.last
+        }
+        XCTAssertEqual(publieur.envois.last, Publication(etat: false, force: false))
+        XCTAssertEqual(publieur.delaisDemandes, [1.5])
+        XCTAssertEqual(autorisations, 0, "pas d'autorisation avant la confirmation")
+
+        publieur.livrer()
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertEqual(publieeAuMomentDAllow, Publication(etat: false, force: false))
+        publieur.terminerSansLivrer()
+        XCTAssertEqual(autorisations, 1)
+    }
+
+    /// Décision 3 : OFF déjà confirmé, la veille n'envoie rien et n'attend pas.
+    func test_veille_offDejaConfirme_aucunEnvoi() {
+        // Faux publieur : aucun envoi, autorisation immédiate.
+        signaux.etatEcran.asleep = true
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+        XCTAssertEqual(publieur.envois, [Publication(etat: false, force: false)])
+
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertEqual(publieur.envois, [Publication(etat: false, force: false)])
+        XCTAssertEqual(publieur.attentesEnCours, 0)
+
+        // Client réel : aucune requête, aucun délai planifié.
+        let planificateur = TestScheduler(clock: horloge)
+        let transport = FakeTransport(clock: horloge)
+        let client = clientWebhook(transport, planificateur)
+        let reel = moteur(publieur: client)
+        reel.start()
+        XCTAssertEqual(transport.requetes.count, 1)
+        var autorisationsReelles = 0
+        reel.willSleep { autorisationsReelles += 1 }
+        XCTAssertEqual(autorisationsReelles, 1)
+        XCTAssertEqual(transport.requetes.count, 1)
+        XCTAssertEqual(planificateur.pending, 0)
+    }
+
+    /// F74 : une veille de moins de 30 s ne force pas la republication au réveil ; à 30 s,
+    /// si.
+    func test_reveilApresVeilleCourte_pasDePublicationForcee() {
+        let core = moteur()
+        core.start()
+
+        core.willSleep {}
+        horloge.advance(29.5)
+        core.handle(.systemDidWake)
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
+                                               Publication(etat: false, force: false),
+                                               Publication(etat: true, force: false)])
+
+        // Sans transition au réveil (écran resté éteint), on voit le drapeau `force` : il part
+        // à 30 s de veille…
+        signaux.etatEcran.asleep = true
+        core.willSleep {}
+        horloge.advance(30)
+        core.handle(.systemDidWake)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
+
+        // … et un second avis de réveil (NSWorkspace, plus de 5 s après IOKit) ne force rien.
+        var avant = publieur.publications.count
+        horloge.advance(6)
+        core.handle(.systemDidWake)
+        XCTAssertFalse(publieur.publications.dropFirst(avant).contains { $0.force })
+
+        // … mais pas à 29,5 s.
+        avant = publieur.publications.count
+        core.willSleep {}
+        horloge.advance(29.5)
+        core.handle(.systemDidWake)
+        XCTAssertFalse(core.currentState)
+        XCTAssertFalse(publieur.publications.dropFirst(avant).contains { $0.force })
+    }
+
+    /// Au réveil court, un état publié mais non confirmé repart, sans `force`.
+    func test_reveilCourt_etatNonConfirme_estRenvoyeSansForce() {
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+        core.willSleep {}
+        publieur.terminerSansLivrer()   // OFF jamais confirmé avant le gel
+
+        horloge.advance(5)
+        signaux.etatEcran.asleep = true // l'écran reste éteint au réveil : l'état reste OFF
+        core.handle(.systemDidWake)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: false))
+        XCTAssertFalse(publieur.publications.contains { $0.force })
+        XCTAssertEqual(publieur.envois.last, Publication(etat: false, force: false))
+        XCTAssertEqual(publieur.envois.count, 3)
+    }
+
+    /// Décision 4 : le garde-fou du veilleur et le rappel de livraison partagent un rappel
+    /// unique. Si le garde-fou passe d'abord, la livraison tardive n'autorise pas une seconde
+    /// fois la veille.
+    func test_gardeFouPuisLivraisonTardive_uneSeuleAutorisation() {
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+
+        var autorisations = 0
+        let accord = OnceCallback { autorisations += 1 }
+        core.willSleep { accord.run() }
+        XCTAssertEqual(autorisations, 0)
+
+        // Garde-fou de 2 s du veilleur : il autorise la veille.
+        XCTAssertTrue(accord.run())
+        XCTAssertEqual(autorisations, 1)
+        // La livraison arrive ensuite : le second appel est sans effet.
+        publieur.livrer()
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertFalse(accord.run())
+        XCTAssertTrue(accord.hasRun)
+    }
+
     // MARK: - Diagnostic
 
     /// Ruling R6 : le contexte de session vient des signaux, pas de CoreGraphics.
