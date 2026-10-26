@@ -197,7 +197,7 @@ final class WebhookClientTests: XCTestCase {
         XCTAssertEqual(client.statusDictionary["failures_since_success"] as? Int, 0)
     }
 
-    func test_nouvelEtatPendantLeReessai_partTouDeSuite_etLeReessaiPerimeNeFaitRien() {
+    func test_nouvelEtatPendantLeReessai_partToutDeSuite_etLeReessaiPerimeNeFaitRien() {
         transport.script = [.failed(detail: "échec")]
         let client = creerClient()
         client.publish(true, force: false)
@@ -236,7 +236,7 @@ final class WebhookClientTests: XCTestCase {
 
     // MARK: - Attente de livraison avant la veille
 
-    func test_attente_rienALivrer_repondTouDeSuite() {
+    func test_attente_rienALivrer_repondToutDeSuite() {
         let client = creerClient()
         var resultat: Bool?
         client.notifyWhenDelivered(timeout: 1.5) { resultat = $0 }
@@ -771,7 +771,7 @@ final class WebhookClientTests: XCTestCase {
     // MARK: - Tâche 15 : attente de livraison (ajouts 3 et 4)
 
     /// Ajout 3 : aucune cible, client désactivé ou URL inutilisable : `false` tout de suite.
-    func test_attente_aucuneCibleOuRienAEnvoyer_repondFauxTouDeSuite() {
+    func test_attente_aucuneCibleOuRienAEnvoyer_repondFauxToutDeSuite() {
         var reponses: [Bool] = []
         creerClient(actif: false).notifyWhenDelivered(timeout: 2) { reponses.append($0) }
         creerClient(cibles: []).notifyWhenDelivered(timeout: 2) { reponses.append($0) }

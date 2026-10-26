@@ -23,8 +23,13 @@ final class LoggingTests: XCTestCase {
     }
 
     func test_sansRecepteur_rienNEstEcritEtRienNePlante() {
+        let capture = CaptureLog()
+        CoreLog.sink = capture
+        logInfo("capté")
+        XCTAssertEqual(capture.lines.count, 1, "le récepteur branché reçoit bien")
         CoreLog.sink = nil
-        logError("perdu"); logInfo("perdu aussi")
+        logError("perdu"); logWarn("perdu"); logInfo("perdu aussi"); logDebug("perdu encore")
+        XCTAssertEqual(capture.lines.map { $0.1 }, ["capté"], "rien n'est capté une fois le récepteur retiré")
     }
 
     /// `off_command` / `wake_command` au journal : l'exécutable (échappé) et le nombre d'arguments,

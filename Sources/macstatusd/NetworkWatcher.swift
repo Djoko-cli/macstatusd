@@ -21,13 +21,11 @@ final class NetworkWatcher {
 
     var onAvailable: (() -> Void)?
 
+    /// Pas de `stop()` : la surveillance dure jusqu'à la sortie du processus (l'avis reçu pendant
+    /// l'arrêt est ignoré par l'exécuteur et le moteur).
     func start() {
         monitor.pathUpdateHandler = { [weak self] path in self?.handle(path) }
         monitor.start(queue: queue)
-    }
-
-    func stop() {
-        monitor.cancel()
     }
 
     private func handle(_ path: NWPath) {

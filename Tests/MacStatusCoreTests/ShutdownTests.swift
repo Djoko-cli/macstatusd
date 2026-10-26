@@ -161,7 +161,7 @@ final class ShutdownTests: XCTestCase {
         XCTAssertEqual(ShutdownGuard.forcedExitDelay, 3)
     }
 
-    func test_secondSignal_sortTouDeSuite() {
+    func test_secondSignal_sortToutDeSuite() {
         let planificateur = TestScheduler()
         let sorties = Counter()
         let garde = garde(planificateur, sorties)

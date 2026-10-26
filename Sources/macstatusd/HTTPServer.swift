@@ -49,7 +49,6 @@ final class HTTPServer {
     private var listener: NWListener?
     private var restartDelay: TimeInterval = 1
     private var restartScheduled = false
-    private var stopped = false
     /// Épisode `.waiting` déjà journalisé : plus de ligne jusqu'au prochain `.ready`, même si
     /// le listener neuf retombe en attente.
     private var waitingLogged = false
@@ -67,20 +66,10 @@ final class HTTPServer {
         self.router = router
     }
 
+    /// Il n'y a pas de `stop()` : l'écoute dure jusqu'à la sortie du processus, après le OFF d'arrêt
+    /// (le moteur ne publie que tant que le port est détenu : la fermer avant bloquerait ce OFF).
     func start() {
-        queue.async { [self] in
-            stopped = false
-            createListener()
-        }
-    }
-
-    func stop() {
-        queue.async { [self] in
-            stopped = true
-            listener?.cancel()
-            listener = nil
-            report(.stopped)
-        }
+        queue.async { [self] in createListener() }
     }
 
     /// Annonce l'état de l'écoute, une seule fois par changement.
@@ -113,7 +102,6 @@ final class HTTPServer {
 
     private func createListener() {
         restartScheduled = false
-        guard !stopped else { return }
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             logError("port \(port) invalide")
             report(.invalidPort)
@@ -173,7 +161,7 @@ final class HTTPServer {
                     logDebug("listener de nouveau en attente: \(error)")
                 }
                 queue.asyncAfter(deadline: .now() + waitingTimeout) { [weak self, weak newListener] in
-                    guard let self, let newListener, !stopped,
+                    guard let self, let newListener,
                           listener === newListener, listenerWaiting, waitingEpisode == episode else { return }
                     logDebug("listener en attente depuis \(Int(waitingTimeout)) s → nouvelle écoute")
                     listener = nil
@@ -190,10 +178,8 @@ final class HTTPServer {
             case .cancelled:
                 report(.stopped)
                 listener = nil
-                if !stopped {
-                    logWarn("listener annulé")
-                    scheduleRestart()
-                }
+                logWarn("listener annulé")
+                scheduleRestart()
             default:
                 break
             }
@@ -211,7 +197,7 @@ final class HTTPServer {
 
     /// Idempotent : une seule reprise planifiée à la fois.
     private func scheduleRestart() {
-        guard !stopped, !restartScheduled else { return }
+        guard !restartScheduled else { return }
         restartScheduled = true
         let delay = restartDelay
         restartDelay = min(restartDelay * 2, 30)
@@ -220,7 +206,7 @@ final class HTTPServer {
             // Jamais deux listeners : rien à faire si un autre a pris la place entre-temps.
             guard let self else { return }
             restartScheduled = false
-            guard !stopped, listener == nil else { return }
+            guard listener == nil else { return }
             createListener()
         }
     }
