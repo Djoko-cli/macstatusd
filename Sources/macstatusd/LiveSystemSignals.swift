@@ -33,6 +33,8 @@ final class LiveSystemSignals: SystemSignals {
     func session() -> SessionState {
         var state = SessionState()
         var evidence: [String] = []
+        var consoleUsers: [[String: Any]]?
+        let cgSession = CGSessionCopyCurrentDictionary() as? [String: Any]
 
         // 1. IORegistry : fonctionne aussi depuis un LaunchDaemon hors session.
         if registryRoot != 0 {
@@ -40,28 +42,22 @@ final class LiveSystemSignals: SystemSignals {
                 state.locked = true
                 evidence.append("IOConsoleLocked")
             }
-            if let sessions = registryProperty("IOConsoleUsers") as? [[String: Any]] {
-                let console = sessions.first { ($0["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue == true }
-                if let console {
-                    // La console est-elle celle de l'utilisateur du daemon ? Un daemon resté dans une
-                    // session passée en arrière-plan (changement rapide d'utilisateur) ne l'est pas.
-                    // Root n'a pas de session à lui : toute console compte. Propriétaire illisible :
-                    // on ne bloque pas par erreur.
-                    let owner = (console["kCGSSessionUserIDKey"] as? NSNumber)?.uint32Value
-                    state.onConsole = getuid() == 0 || owner == nil || owner == getuid()
-                    if (console["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
-                        state.loggedIn = true
-                    }
-                    if (console["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true {
-                        state.locked = true
-                        evidence.append("IOConsoleUsers")
-                    }
+            consoleUsers = registryProperty("IOConsoleUsers") as? [[String: Any]]
+            if let console = consoleUsers?.first(where: {
+                ($0[ConsoleOwnership.onConsoleKey] as? NSNumber)?.boolValue == true
+            }) {
+                if (console["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
+                    state.loggedIn = true
+                }
+                if (console["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true {
+                    state.locked = true
+                    evidence.append("IOConsoleUsers")
                 }
             }
         }
 
         // 2. Session graphique courante : disponible quand on tourne dans Aqua.
-        if let dict = CGSessionCopyCurrentDictionary() as? [String: Any] {
+        if let dict = cgSession {
             if (dict["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
                 state.loggedIn = true
             }
@@ -71,10 +67,34 @@ final class LiveSystemSignals: SystemSignals {
             }
         }
 
+        // 3. La session est-elle à la console ? Décision pure du cœur : le registre d'abord, puis la
+        //    session graphique, puis le laisser-passer (un registre muet ne doit pas bloquer la publication).
+        let console = ConsoleOwnership.decide(consoleUsers: consoleUsers, cgSession: cgSession, uid: getuid())
+        state.onConsole = console.onConsole
+        noteConsoleSource(console)
+
         if !evidence.isEmpty { state.evidence = evidence.joined(separator: "+") }
         else if state.locked { state.evidence = "unknown" }
         else { state.evidence = "unlocked" }
         return state
+    }
+
+    /// Dernier verdict de console journalisé : une ligne par changement de source ou de valeur, pas une
+    /// par scrutation.
+    private var lastConsoleVerdict: ConsoleOwnership.Verdict?
+
+    private func noteConsoleSource(_ verdict: ConsoleOwnership.Verdict) {
+        guard verdict != lastConsoleVerdict else { return }
+        lastConsoleVerdict = verdict
+        switch verdict.source {
+        case .registry:
+            logDebug("console : IOConsoleUsers répond (session \(verdict.onConsole ? "à la console" : "hors console"))")
+        case .cgSession:
+            logDebug("console : IOConsoleUsers muet, repli sur CGSession "
+                     + "(session \(verdict.onConsole ? "à la console" : "hors console"))")
+        case .none:
+            logDebug("console : ni IOConsoleUsers ni CGSession ne répondent → session tenue pour la console")
+        }
     }
 
     private func registryProperty(_ key: String) -> Any? {

@@ -110,11 +110,11 @@ final class EngineRunner: EngineFacade {
 
     // MARK: - Détention du port
 
-    /// Le serveur HTTP détient (`true`) ou ne détient plus (`false`) son port : le moteur ne publie
-    /// qu'à cette condition (et si la session est à la console). L'avis arrive de la file du
-    /// serveur ; il est transmis sur celle du moteur, sans rien bloquer.
-    func listenerReadyChanged(_ ready: Bool) {
-        queue.async { [self] in core.setListenerReady(ready) }
+    /// État de l'écoute du serveur HTTP : le moteur ne publie que si le serveur détient son port
+    /// (et si la session est à la console). L'avis arrive de la file du serveur ; il est transmis sur
+    /// celle du moteur, sans rien bloquer.
+    func listenerStatusChanged(_ status: ListenerStatus) {
+        queue.async { [self] in core.setListenerStatus(status) }
     }
 
     // MARK: - Événements système

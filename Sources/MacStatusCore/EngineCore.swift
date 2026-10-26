@@ -15,7 +15,7 @@ import Foundation
 ///
 /// **Une seule instance publie.** Rien ne part vers les cibles (état, battement de cœur,
 /// resynchronisation, réessais, OFF de veille ou d'arrêt) tant que deux conditions ne sont pas
-/// réunies : le serveur HTTP détient son port (`setListenerReady`, annoncé par l'exécuteur) et
+/// réunies : le serveur HTTP détient son port (`setListenerStatus`, annoncé par l'exécuteur) et
 /// la session est à la console (`Facts.onConsole`, relue à chaque rafraîchissement des faits). Une
 /// seconde instance lancée par erreur, ou un daemon resté dans une session sans console, calcule
 /// son état pour elle-même mais n'envoie rien. Au retour de l'autorisation, l'état courant est
@@ -78,9 +78,8 @@ public final class EngineCore {
 
     // MARK: Autorisation de publier (tâche 16)
 
-    /// Ce que le serveur HTTP a annoncé de son écoute : `true` à `.ready`, `false` en attente,
-    /// en échec ou annulé, `nil` tant qu'il n'a rien dit.
-    private var listenerReady: Bool?
+    /// Ce que le serveur HTTP a annoncé de son écoute ; `nil` tant qu'il n'a rien dit.
+    private var listenerStatus: ListenerStatus?
     /// Les faits ont été lus au moins une fois (`onConsole` n'a de sens qu'ensuite).
     private var factsRead = false
     /// Dernier verdict journalisé ; `nil` avant la première lecture des faits.
@@ -89,6 +88,11 @@ public final class EngineCore {
     private var everAuthorized = false
     /// L'autorisation vient de revenir : la prochaine publication part en `force`, une seule fois.
     private var resumePending = false
+    /// Intervalle minimal entre deux publications forcées de reprise : une écoute qui oscille
+    /// (`.ready` / `.waiting`) ne doit pas inonder les cibles. Un retour trop proche attend l'échéance.
+    static let resumeForceMinInterval: Double = 2
+    /// Instant monotone de la dernière publication forcée de reprise ; `nil` : aucune encore.
+    private var lastResumeForceAt: Double?
     /// Miroir de l'état de suspension demandé au publieur (il démarre non suspendu).
     private var publisherSuspended = false
 
@@ -219,12 +223,12 @@ public final class EngineCore {
 
     // MARK: - Autorisation de publier
 
-    /// Le serveur HTTP détient (`true`) ou ne détient plus (`false`) son port. Appelé depuis la
-    /// file du moteur. Sans effet si l'annonce ne change rien. Au retour à vrai (la session étant à
-    /// la console), l'état courant est publié en `force`, une seule fois.
-    public func setListenerReady(_ ready: Bool) {
-        guard !isShutDown, listenerReady != ready else { return }
-        listenerReady = ready
+    /// Annonce l'état de l'écoute du serveur HTTP. Appelé depuis la file du moteur. Sans effet si
+    /// l'annonce ne change rien. Au retour à `.ready` (la session étant à la console), l'état courant
+    /// est publié en `force`, une seule fois, et au plus toutes les 2 s si l'écoute oscille.
+    public func setListenerStatus(_ status: ListenerStatus) {
+        guard !isShutDown, listenerStatus != status else { return }
+        listenerStatus = status
         updateAuthorization()
         resumeIfNeeded()
     }
@@ -233,8 +237,8 @@ public final class EngineCore {
     public var publishingAllowed: Bool { authorizationVerdict().allowed }
 
     private func authorizationVerdict() -> (allowed: Bool, reason: String) {
-        guard let listenerReady else { return (false, "écoute en cours") }
-        guard listenerReady else { return (false, "port occupé") }
+        guard let listenerStatus else { return (false, "écoute en cours") }
+        guard listenerStatus == .ready else { return (false, listenerStatus.blockedReason) }
         guard factsRead else { return (false, "faits non lus") }
         guard facts.onConsole else { return (false, "session hors console") }
         return (true, "prêt")
@@ -264,20 +268,35 @@ public final class EngineCore {
     }
 
     /// Seul point de sortie vers le publieur : rien ne part sans autorisation. La première
-    /// publication après un retour d'autorisation est forcée, quelle que soit son origine.
+    /// publication après un retour d'autorisation est forcée, quelle que soit son origine, sauf si la
+    /// dernière reprise forcée date de moins de 2 s : elle reste alors en attente (`resumePending`)
+    /// et la publication part sans `force`.
     private func emit(_ state: Bool, force: Bool) {
         guard publishingAllowed else { return }
-        let forced = force || resumePending
-        if resumePending {
+        let resumeDue = resumePending && resumeForceIsDue()
+        let forced = force || resumeDue
+        if resumeDue {
             logDebug("publication de l'état \(state ? "1" : "0") en force au retour de l'autorisation")
         }
-        resumePending = false
+        if forced, resumePending {
+            // Une publication forcée, d'où qu'elle vienne, tient lieu de reprise.
+            resumePending = false
+            lastResumeForceAt = clock.monotonic()
+        }
         publisher.publish(state, force: forced)
     }
 
-    /// Retour d'autorisation sans autre publication en route : l'état courant part en `force`.
+    /// Le plancher de 2 s entre deux reprises forcées est-il passé ?
+    private func resumeForceIsDue() -> Bool {
+        guard let last = lastResumeForceAt else { return true }
+        return clock.monotonic() - last >= Self.resumeForceMinInterval
+    }
+
+    /// Retour d'autorisation sans autre publication en route : l'état courant part en `force`,
+    /// pourvu que le plancher entre deux reprises forcées soit passé (sinon, à la scrutation suivante).
     private func resumeIfNeeded() {
-        guard resumePending, publishingAllowed, !isShutDown, let state = published else { return }
+        guard resumePending, publishingAllowed, !isShutDown, let state = published,
+              resumeForceIsDue() else { return }
         emit(state, force: true)
     }
 

@@ -41,11 +41,11 @@ final class EngineCoreTests: XCTestCase {
     }
 
     /// Moteur câblé comme l'exécuteur le câble, mais sur les faux. `ecoute` : ce que le serveur HTTP
-    /// a annoncé de son port (`true` : détenu, `false` : occupé, `nil` : rien encore). Sans port
+    /// a annoncé de son port (`.ready` : détenu, `.portBusy` : occupé, `nil` : rien encore). Sans port
     /// détenu, le moteur ne publie rien (tâche 16).
-    private func moteur(_ config: Config = Config(), ecoute: Bool? = true) -> EngineCore {
+    private func moteur(_ config: Config = Config(), ecoute: ListenerStatus? = .ready) -> EngineCore {
         let core = moteurBrut(config)
-        if let ecoute { core.setListenerReady(ecoute) }
+        if let ecoute { core.setListenerStatus(ecoute) }
         return core
     }
 
@@ -809,7 +809,7 @@ final class EngineCoreTests: XCTestCase {
 
     private func moteur(publieur autre: StatePublisher) -> EngineCore {
         let core = moteurBrut(publieur: autre)
-        core.setListenerReady(true)
+        core.setListenerStatus(.ready)
         return core
     }
 
@@ -1553,7 +1553,7 @@ final class EngineCoreTests: XCTestCase {
     /// son état pour lui-même, mais rien ne part vers les cibles. Ni état, ni battement de cœur,
     /// ni resynchronisation, ni commande, ni événement, ni scrutation.
     func test_publicationBloquee_tantQueListenerPasPret() {
-        let core = moteur(ecoute: false)
+        let core = moteur(ecoute: .portBusy)
         core.start()
         XCTAssertEqual(publieur.publications, [], "pas d'état initial annoncé sans le port")
         XCTAssertEqual(core.currentState, true, "l'état local reste calculé")
@@ -1579,25 +1579,26 @@ final class EngineCoreTests: XCTestCase {
     /// Au retour du port, l'état courant (celui calculé pendant le blocage) est publié en `force`,
     /// une seule fois : répéter l'annonce, ou scruter ensuite, n'ajoute rien.
     func test_publicationReprise_forceAuRetour() {
-        let core = moteur(ecoute: false)
+        let core = moteur(ecoute: .portBusy)
         core.start()
         signaux.etatEcran.asleep = true
         scruter(core, 0.5); scruter(core, 1.0)
         XCTAssertEqual(publieur.publications, [])
 
-        core.setListenerReady(true)
+        core.setListenerStatus(.ready)
         XCTAssertEqual(publieur.publications, [Publication(etat: false, force: true)],
                        "l'état courant (OFF) est publié en force dès le retour du port")
-        core.setListenerReady(true)
+        core.setListenerStatus(.ready)
         scruter(core, 0.5)
         scruter(core, 0.5)
         XCTAssertEqual(publieur.publications, [Publication(etat: false, force: true)],
                        "une seule publication, même si l'annonce se répète")
         XCTAssertEqual(publieur.suspensions, [true, false], "suspendu au départ, levé au retour du port")
 
-        // Oscillation : chaque retour publie une fois, jamais plus.
-        core.setListenerReady(false)
-        core.setListenerReady(true)
+        // Oscillation espacée de plus de 2 s : chaque retour publie une fois, jamais plus.
+        scruter(core, 2.0)
+        core.setListenerStatus(.portBusy)
+        core.setListenerStatus(.ready)
         XCTAssertEqual(publieur.suspensions, [true, false, true, false])
         XCTAssertEqual(publieur.publications.count, 2)
         XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
@@ -1609,13 +1610,100 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         core.start()
         XCTAssertEqual(publieur.suspensions, [], "autorisé dès le départ : rien à suspendre")
-        core.setListenerReady(false)
+        core.setListenerStatus(.portBusy)
         XCTAssertEqual(publieur.suspensions, [true])
-        core.setListenerReady(false)
+        core.setListenerStatus(.portBusy)
         XCTAssertEqual(publieur.suspensions, [true], "pas de répétition")
-        core.setListenerReady(true)
+        core.setListenerStatus(.ready)
         XCTAssertEqual(publieur.suspensions, [true, false])
         XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: true))
+    }
+
+    /// Lot 3, point 2 : si l'écoute oscille `.ready` / `.waiting`, la reprise forcée est espacée d'au
+    /// moins 2 s. Un retour trop proche attend (il n'est pas perdu) et part, forcé, à la scrutation qui
+    /// suit l'échéance.
+    func test_oscillationDeLEcoute_repriseForceeEspaceeDeDeuxSecondes() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false)])
+
+        core.setListenerStatus(.waiting)
+        core.setListenerStatus(.ready)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: true))
+        XCTAssertEqual(publieur.publications.filter { $0.force }.count, 1, "première reprise : tout de suite")
+
+        // Oscillations dans les 2 s qui suivent : aucune nouvelle publication forcée.
+        for _ in 0..<3 {
+            scruter(core, 0.25)
+            core.setListenerStatus(.waiting)
+            core.setListenerStatus(.ready)
+        }
+        scruter(core, 0.5)
+        XCTAssertEqual(publieur.publications.filter { $0.force }.count, 1,
+                       "pas de seconde reprise forcée avant 2 s (0,5 + 3 × 0,25 s = 1,25 s écoulées)")
+        scruter(core, 0.5)
+        XCTAssertEqual(publieur.publications.filter { $0.force }.count, 1, "1,75 s écoulées")
+
+        // À l'échéance, la reprise retenue part, une seule fois.
+        scruter(core, 0.25)
+        XCTAssertEqual(publieur.publications.filter { $0.force }.count, 2, "2 s écoulées : la reprise retenue part")
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: true))
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertEqual(publieur.publications.filter { $0.force }.count, 2, "une seule, malgré les oscillations")
+    }
+
+    /// Un retour d'écoute retenu par le plancher est abandonné si l'écoute retombe avant l'échéance :
+    /// rien ne part pendant le blocage, et le prochain vrai retour repart du plancher.
+    func test_oscillationDeLEcoute_repriseRetenueAbandonneeSiBloque() {
+        let core = moteur()
+        core.start()
+        core.setListenerStatus(.waiting)
+        core.setListenerStatus(.ready)            // reprise forcée n° 1
+        scruter(core, 0.5)
+        core.setListenerStatus(.waiting)
+        core.setListenerStatus(.ready)            // retenue
+        core.setListenerStatus(.waiting)          // bloquée avant l'échéance
+        let avant = publieur.publications.count
+        scruter(core, 3.0)
+        XCTAssertEqual(publieur.publications.count, avant, "rien ne part tant que l'écoute est en attente")
+        core.setListenerStatus(.ready)            // 3,5 s après la n° 1
+        XCTAssertEqual(publieur.publications.count, avant + 1)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: true))
+    }
+
+    /// Lot 3, point 7 : la raison du blocage dit ce que le serveur a annoncé, sans tout appeler
+    /// « port occupé ».
+    func test_raisonDuBlocage_distingueLesEtatsDeLEcoute() {
+        let attendu: [(ListenerStatus, String)] = [
+            (.waiting, "écoute en attente"),
+            (.portBusy, "port occupé"),
+            (.failed, "écoute en échec"),
+            (.stopped, "écoute arrêtée"),
+            (.invalidPort, "port invalide"),
+        ]
+        for (statut, raison) in attendu {
+            let core = moteur(ecoute: statut)
+            core.start()
+            XCTAssertEqual(core.statusSnapshot()["publishing_allowed"] as? Bool, false, raison)
+            XCTAssertEqual(core.statusSnapshot()["publishing_reason"] as? String, raison)
+            XCTAssertTrue(journalContient("publication bloquée : \(raison)"), raison)
+        }
+        let pret = moteur(ecoute: .ready)
+        pret.start()
+        XCTAssertEqual(pret.statusSnapshot()["publishing_reason"] as? String, "prêt")
+    }
+
+    /// Passer d'un blocage à un autre change la raison journalisée, une fois, sans lever le blocage.
+    func test_changementDeRaisonDeBlocage_estJournalise() {
+        let core = moteur(ecoute: .waiting)
+        core.start()
+        core.setListenerStatus(.portBusy)
+        XCTAssertTrue(journalContient("publication bloquée : écoute en attente"))
+        XCTAssertTrue(journalContient("publication bloquée : port occupé"))
+        XCTAssertEqual(core.statusSnapshot()["publishing_reason"] as? String, "port occupé")
+        core.setListenerStatus(.portBusy)
+        XCTAssertEqual(lignesDuJournal(contenant: "publication bloquée : port occupé"), 1)
     }
 
     /// La session quitte la console (changement rapide d'utilisateur) : rien ne part, puis la
@@ -1649,13 +1737,13 @@ final class EngineCoreTests: XCTestCase {
 
     /// Une ligne INFO à chaque changement d'autorisation, avec sa raison : jamais une par scrutation.
     func test_autorisation_uneLigneParChangement() {
-        let core = moteur(ecoute: false)
+        let core = moteur(ecoute: .portBusy)
         core.start()
         for _ in 0..<5 { scruter(core, 0.5) }
         XCTAssertEqual(lignesDuJournal(contenant: "publication bloquée"), 1)
         XCTAssertTrue(journalContient("publication bloquée : port occupé"))
 
-        core.setListenerReady(true)
+        core.setListenerStatus(.ready)
         for _ in 0..<5 { scruter(core, 0.5) }
         XCTAssertEqual(lignesDuJournal(contenant: "publication autorisée"), 1)
         XCTAssertTrue(journalContient("publication autorisée : prêt"))
@@ -1682,7 +1770,7 @@ final class EngineCoreTests: XCTestCase {
     /// Règle 1 : une instance qui n'a jamais été autorisée n'a rien annoncé, elle ne publie pas OFF
     /// en partant.
     func test_arret_instanceJamaisAutorisee_neFaitRien() {
-        let core = moteur(ecoute: false)
+        let core = moteur(ecoute: .portBusy)
         core.start()
         var termines = 0
         core.shutdown(publishOff: true) { termines += 1 }
@@ -1721,7 +1809,7 @@ final class EngineCoreTests: XCTestCase {
     /// une livraison qui ne viendra pas.
     func test_veille_publicationBloquee_autoriseAussitot() {
         publieur.livraisonManuelle = true
-        let core = moteur(ecoute: false)
+        let core = moteur(ecoute: .portBusy)
         core.start()
         var autorisations = 0
         core.willSleep { autorisations += 1 }
@@ -1755,7 +1843,7 @@ final class EngineCoreTests: XCTestCase {
         let avant = transport.requetes.count
         XCTAssertGreaterThan(avant, 1)
 
-        core.setListenerReady(false)
+        core.setListenerStatus(.portBusy)
         planificateur.runDue(at: horloge.t + 600)
         client.networkBecameAvailable()
         core.heartbeat()
@@ -1763,7 +1851,7 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(transport.requetes.count, avant, "rien ne part : ni réessai lent, ni réseau, ni battement")
 
         transport.reponseParDefaut = .delivered(status: 200)
-        core.setListenerReady(true)
+        core.setListenerStatus(.ready)
         XCTAssertEqual(transport.requetes.count, avant + 1, "une seule requête au retour, en force")
         XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "1")
         planificateur.runDue(at: horloge.t + 600)

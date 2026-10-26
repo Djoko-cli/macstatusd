@@ -15,9 +15,10 @@ import MacStatusCore
 ///   écoute avec un délai croissant (1 s, doublé jusqu'à 30 s) ; `.waiting` → une ligne par
 ///   épisode, puis `cancel()` et nouvelle écoute au bout de 5 s si l'état n'a pas changé.
 ///
-/// - **Détention du port** : l'adaptateur annonce à `onListenerReadyChange` (sur sa file) si le
-///   listener est prêt (`.ready` → vrai ; `.waiting`, `.failed`, `.cancelled`, création impossible,
-///   arrêt → faux). Le moteur ne publie rien tant que le port n'est pas détenu (tâche 16).
+/// - **Détention du port** : l'adaptateur annonce à `onListenerStatusChange` (sur sa file) l'état du
+///   listener (`ListenerStatus`) : prêt, en attente, port occupé (`EADDRINUSE`), en échec, arrêté ou
+///   port invalide. Le moteur ne publie rien tant que l'état n'est pas `.ready` (tâche 16), et
+///   journalise la raison exacte du blocage.
 ///
 /// Tout s'exécute sur une seule file série (`queue`) : listener, connexions, minuteries et
 /// routage. La lecture est asynchrone (`NWConnection.receive` rend la main aussitôt et rappelle
@@ -40,10 +41,10 @@ final class HTTPServer {
                                             maxPerPeer: ConnectionLimiter.defaultMaxPerPeer)
     private let refusalLog = PeriodicLogGate(period: 60, clock: SystemClock())
 
-    /// Appelé sur la file de l'adaptateur à chaque changement de détention du port (sans répétition).
+    /// Appelé sur la file de l'adaptateur à chaque changement d'état de l'écoute (sans répétition).
     /// À brancher avant `start()`.
-    var onListenerReadyChange: ((Bool) -> Void)?
-    private var reportedReady: Bool?
+    var onListenerStatusChange: ((ListenerStatus) -> Void)?
+    private var reportedStatus: ListenerStatus?
 
     private var listener: NWListener?
     private var restartDelay: TimeInterval = 1
@@ -78,15 +79,22 @@ final class HTTPServer {
             stopped = true
             listener?.cancel()
             listener = nil
-            reportReady(false)
+            report(.stopped)
         }
     }
 
-    /// Annonce la détention (ou la perte) du port, une seule fois par changement.
-    private func reportReady(_ ready: Bool) {
-        guard reportedReady != ready else { return }
-        reportedReady = ready
-        onListenerReadyChange?(ready)
+    /// Annonce l'état de l'écoute, une seule fois par changement.
+    private func report(_ status: ListenerStatus) {
+        guard reportedStatus != status else { return }
+        reportedStatus = status
+        onListenerStatusChange?(status)
+    }
+
+    /// État à annoncer pour une erreur du listener : « port occupé » seulement pour `EADDRINUSE`
+    /// (un autre processus, souvent une seconde instance, détient le port) ; sinon `otherwise`.
+    static func status(for error: NWError, otherwise: ListenerStatus) -> ListenerStatus {
+        if case .posix(let code) = error, code == .EADDRINUSE { return .portBusy }
+        return otherwise
     }
 
     private func makeParameters() -> NWParameters {
@@ -108,7 +116,7 @@ final class HTTPServer {
         guard !stopped else { return }
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             logError("port \(port) invalide")
-            reportReady(false)
+            report(.invalidPort)
             return
         }
 
@@ -124,7 +132,8 @@ final class HTTPServer {
             }
         } catch {
             logError("création du listener impossible: \(error)")
-            reportReady(false)
+            let nwError = error as? NWError
+            report(nwError.map { Self.status(for: $0, otherwise: .failed) } ?? .failed)
             scheduleRestart()
             return
         }
@@ -144,10 +153,10 @@ final class HTTPServer {
                 waitingLogged = false
                 let actual = newListener.port?.rawValue ?? port
                 logInfo("serveur HTTP à l'écoute sur \(listenAddress.description(port: actual))")
-                reportReady(true)
+                report(.ready)
             case .waiting(let error):
                 // Le port n'est pas (ou plus) détenu : le moteur cesse de publier.
-                reportReady(false)
+                report(Self.status(for: error, otherwise: .waiting))
                 // Déjà en attente : l'état ne change pas, le délai de 5 s court toujours.
                 guard !listenerWaiting else {
                     logDebug("listener toujours en attente: \(error)")
@@ -174,12 +183,12 @@ final class HTTPServer {
                 }
             case .failed(let error):
                 logError("listener en échec: \(error)")
-                reportReady(false)
+                report(Self.status(for: error, otherwise: .failed))
                 listener = nil
                 newListener.cancel()
                 scheduleRestart()
             case .cancelled:
-                reportReady(false)
+                report(.stopped)
                 listener = nil
                 if !stopped {
                     logWarn("listener annulé")
