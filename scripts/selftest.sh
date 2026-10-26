@@ -10,9 +10,10 @@
 #   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks (GET), un autre celui du
 #     webhook de Home Assistant (POST JSON, réponse 200 sans corps) ; un troisième, lancé en retard,
 #     joue un Home Assistant revenu après une panne (section 11) ;
-#   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
-#     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
-#     /off ne touche jamais l'écran du Mac ;
+#   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999 passé aussi en
+#     ligne de commande (--port) : en mode dégradé, le port du fichier est ignoré et le défaut 9090
+#     serait pris, à côté du daemon réel ; commandes inertes (/usr/bin/true) et sans escalade : un
+#     /on ou un /off ne touche jamais l'écran du Mac ;
 #   - MACSTATUSD_SUPPORT_DIR pointe vers un dossier temporaire pour tous les processus lancés : aucun
 #     ne lit ni ne consomme le vrai marqueur « restart-pending » de ~/Library/Application Support ;
 #   - les cas « sigterm-off » et « sigterm-marqueur » (section 10) arrêtent leurs propres instances (H
@@ -447,16 +448,16 @@ python3 "$WORK/hbmock.py" $PORT_HB > "$WORK/hook.log" 2>&1 &
 PIDS+=($!)
 python3 "$WORK/hamock.py" $PORT_HA > "$WORK/ha.log" 2>&1 &
 PIDS+=($!)
-"$BIN" --config "$WORK/a.json" > "$WORK/a.out" 2>&1 &
+"$BIN" --config "$WORK/a.json" --port $PORT_A > "$WORK/a.out" 2>&1 &
 PIDS+=($!)
-"$BIN" --config "$WORK/b.json" > "$WORK/b.out" 2>&1 &
+"$BIN" --config "$WORK/b.json" --port $PORT_B > "$WORK/b.out" 2>&1 &
 PIDS+=($!)
 
 # Lecture initiale (--once) : les sections qui exigent un écran allumé et une
 # session déverrouillée n'ont de sens que si c'est le cas.
 ECRAN_ETEINT=0
 RAISON_SAUT=""
-ONCE_JSON="$("$BIN" --config "$WORK/a.json" --once 2>/dev/null)"
+ONCE_JSON="$("$BIN" --config "$WORK/a.json" --port $PORT_A --once 2>/dev/null)"
 ETAT_INITIAL="$(printf '%s' "$ONCE_JSON" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -625,7 +626,7 @@ s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(5)
 PY
 PIDS+=($!)
 sleep 0.5
-"$BIN" --config "$WORK/c.json" > "$WORK/c.out" 2>&1 &
+"$BIN" --config "$WORK/c.json" --port $PORT_C > "$WORK/c.out" 2>&1 &
 PIDS+=($!)
 sleep 2
 if grep -q "Address already in use" "$WORK/c.log"; then ok "conflit de port détecté sans crash"; else bad "conflit de port non journalisé"; fi
@@ -704,7 +705,7 @@ else
 fi
 
 # Instance D liée à « :: » : lancée ici, arrêtée dès son message d'écoute lu.
-"$BIN" --config "$WORK/d.json" > "$WORK/d.out" 2>&1 &
+"$BIN" --config "$WORK/d.json" --port $PORT_D > "$WORK/d.out" 2>&1 &
 PID_D=$!
 PIDS+=($PID_D)
 if await_http $PORT_D 10; then ok "message-ecoute : instance « :: » joignable par 127.0.0.1"; else bad "message-ecoute : instance « :: » injoignable par 127.0.0.1"; fi
@@ -728,7 +729,7 @@ mode_octal() { stat -f '%Lp' "$1" 2>/dev/null || echo "absent"; }
 
 # journal-supprime : le fichier disparaît pendant que l'instance tourne ; l'inode est comparé toutes
 # les 100 écritures, puis le fichier est recréé (mode 600).
-"$BIN" --config "$WORK/f.json" > "$WORK/f.out" 2>&1 &
+"$BIN" --config "$WORK/f.json" --port $PORT_F > "$WORK/f.out" 2>&1 &
 PID_F=$!
 PIDS+=($PID_F)
 if await_http $PORT_F 10; then ok "journal-supprime : instance démarrée"; else bad "journal-supprime : instance injoignable"; fi
@@ -742,7 +743,7 @@ arreter_pid "$PID_F"
 
 # journal-rotation : taille de rotation réduite (variable d'essai) ; au plus 5 générations.
 MAX_ROTATION=20000
-MACSTATUSD_LOG_MAX_BYTES=$MAX_ROTATION "$BIN" --config "$WORK/g.json" > "$WORK/g.out" 2>&1 &
+MACSTATUSD_LOG_MAX_BYTES=$MAX_ROTATION "$BIN" --config "$WORK/g.json" --port $PORT_G > "$WORK/g.out" 2>&1 &
 PID_G=$!
 PIDS+=($PID_G)
 if await_http $PORT_G 10; then ok "journal-rotation : instance démarrée"; else bad "journal-rotation : instance injoignable"; fi
@@ -775,7 +776,7 @@ mkfifo "$WORK/e.fifo"
 head -1 < "$WORK/e.fifo" > "$WORK/e.head" &
 PID_HEAD=$!
 PIDS+=($PID_HEAD)
-"$BIN" --config "$WORK/e.json" -f > "$WORK/e.fifo" 2>&1 &
+"$BIN" --config "$WORK/e.json" --port $PORT_E -f > "$WORK/e.fifo" 2>&1 &
 PID_E=$!
 PIDS+=($PID_E)
 sleep 3
@@ -813,7 +814,7 @@ attendre_sortie() { # attendre_sortie <pid> <secondes> : vrai si le processus s'
 
 # sigterm-off : SIGTERM, le faux Homebridge reçoit state=false (même si l'état était déjà OFF : l'arrêt
 # publie en force), et le daemon sort de lui-même, bien avant l'ExitTimeOut de 5 s.
-"$BIN" --config "$WORK/h.json" > "$WORK/h.out" 2>&1 &
+"$BIN" --config "$WORK/h.json" --port $PORT_H > "$WORK/h.out" 2>&1 &
 PID_H=$!
 PIDS+=($PID_H)
 if await_http $PORT_H 10 && await_push selftestarret 10; then ok "sigterm-off : instance démarrée, état initial publié"; else bad "sigterm-off : instance injoignable ou sans publication initiale"; fi
@@ -861,7 +862,7 @@ fi
 SUPPORT_I="$WORK/support-i"
 mkdir -p "$SUPPORT_I"
 : > "$SUPPORT_I/restart-pending"
-MACSTATUSD_SUPPORT_DIR="$SUPPORT_I" "$BIN" --config "$WORK/i.json" > "$WORK/i.out" 2>&1 &
+MACSTATUSD_SUPPORT_DIR="$SUPPORT_I" "$BIN" --config "$WORK/i.json" --port $PORT_I > "$WORK/i.out" 2>&1 &
 PID_I=$!
 PIDS+=($PID_I)
 if await_http $PORT_I 10 && await_push selftestmarqueur 10; then ok "sigterm-marqueur : instance démarrée, état initial publié"; else bad "sigterm-marqueur : instance injoignable ou sans publication initiale"; fi
@@ -888,7 +889,7 @@ c = json.load(sys.stdin)["webhook"]["targets"][0]
 v = c.get(sys.argv[1])
 print("" if v is None else v)' "$1" 2>/dev/null || echo "__ERREUR__"
 }
-"$BIN" --config "$WORK/j.json" > "$WORK/j.out" 2>&1 &
+"$BIN" --config "$WORK/j.json" --port $PORT_J > "$WORK/j.out" 2>&1 &
 PID_J=$!
 PIDS+=($PID_J)
 if await_http $PORT_J 10; then ok "ha-retour : instance démarrée"; else bad "ha-retour : instance injoignable"; fi
@@ -924,7 +925,7 @@ python3 "$WORK/bornemock.py" $PORT_BORNE > "$WORK/borne.log" 2>&1 &
 PID_BORNE=$!
 PIDS+=($PID_BORNE)
 sleep 0.5
-"$BIN" --config "$WORK/k.json" > "$WORK/k.out" 2>&1 &
+"$BIN" --config "$WORK/k.json" --port $PORT_K > "$WORK/k.out" 2>&1 &
 PID_K=$!
 PIDS+=($PID_K)
 if await_http $PORT_K 10; then ok "transport-borne : instance démarrée"; else bad "transport-borne : instance injoignable"; fi
@@ -943,8 +944,11 @@ arreter_pid "$PID_BORNE"
 echo
 echo "== 12. Une seule instance publie : le détenteur du port"
 # deux-instances : L tient le port PORT_L, M (même port, autre faux Homebridge) ne le peut pas.
-# M ne doit RIEN envoyer tant qu'elle ne tient pas le port ; quand L s'arrête, M reprend le port
-# (reprise du listener : attente de 5 s, puis nouvelle écoute) et publie alors l'état courant en force.
+# M ne doit RIEN envoyer tant qu'elle ne tient pas le port ; quand L s'arrête, M reprend le port et
+# publie alors l'état courant en force. Reprise du listener : en `.waiting`, nouvelle écoute après 5 s
+# si l'état n'a pas changé ; en `.failed` (ou `.cancelled`), nouvelle écoute après 1 s, délai doublé
+# à chaque échec jusqu'à 30 s. La reprise de M prend donc de 1 à 30 s selon l'état où le port occupé
+# l'a mise (d'où l'attente de 30 s plus bas).
 # Les deux instances reçoivent --port en ligne de commande, en plus du port de leur configuration.
 SESSION_A_LA_CONSOLE="$(printf '%s' "$ONCE_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("on_console", False))' 2>/dev/null)"
 if [[ "$SESSION_A_LA_CONSOLE" != "True" ]]; then
