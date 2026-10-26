@@ -5,7 +5,8 @@ final class ConfigTests: XCTestCase {
     func test_fichierAbsent_donneLesDefautsEtUnAvertissement() {
         let r = Config.parse(data: nil)
         XCTAssertFalse(r.config.enabled); XCTAssertEqual(r.config.port, 9090)
-        XCTAssertEqual(r.warnings.count, 1)
+        // « introuvable », puis l'écoute limitée à la boucle locale (Ruling R39).
+        XCTAssertEqual(r.warnings.count, 2, "\(r.warnings)")
     }
 
     func test_clesConnues_sontLues() {
@@ -52,7 +53,7 @@ final class ConfigTests: XCTestCase {
     func test_load_fichierAbsent_citeLeChemin() {
         let chemin = "/chemin/inexistant/config-essai.json"
         let r = Config.load(path: chemin)
-        XCTAssertEqual(r.warnings.count, 1)
+        XCTAssertEqual(r.warnings.count, 2, "\(r.warnings)")
         guard let avertissement = r.warnings.first else { return }
         XCTAssertTrue(avertissement.contains(chemin), "avertissement sans chemin : \(avertissement)")
         XCTAssertTrue(avertissement.contains("introuvable"))
@@ -107,6 +108,8 @@ final class ConfigTests: XCTestCase {
         for json in [#"{"auth_token":1234567890123456789}"#, #"{"auth_token":true}"#, #"{"auth_token":["a"]}"#] {
             let r = Config.parse(data: Data(json.utf8))
             XCTAssertTrue(r.warnings.contains { $0.contains("auth_token") && $0.contains("chaîne") }, "\(json) \(r.warnings)")
+            // Plus ignoré : mode dégradé fermé (tâche 12, tour 1).
+            XCTAssertEqual(r.origin, .invalid(reason: "auth_token doit être une chaîne JSON"), json)
         }
     }
 
@@ -218,16 +221,20 @@ final class ConfigOriginTests: XCTestCase {
         }
     }
 
-    func test_fichierAbsent_restePermissif() throws {
+    func test_fichierAbsent_restePermissif_maisEcouteEnBoucleLocale() throws {
         let chemin = try dossierTemporaire().appendingPathComponent("absent.json").path
         for r in [Config.parse(data: nil), Config.load(path: chemin)] {
             XCTAssertEqual(r.origin, .defaultsAbsent)
-            // Défauts actuels : écoute sur toutes les interfaces, aucun jeton, webhooks coupés.
-            XCTAssertEqual(r.config.bindAddress, "")
+            // Ruling R39 : écoute forcée sur la boucle locale ; le reste des défauts est gardé
+            // (aucun jeton, webhooks coupés, port 9090).
+            XCTAssertEqual(r.config.bindAddress, "127.0.0.1")
+            XCTAssertTrue(bindAddressIsLoopbackOnly(r.config.bindAddress))
             XCTAssertEqual(r.config.authToken, "")
             XCTAssertEqual(r.config.port, 9090)
             XCTAssertFalse(r.config.enabled)
-            XCTAssertEqual(r.warnings.count, 1)
+            XCTAssertEqual(r.config.heartbeatSeconds, Config().heartbeatSeconds)
+            XCTAssertEqual(r.warnings.count, 2, "\(r.warnings)")
+            XCTAssertTrue(r.warnings.contains("config absente : écoute limitée à la boucle locale"), "\(r.warnings)")
         }
         // Sans jeton, la politique d'accès ne sert que la boucle locale (inchangée).
         let config = Config.parse(data: nil).config
@@ -336,16 +343,49 @@ final class ConfigOriginTests: XCTestCase {
     }
 
     func test_avertissements_neMontrentNiJetonNiURL() {
-        let json = #"{"auth_token": 12345678901234567, "webhook_base_url": "ftp://192.0.2.10/api/webhook/ident-secret-essai?k=v", "enabled": true}"#
+        // Jeton qui n'est pas une chaîne : mode dégradé, la raison et l'avertissement ne citent
+        // jamais la valeur.
+        let jetonNombre = Config.parse(data: Data(#"{"auth_token": 12345678901234567, "enabled": true}"#.utf8))
+        XCTAssertEqual(jetonNombre.origin, .invalid(reason: "auth_token doit être une chaîne JSON"))
+        XCTAssertEqual(jetonNombre.config.authToken, "")
+        XCTAssertTrue(jetonNombre.warnings.contains { $0.contains("auth_token") }, "\(jetonNombre.warnings)")
+        XCTAssertFalse(jetonNombre.warnings.contains { $0.contains("12345678901234567") }, "\(jetonNombre.warnings)")
+
+        let json = #"{"webhook_base_url": "ftp://192.0.2.10/api/webhook/ident-secret-essai?k=v", "enabled": true}"#
         let r = Config.parse(data: Data(json.utf8))
-        XCTAssertEqual(r.config.authToken, "", "un jeton qui n'est pas une chaîne est ignoré")
-        XCTAssertTrue(r.warnings.contains { $0.contains("auth_token") }, "\(r.warnings)")
+        XCTAssertEqual(r.origin, .file)
         XCTAssertTrue(r.warnings.contains { $0.contains("webhook_base_url") && $0.contains("<masqué>") }, "\(r.warnings)")
-        XCTAssertFalse(r.warnings.contains { $0.contains("12345678901234567") || $0.contains("ident-secret-essai")
-                                             || $0.contains("k=v") }, "\(r.warnings)")
+        XCTAssertFalse(r.warnings.contains { $0.contains("ident-secret-essai") || $0.contains("k=v") }, "\(r.warnings)")
         // Une URL http valide ne donne rien.
         let ok = Config.parse(data: Data(#"{"webhook_base_url": "http://192.0.2.10:51828", "enabled": true}"#.utf8))
         XCTAssertTrue(ok.warnings.isEmpty, "\(ok.warnings)")
+    }
+
+    /// Tâche 12, tour 1 : un `auth_token` présent mais pas une chaîne n'est plus ignoré (écoute
+    /// ouverte sans jeton, commandes locales sans jeton) : il met la config en mode dégradé fermé.
+    func test_jetonPasUneChaine_modeDegradeFerme() {
+        let r = Config.parse(data: Data(#"{"auth_token": 12345678901234567, "bind_address": "0.0.0.0"}"#.utf8))
+        XCTAssertEqual(r.origin, .invalid(reason: "auth_token doit être une chaîne JSON"))
+        XCTAssertEqual(r.config.bindAddress, "127.0.0.1")
+        XCTAssertEqual(r.config.authToken, "")
+        XCTAssertFalse(r.config.enabled)
+        XCTAssertEqual(r.warnings.count, 1, "\(r.warnings)")
+        XCTAssertTrue(r.warnings[0].contains("auth_token") && r.warnings[0].contains("127.0.0.1"), r.warnings[0])
+
+        let valeurs = ["null", "true", "false", "0", "1.5", #"["jeton-essai-0123456789abcdef"]"#,
+                       #"{"v": "jeton-essai-0123456789abcdef"}"#]
+        for valeur in valeurs {
+            let json = #"{"auth_token": \#(valeur), "bind_address": "0.0.0.0", "enabled": true, "#
+                + #""webhook_base_url": "http://192.0.2.10:51828"}"#
+            let v = Config.parse(data: Data(json.utf8))
+            XCTAssertEqual(v.origin, .invalid(reason: "auth_token doit être une chaîne JSON"), valeur)
+            XCTAssertEqual(v.config.bindAddress, "127.0.0.1", valeur)
+            XCTAssertFalse(v.config.enabled, valeur)
+            XCTAssertEqual(v.config.webhookBaseURL, "", valeur)
+            XCTAssertFalse(v.warnings.contains { $0.contains("0123456789abcdef") }, "\(valeur) : \(v.warnings)")
+        }
+        // Une chaîne vide reste « aucun jeton » (boucle locale seulement), sans mode dégradé.
+        XCTAssertEqual(Config.parse(data: Data(#"{"auth_token": ""}"#.utf8)).origin, .file)
     }
 
     func test_cliPort_bornes() {

@@ -671,6 +671,30 @@ final class RouterDegradedModeTests: XCTestCase {
         XCTAssertFalse(moteur.appels.contains { if case .off = $0 { return true }; if case .on = $0 { return true }; return $0 == .resync })
     }
 
+    /// Tâche 12, tour 1 : un jeton qui n'est pas une chaîne donne le mode dégradé ; même en
+    /// boucle locale et sans jeton, `/wake` répond 503 et le moteur n'est pas appelé.
+    func test_jetonPasUneChaine_wakeEnBoucleLocale503() {
+        let lu = Config.parse(data: Data(#"{"auth_token": 12345678901234567, "bind_address": "0.0.0.0"}"#.utf8))
+        XCTAssertEqual(lu.config.bindAddress, "127.0.0.1")
+        let r = Router(config: lu.config, engine: moteur, origin: lu.origin)
+        for _ in 0..<3 {
+            XCTAssertEqual(r.handle(requete("/wake", local: true)).status, 503)
+            XCTAssertEqual(r.handle(requete("/sleep", local: true)).status, 503)
+        }
+        XCTAssertEqual(r.handle(requete("/health", local: true)).status, 503)
+        XCTAssertFalse(moteur.appels.contains { if case .off = $0 { return true }; if case .on = $0 { return true }; return $0 == .resync })
+    }
+
+    /// Ruling R39 : fichier absent, l'écoute est limitée à la boucle locale, mais le routeur
+    /// reste en mode normal (`/health` et les commandes locales sans jeton sont servis).
+    func test_fichierAbsent_routeurNormal() {
+        let lu = Config.parse(data: nil)
+        let r = Router(config: lu.config, engine: moteur, origin: lu.origin)
+        XCTAssertEqual(r.handle(requete("/health", local: true)).status, 200)
+        XCTAssertEqual(r.handle(requete("/wake", local: true)).status, 200)
+        XCTAssertTrue(moteur.appels.contains { if case .on = $0 { return true }; return false }, "\(moteur.appels)")
+    }
+
     func test_modeNormal_niConfigErrorNi503() throws {
         for origine in [ConfigOrigin.file, .defaultsAbsent] {
             moteur = FakeEngine()

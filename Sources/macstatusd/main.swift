@@ -88,6 +88,7 @@ func parseOptions() -> Options {
             Accès : jeton par l'en-tête X-Auth-Token ou Authorization: Bearer (auth_token).
             Commandes : jeton exigé. Lectures : jeton exigé hors boucle locale.
             Sans jeton configuré : boucle locale seulement. /health est toujours servi.
+            Config absente : écoute sur 127.0.0.1 seulement.
             Config illisible ou invalide : mode dégradé (écoute sur 127.0.0.1 seulement,
             commandes et /health en 503, aucun webhook, config_error dans /status).
             """)

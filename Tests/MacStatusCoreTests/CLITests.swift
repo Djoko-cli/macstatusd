@@ -24,6 +24,10 @@ final class CLITests: XCTestCase {
     }
 
     /// Lance le binaire, attend sa fin (10 s au plus, puis arrêt de ce seul processus).
+    ///
+    /// stdout et stderr sont lus en parallèle, chacun sur sa file : un tube plein (64 Kio) ne
+    /// bloque pas le binaire pendant qu'on attend l'autre, et l'attente de 10 s porte sur la fin
+    /// du processus, pas sur une lecture qui pourrait ne jamais finir.
     private func lancer(_ arguments: [String]) throws -> (code: Int32, sortie: String, erreurs: String) {
         let process = Process()
         process.executableURL = binaire
@@ -35,15 +39,49 @@ final class CLITests: XCTestCase {
         let fin = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in fin.signal() }
         try process.run()
-        // Lecture avant l'attente : un tube plein bloquerait le binaire.
-        let octetsSortie = sortie.fileHandleForReading.readDataToEndOfFile()
-        let octetsErreurs = erreurs.fileHandleForReading.readDataToEndOfFile()
+
+        let lectures = DispatchGroup()
+        let verrou = NSLock()
+        var octetsSortie = Data(), octetsErreurs = Data()
+        DispatchQueue.global().async(group: lectures) {
+            let lu = sortie.fileHandleForReading.readDataToEndOfFile()
+            verrou.lock(); octetsSortie = lu; verrou.unlock()
+        }
+        DispatchQueue.global().async(group: lectures) {
+            let lu = erreurs.fileHandleForReading.readDataToEndOfFile()
+            verrou.lock(); octetsErreurs = lu; verrou.unlock()
+        }
+
         if fin.wait(timeout: .now() + 10) == .timedOut {
             process.terminate()
             XCTFail("\(arguments) : pas de fin au bout de 10 s")
+            if fin.wait(timeout: .now() + 2) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = fin.wait(timeout: .now() + 2)
+            }
         }
+        // Le processus est fini : ses tubes se ferment, les lectures rendent la main. Un
+        // petit-fils qui aurait hérité d'un tube ne doit pas bloquer le test pour autant.
+        if lectures.wait(timeout: .now() + 2) == .timedOut {
+            XCTFail("\(arguments) : tubes encore ouverts après la fin du processus")
+        }
+        verrou.lock(); defer { verrou.unlock() }
         return (process.terminationStatus, String(decoding: octetsSortie, as: UTF8.self),
                 String(decoding: octetsErreurs, as: UTF8.self))
+    }
+
+    /// Tâche 12, tour 1 : un stderr plus gros que le tampon d'un tube (64 Kio) ne bloque pas
+    /// `lancer` (les deux tubes sont lus en parallèle).
+    func test_grosStderr_neBloquePas() throws {
+        let fichier = dossier.appendingPathComponent("config.json")
+        // 3000 clés inconnues de 40 caractères : un avertissement d'environ 130 Kio sur stderr.
+        let cles = (0..<3000).map { String(format: "\"cle-inconnue-essai-%026d\": 1", $0) }
+        try Data(("{" + cles.joined(separator: ", ") + "}").utf8).write(to: fichier)
+        let r = try lancer(["--once", "--config", fichier.path])
+        XCTAssertEqual(r.code, 0)
+        XCTAssertGreaterThan(r.erreurs.utf8.count, 100_000)
+        XCTAssertTrue(r.erreurs.contains("clés de config inconnues"))
+        XCTAssertNotNil(try JSONSerialization.jsonObject(with: Data(r.sortie.utf8)) as? [String: Any], r.sortie)
     }
 
     func test_optionsSansValeurOuPortInvalide_code2() throws {

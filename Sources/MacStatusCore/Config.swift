@@ -14,7 +14,8 @@ public enum OffAction: String {
 public enum ConfigOrigin: Equatable {
     /// Fichier lu et compris (des avertissements restent possibles).
     case file
-    /// Fichier absent (`ENOENT`) : défauts, comportement permissif d'origine.
+    /// Fichier absent (`ENOENT`) : défauts, comportement permissif d'origine, sauf l'écoute,
+    /// limitée à la boucle locale (Ruling R39).
     case defaultsAbsent
     /// Fichier illisible ou invalide : mode dégradé fermé (voir `Config.degraded`). `reason` est
     /// l'erreur POSIX ou celle de l'analyseur JSON, échappée ; jamais le contenu du fichier.
@@ -234,7 +235,8 @@ public struct Config {
     static let maxFileBytes = 1 << 20
 
     /// Charge la configuration depuis un fichier.
-    /// - absent (`ENOENT`) : défauts, origine `.defaultsAbsent` (comportement d'origine, permissif) ;
+    /// - absent (`ENOENT`) : défauts, origine `.defaultsAbsent` (comportement d'origine, permissif,
+    ///   mais écoute sur `127.0.0.1` seulement : Ruling R39) ;
     /// - illisible (droits, dossier, trop gros…) ou invalide : `.invalid`, mode dégradé fermé ;
     /// - sinon : `.file`.
     /// Les avertissements « introuvable » et « illisible » citent le chemin.
@@ -273,10 +275,12 @@ public struct Config {
         return UInt16(value)
     }
 
-    private static func invalid(reason: String, source: String?) -> Loaded {
+    /// Message du mode dégradé fermé. `adjective` : « illisible » (lecture ou JSON en échec) ou
+    /// « invalide » (JSON lu, mais une valeur interdit de s'en servir).
+    private static func invalid(reason: String, source: String?, adjective: String = "illisible") -> Loaded {
         let lieu = source.map { "config \($0)" } ?? "config"
         let config = degraded()
-        let warning = "\(lieu) illisible (\(reason)) → mode dégradé fermé : écoute sur "
+        let warning = "\(lieu) \(adjective) (\(reason)) → mode dégradé fermé : écoute sur "
             + "\(config.bindAddress) seulement, commandes et /health en 503, webhooks coupés"
         return (config, .invalid(reason: reason), [warning])
     }
@@ -333,7 +337,11 @@ public struct Config {
         let lieu = source.map { "config \($0)" } ?? "config"
 
         guard let data else {
-            return (cfg, .defaultsAbsent, ["\(lieu) introuvable → défauts, webhooks désactivés"])
+            // Ruling R39 : sans fichier, aucun jeton, donc le LAN est déjà refusé (sauf `/health`) ;
+            // l'écoute se limite à la boucle locale, le reste du comportement permissif est gardé.
+            cfg.bindAddress = "127.0.0.1"
+            return (cfg, .defaultsAbsent, ["\(lieu) introuvable → défauts, webhooks désactivés",
+                                           "config absente : écoute limitée à la boucle locale"])
         }
         let object: Any
         do {
@@ -347,6 +355,19 @@ public struct Config {
         guard let raw = object as? [String: Any] else {
             return invalid(reason: "JSON invalide : objet {…} attendu, \(JSONBag.kind(object)) trouvé",
                            source: source)
+        }
+
+        // Un `auth_token` présent qui n'est pas une chaîne (null, nombre, booléen, liste, objet) :
+        // mode dégradé fermé. L'ignorer ouvrirait l'écoute sans jeton et laisserait passer les
+        // commandes locales sans jeton ; le convertir (`true` → "1") donnerait un jeton faible.
+        // La raison ne cite jamais la valeur.
+        //
+        // Limites connues (à documenter dans le README, plan 4) :
+        // - une clé `auth_token` en double garde la dernière valeur, sans avertissement :
+        //   `JSONSerialization` ne signale pas les doublons ;
+        // - un `auth_token: ""` explicite vaut « aucun jeton » : seule la boucle locale est servie.
+        if let token = raw["auth_token"], !(token is String) {
+            return invalid(reason: "auth_token doit être une chaîne JSON", source: source, adjective: "invalide")
         }
 
         var bag = JSONBag(raw: raw, known: knownKeys)
@@ -376,8 +397,7 @@ public struct Config {
                          + "repli fermé, écoute sur \(ListenAddress.ipv4(cfg.bindAddress).description(port: cfg.port)) seulement")
             }
         }
-        // Un jeton qui n'est pas une chaîne est ignoré (aucun jeton) : sa conversion en texte
-        // (`true` → "1") donnerait un jeton faible. L'avertissement ne cite jamais la valeur.
+        // Un jeton qui n'est pas une chaîne a déjà donné le mode dégradé (plus haut).
         cfg.authToken = (bag.raw["auth_token"] as? String) ?? cfg.authToken
         for warning in authTokenWarnings(bag.raw["auth_token"]) { bag.warn(warning) }
         cfg.allowQueryToken = bag.bool("allow_query_token", cfg.allowQueryToken)
@@ -434,15 +454,12 @@ public struct Config {
         return (cfg, .file, bag.warnings)
     }
 
-    /// Avertissements sur `auth_token`, sans jamais citer sa valeur : pas une chaîne, espaces
-    /// de bord (l'analyseur les ôte de l'en-tête reçu : un tel jeton ne correspondrait jamais),
-    /// moins de 16 caractères. Absent ou vide : rien ici (traité au démarrage).
+    /// Avertissements sur `auth_token`, sans jamais citer sa valeur : espaces de bord
+    /// (l'analyseur les ôte de l'en-tête reçu : un tel jeton ne correspondrait jamais), moins de
+    /// 16 caractères. Absent ou vide : rien ici (traité au démarrage). Pas une chaîne : mode
+    /// dégradé, décidé par `parse` avant cet appel.
     static func authTokenWarnings(_ raw: Any?) -> [String] {
-        guard let raw else { return [] }
-        guard let text = raw as? String else {
-            return ["auth_token doit être une chaîne JSON (entre guillemets) → ignoré, aucun jeton"]
-        }
-        guard !text.isEmpty else { return [] }
+        guard let text = raw as? String, !text.isEmpty else { return [] }
         var warnings: [String] = []
         if text.first.map({ $0.isWhitespace }) == true || text.last.map({ $0.isWhitespace }) == true {
             warnings.append("auth_token commence ou finit par une espace : l'en-tête reçu en est débarrassé, "
