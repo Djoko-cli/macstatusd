@@ -70,6 +70,9 @@ final class TestScheduler: Scheduler {
     private var maintenant: Double
     private var compteur = 0
     private var taches: [Tache] = []
+    /// Simule la course d'une minuterie déjà partie quand on l'annule : `cancel()` est sans
+    /// effet, la tâche s'exécute quand même. Sert à éprouver le compteur de génération.
+    var ignorerAnnulations = false
 
     init(clock: TestClock? = nil) {
         self.horloge = clock
@@ -85,8 +88,15 @@ final class TestScheduler: Scheduler {
         compteur += 1
         let tache = Tache(echeance: base + seconds, ordre: compteur, travail: work)
         taches.append(tache)
-        return tache
+        return ignorerAnnulations ? AnnulationSansEffet() : tache
     }
+
+    private final class AnnulationSansEffet: Cancellable {
+        func cancel() {}
+    }
+
+    /// Échéances des tâches en attente (annulées exclues), dans l'ordre.
+    var echeances: [Double] { taches.filter { !$0.annulee }.map(\.echeance).sorted() }
 
     /// Exécute, dans l'ordre d'échéance (puis de planification), les tâches échues
     /// à l'instant `t`, y compris celles qu'elles planifient et qui sont déjà échues.
@@ -181,6 +191,15 @@ final class FakePublisher: StatePublisher {
         confirme = livraisonManuelle ? nil : state
     }
 
+    /// Nombre d'appels à `publishBeforeExit`.
+    private(set) var publicationsAvantDepart = 0
+
+    /// Comme un `publish(state, force: true)` : le faux n'a pas de requête en vol à annuler.
+    func publishBeforeExit(_ state: Bool) {
+        publicationsAvantDepart += 1
+        publish(state, force: true)
+    }
+
     func notifyWhenDelivered(timeout: Double, _ done: @escaping (Bool) -> Void) {
         delaisDemandes.append(timeout)
         guard let voulu, voulu != confirme else {
@@ -214,43 +233,114 @@ final class FakePublisher: StatePublisher {
 /// fournit une) et répond selon un script. Rien ne sort du processus.
 ///
 /// Par défaut la réponse part tout de suite, dans l'appel à `send`. Avec
-/// `differe`, les réponses restent en attente jusqu'à `terminerEnAttente()`,
-/// pour simuler un envoi en vol.
+/// `differe` (toutes les requêtes) ou `hotesDifferes` (celles de ces hôtes), les réponses
+/// restent en attente jusqu'à `terminerEnAttente()`, pour simuler un envoi en vol.
+///
+/// L'annulation (`cancel()` du jeton rendu par `send`) retire la réponse en attente et rappelle
+/// aussitôt, dans l'appel à `cancel()`, un échec `NSURLErrorCancelled` : plus dur que le
+/// transport réel (qui ne rappelle pas), pour éprouver la garde de génération du client.
 final class FakeTransport: WebhookTransport {
     private let horloge: TestClock?
     /// Réponses à donner, dans l'ordre ; une fois épuisées, `reponseParDefaut`.
     var script: [WebhookOutcome]
     var reponseParDefaut = WebhookOutcome.delivered(status: 200)
+    /// Réponse par hôte : prioritaire sur `script` et `reponseParDefaut`.
+    var reponsesParHote: [String: WebhookOutcome] = [:]
     var differe = false
+    var hotesDifferes: Set<String> = []
 
     private(set) var requetes: [WebhookRequest] = []
     /// Instant monotone de chaque envoi (0 sans horloge).
     private(set) var instants: [Double] = []
-    private var enAttente: [() -> Void] = []
+    /// Requêtes annulées alors que leur réponse était en attente.
+    private(set) var annulations: [WebhookRequest] = []
+
+    private final class EnVol: Cancellable {
+        let requete: WebhookRequest
+        let reponse: WebhookOutcome
+        var completion: ((WebhookOutcome) -> Void)?
+        weak var transport: FakeTransport?
+        init(requete: WebhookRequest, reponse: WebhookOutcome, completion: @escaping (WebhookOutcome) -> Void) {
+            self.requete = requete
+            self.reponse = reponse
+            self.completion = completion
+        }
+        func cancel() { transport?.annuler(self) }
+    }
+    private var enAttente: [EnVol] = []
 
     init(script: [WebhookOutcome] = [], clock: TestClock? = nil) {
         self.script = script
         self.horloge = clock
     }
 
-    /// Nombre de réponses retenues par `differe`.
+    /// Nombre de réponses retenues.
     var reponsesEnAttente: Int { enAttente.count }
 
-    func send(_ request: WebhookRequest, _ completion: @escaping (WebhookOutcome) -> Void) {
-        requetes.append(request)
-        instants.append(horloge?.t ?? 0)
-        let reponse = script.isEmpty ? reponseParDefaut : script.removeFirst()
-        if differe {
-            enAttente.append { completion(reponse) }
-        } else {
-            completion(reponse)
-        }
+    /// Requêtes envoyées vers cet hôte.
+    func requetes(vers hote: String) -> [WebhookRequest] {
+        requetes.filter { $0.url.host == hote }
     }
 
-    /// Livre la plus ancienne réponse retenue.
-    func terminerEnAttente() {
-        guard !enAttente.isEmpty else { return }
-        enAttente.removeFirst()()
+    @discardableResult
+    func send(_ request: WebhookRequest, _ completion: @escaping (WebhookOutcome) -> Void) -> Cancellable {
+        requetes.append(request)
+        instants.append(horloge?.t ?? 0)
+        let hote = request.url.host ?? ""
+        let reponse: WebhookOutcome
+        if let parHote = reponsesParHote[hote] {
+            reponse = parHote
+        } else {
+            reponse = script.isEmpty ? reponseParDefaut : script.removeFirst()
+        }
+        let vol = EnVol(requete: request, reponse: reponse, completion: completion)
+        vol.transport = self
+        if differe || hotesDifferes.contains(hote) {
+            enAttente.append(vol)
+        } else {
+            vol.completion = nil
+            completion(reponse)
+        }
+        return vol
+    }
+
+    /// Livre la plus ancienne réponse retenue (de cet hôte, s'il est donné).
+    func terminerEnAttente(hote: String? = nil) {
+        guard let index = enAttente.firstIndex(where: { hote == nil || $0.requete.url.host == hote }) else { return }
+        let vol = enAttente.remove(at: index)
+        let completion = vol.completion
+        vol.completion = nil
+        completion?(vol.reponse)
+    }
+
+    private func annuler(_ vol: EnVol) {
+        guard let index = enAttente.firstIndex(where: { $0 === vol }) else { return }
+        enAttente.remove(at: index)
+        annulations.append(vol.requete)
+        let completion = vol.completion
+        vol.completion = nil
+        completion?(.failed(detail: "requête annulée",
+                            error: TransportError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)))
+    }
+}
+
+/// Sonde du réseau local simulée : note chaque sonde, répond `refuse` (dans l'appel, ou à
+/// `repondre()` avec `differe`). Aucune connexion n'est ouverte.
+final class FakeProbe: LocalNetworkProbe {
+    var refuse = false
+    var differe = false
+    private(set) var sondes: [(host: String, port: Int)] = []
+    private var enAttente: [(Bool) -> Void] = []
+
+    func checkLocalNetworkDenied(host: String, port: Int, _ completion: @escaping (Bool) -> Void) {
+        sondes.append((host, port))
+        if differe { enAttente.append(completion) } else { completion(refuse) }
+    }
+
+    func repondre() {
+        let attentes = enAttente
+        enAttente.removeAll()
+        attentes.forEach { $0(refuse) }
     }
 }
 

@@ -396,4 +396,94 @@ final class ConfigOriginTests: XCTestCase {
             XCTAssertNil(Config.portArgument(invalide), invalide)
         }
     }
+
+    // MARK: - Tâche 15 : cibles du webhook
+
+    func test_webhookBaseURL_devientUneCible() {
+        let r = Config.parse(data: Data(#"{"enabled": true, "webhook_base_url": "http://192.0.2.10:51828/"}"#.utf8))
+        XCTAssertEqual(r.config.webhookTargets, [WebhookTarget(url: "http://192.0.2.10:51828/", method: "GET", headers: [:])])
+        XCTAssertTrue(r.warnings.isEmpty, "\(r.warnings)")
+        XCTAssertEqual(Config.parse(data: Data("{}".utf8)).config.webhookTargets, [])
+        // Une config construite à la main (tests, mode --no-webhook) suit la même règle.
+        var config = Config()
+        config.webhookBaseURL = "http://192.0.2.10:51828/"
+        XCTAssertEqual(config.webhookTargets.map(\.url), ["http://192.0.2.10:51828/"])
+        XCTAssertEqual(Config.degraded().webhookTargets, [], "mode dégradé : aucune cible")
+    }
+
+    func test_webhookTargets_lus() {
+        let json = #"""
+        {"enabled": true, "webhook_targets": [
+          {"url": "http://192.0.2.10:51828/"},
+          {"url": "http://192.0.2.20:8123/api/webhook/webhook-essai-abc123", "method": "post",
+           "headers": {"X-Essai": "jeton-essai-0123456789abcdef"}},
+          {"url": "https://ha.exemple.test/hook", "method": "GET", "headers": {}}
+        ]}
+        """#
+        let r = Config.parse(data: Data(json.utf8))
+        XCTAssertEqual(r.origin, .file)
+        XCTAssertEqual(r.config.webhookTargets, [
+            WebhookTarget(url: "http://192.0.2.10:51828/", method: "GET", headers: [:]),
+            WebhookTarget(url: "http://192.0.2.20:8123/api/webhook/webhook-essai-abc123", method: "POST",
+                          headers: ["X-Essai": "jeton-essai-0123456789abcdef"]),
+            WebhookTarget(url: "https://ha.exemple.test/hook", method: "GET", headers: [:]),
+        ])
+        XCTAssertTrue(r.warnings.isEmpty, "\(r.warnings)")
+    }
+
+    func test_webhookTargets_gagnentSurBaseURL_avecAvertissement() {
+        let json = #"{"enabled": true, "webhook_base_url": "http://192.0.2.10:51828/", "#
+            + #""webhook_targets": [{"url": "http://192.0.2.20:8123/api/webhook/webhook-essai-abc123", "method": "POST"}]}"#
+        let r = Config.parse(data: Data(json.utf8))
+        XCTAssertEqual(r.config.webhookTargets.map(\.url), ["http://192.0.2.20:8123/api/webhook/webhook-essai-abc123"])
+        XCTAssertEqual(r.warnings.count, 1, "\(r.warnings)")
+        XCTAssertTrue(r.warnings[0].hasPrefix("webhook_targets"), r.warnings[0])
+        XCTAssertTrue(r.warnings[0].contains("webhook_base_url"), r.warnings[0])
+    }
+
+    func test_webhookTargets_cibleInvalide_ecarteeAvecAvertissementNomme() {
+        let json = #"""
+        {"enabled": true, "webhook_targets": [
+          {"url": "http://192.0.2.10:51828/"},
+          {"url": "http://u:secret@192.0.2.20 :8123/api/webhook/webhook-essai-abc123"},
+          {"url": "http://192.0.2.21/api/webhook/webhook-essai-def456", "method": "PUT"},
+          {"url": "ftp://192.0.2.22/hook"},
+          {"method": "POST"},
+          "http://192.0.2.23/hook",
+          {"url": "http://192.0.2.24/hook", "headers": {"X-Cle": 12}},
+          {"url": "http://192.0.2.25/hook", "headers": {"X-Cle": "jeton\r\nX-Autre: 1"}},
+          {"url": "http://192.0.2.26/hook", "headers": {"Mauvais nom": "jeton-essai-0123456789abcdef"}},
+          {"url": "http://192.0.2.27/hook", "headers": ["X-Cle"]},
+          {"url": "http://192.0.2.28/hook", "methode": "POST"}
+        ]}
+        """#
+        let r = Config.parse(data: Data(json.utf8))
+        XCTAssertEqual(r.origin, .file, "une cible invalide ne met pas la config en mode dégradé")
+        XCTAssertEqual(r.config.webhookTargets.map(\.url), ["http://192.0.2.10:51828/", "http://192.0.2.28/hook"])
+        for numero in 2...10 {
+            XCTAssertTrue(r.warnings.contains { $0.hasPrefix("webhook_targets : cible \(numero) ") && $0.contains("écartée") },
+                          "cible \(numero) : \(r.warnings)")
+        }
+        XCTAssertTrue(r.warnings.contains { $0.hasPrefix("webhook_targets : cible 11 ") && $0.contains("methode") },
+                      "clé inconnue nommée : \(r.warnings)")
+        XCTAssertTrue(r.warnings.contains { $0.contains("PUT") })
+        for texte in r.warnings {
+            XCTAssertFalse(texte.contains("secret") || texte.contains("abc123") || texte.contains("def456")
+                           || texte.contains("0123456789abcdef") || texte.contains("jeton"), "secret au journal : \(texte)")
+        }
+    }
+
+    func test_webhookTargets_typeInattendu_ouListeVide() {
+        let r = Config.parse(data: Data(#"{"enabled": true, "webhook_targets": "http://192.0.2.10/hook", "webhook_base_url": "http://192.0.2.10:51828/"}"#.utf8))
+        XCTAssertEqual(r.config.webhookTargets, [], "webhook_targets présent : il décide, même illisible")
+        XCTAssertTrue(r.warnings.contains { $0.hasPrefix("webhook_targets : type inattendu") }, "\(r.warnings)")
+        XCTAssertTrue(r.warnings.contains { $0.contains("aucune cible") }, "\(r.warnings)")
+        let vide = Config.parse(data: Data(#"{"enabled": true, "webhook_targets": []}"#.utf8))
+        XCTAssertEqual(vide.config.webhookTargets, [])
+        XCTAssertTrue(vide.warnings.contains { $0.contains("aucune cible") }, "\(vide.warnings)")
+        let trop = (1...10).map { #"{"url": "http://192.0.2.\#($0)/hook"}"# }.joined(separator: ",")
+        let plafond = Config.parse(data: Data(#"{"webhook_targets": [\#(trop)]}"#.utf8))
+        XCTAssertEqual(plafond.config.webhookTargets.count, Config.maxWebhookTargets)
+        XCTAssertTrue(plafond.warnings.contains { $0.hasPrefix("webhook_targets") && $0.contains("\(Config.maxWebhookTargets)") })
+    }
 }

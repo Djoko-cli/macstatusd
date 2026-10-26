@@ -976,21 +976,23 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(journalContient("ignorée : arrêt en cours"))
     }
 
-    /// Tâche 14 : une requête ON en vol est remplacée par l'état voulu OFF ; OFF part dès que le
-    /// transport est libre, et `done` n'est appelé qu'à sa confirmation.
-    func test_arret_requeteEnVol_estRemplacee() {
-        // Faux publieur : l'ON initial est en vol quand l'arrêt arrive.
+    /// Tâche 14, puis 15 (R40) : une requête ON en vol est annulée à l'arrêt ; OFF part tout de suite
+    /// (bien avant le délai de 2 s), et `done` n'est appelé qu'à sa confirmation.
+    func test_arret_requeteEnVol_estAnnulee_OFFPartAussitot() {
+        // Faux publieur : l'arrêt passe par la publication avant le départ.
         publieur.livraisonManuelle = true
         let core = moteur()
         core.start()
         var termines = 0
         core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertEqual(publieur.publicationsAvantDepart, 1)
         XCTAssertEqual(publieur.envois, [Publication(etat: true, force: false),
                                          Publication(etat: false, force: true)])
         publieur.livrer()
         XCTAssertEqual(termines, 1)
 
-        // Client réel : l'ON est en vol (réponse différée) ; OFF part à sa réponse, puis `done`.
+        // Client réel : l'ON est en vol, bloqué (sa réponse n'arrive jamais) ; l'arrêt l'annule.
+        journal.lines = []
         let planificateur = TestScheduler(clock: horloge)
         let transport = FakeTransport(clock: horloge)
         transport.differe = true
@@ -1001,15 +1003,17 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(transport.requetes[0].url.absoluteString.hasSuffix("state=true"))
 
         var termine = 0
+        let debut = horloge.t
         reel.shutdown(publishOff: true) { termine += 1 }
-        XCTAssertEqual(termine, 0)
-        transport.terminerEnAttente()   // l'ON en vol aboutit
-        XCTAssertEqual(transport.requetes.count, 2, "OFF part dès que l'ON en vol est rendu")
+        XCTAssertEqual(transport.annulations.count, 1, "l'ON en vol est annulé")
+        XCTAssertEqual(transport.requetes.count, 2, "OFF part sans attendre la réponse de l'ON")
         XCTAssertTrue(transport.requetes[1].url.absoluteString.hasSuffix("state=false"))
+        XCTAssertLessThan(transport.instants[1] - debut, 2)
         XCTAssertEqual(termine, 0)
         transport.terminerEnAttente()   // l'OFF aboutit
         XCTAssertEqual(termine, 1)
         XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "0")
+        XCTAssertTrue(journalContient("arrêt : OFF confirmé"))
     }
 
     /// Tâche 14 : si OFF ne peut pas être livré, `done` part au délai de 2 s, une seule fois.

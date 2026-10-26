@@ -73,7 +73,7 @@ func parseOptions() -> Options {
               --foreground, -f    écrit aussi sur la sortie standard
               --once              affiche l'état et les faits en JSON, puis quitte
               --watch             affiche l'état en continu (diagnostic)
-              --no-webhook        n'envoie rien à Homebridge (tests)
+              --no-webhook        n'envoie aucun webhook (tests)
               --version, -v       version
               --help, -h          cette aide
 
@@ -83,7 +83,7 @@ func parseOptions() -> Options {
               GET /health   "OK"
               GET /sleep    HomeKit OFF   (alias /off)
               GET /wake     HomeKit ON    (alias /on)
-              GET /resync   republie l'état courant vers Homebridge
+              GET /resync   republie l'état courant vers les cibles du webhook
 
             Accès : jeton par l'en-tête X-Auth-Token ou Authorization: Bearer (auth_token).
             Commandes : jeton exigé. Lectures : jeton exigé hors boucle locale.
@@ -198,8 +198,18 @@ if let configError {
              + "Corriger le fichier, puis redémarrer macstatusd.")
 }
 let listenDescription = (ListenAddress(bindAddress: config.bindAddress) ?? .ipv4("127.0.0.1")).description(port: config.port)
+/// Cibles du webhook pour le journal : méthode et URL masquée, noms d'en-têtes seulement.
+let webhookDescription: String = {
+    guard config.enabled else { return "désactivé" }
+    let targets = config.webhookTargets
+    guard !targets.isEmpty else { return "aucune cible" }
+    return targets.map { target in
+        let names = target.headers.keys.sorted()
+        return "\(target.method) \(redactURL(target.url))" + (names.isEmpty ? "" : " (en-têtes : \(names.joined(separator: ", ")))")
+    }.joined(separator: " | ")
+}()
 logInfo("configuration: port=\(config.port) écoute=\(listenDescription) "
-        + "off_action=\(config.offAction.rawValue) webhook=\(config.enabled ? redactURL(config.webhookBaseURL) : "désactivé") "
+        + "off_action=\(config.offAction.rawValue) webhook=\(webhookDescription) "
         + "poll=\(config.pollIntervalMS)ms settle_on=\(config.settleOnMS)ms settle_off=\(config.settleOffMS)ms "
         + "heartbeat=\(config.heartbeatSeconds)s")
 if !CGSessionAvailable() {
@@ -212,6 +222,13 @@ let powerWatcher = PowerWatcher(queue: engine.queue)
 engine.attach(to: powerWatcher)
 powerWatcher.start()
 engine.start()
+
+// Retour du réseau : renvoi immédiat aux cibles non confirmées (pas de surveillance sans cible).
+let networkWatcher = NetworkWatcher()
+if config.enabled && !config.webhookTargets.isEmpty {
+    networkWatcher.onAvailable = { engine.networkBecameAvailable() }
+    networkWatcher.start()
+}
 
 // MARK: - Serveur HTTP
 

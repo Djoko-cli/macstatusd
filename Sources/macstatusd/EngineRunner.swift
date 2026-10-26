@@ -34,7 +34,8 @@ final class EngineRunner: EngineFacade {
         webhook = WebhookClient(config: config,
                                 transport: URLSessionTransport(config: config, queue: queue),
                                 scheduler: DispatchScheduler(queue: queue),
-                                clock: clock)
+                                clock: clock,
+                                probe: NWLocalNetworkProbe(engineQueue: queue))
         let signals = LiveSystemSignals()
         let oracle = ScreenSaverOracle(
             minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
@@ -97,6 +98,14 @@ final class EngineRunner: EngineFacade {
             heartbeatTimer = nil
             core.shutdown(publishOff: publishOff, done)
         }
+    }
+
+    // MARK: - Réseau
+
+    /// Le chemin réseau est redevenu utilisable (`NetworkWatcher`) : le client webhook renvoie
+    /// l'état aux cibles non confirmées, sur la file du moteur. N'attend rien et ne bloque rien.
+    func networkBecameAvailable() {
+        queue.async { [self] in webhook.networkBecameAvailable() }
     }
 
     // MARK: - Événements système

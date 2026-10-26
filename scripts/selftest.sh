@@ -7,7 +7,9 @@
 #   - un faux binaire nommé ScreenSaverEngine simule l'économiseur d'écran, sur demande seulement
 #     (SELFTEST_FAUX_ECONOMISEUR=1, daemon réel arrêté : sinon il le verrait aussi ; c'est
 #     exactement ce que l'oracle « process » observe) ;
-#   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks ;
+#   - un serveur HTTP local joue le rôle de Homebridge pour les webhooks (GET), un autre celui du
+#     webhook de Home Assistant (POST JSON, réponse 200 sans corps) ; un troisième, lancé en retard,
+#     joue un Home Assistant revenu après une panne (section 11) ;
 #   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
 #     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
 #     /off ne touche jamais l'écran du Mac ;
@@ -61,6 +63,11 @@ PORT_G=19093   # journal : rotation
 PORT_H=19094   # arrêt : SIGTERM, OFF publié
 PORT_I=19095   # arrêt : SIGTERM, marqueur de redémarrage
 PORT_HB=19099
+PORT_HA=19100  # faux webhook Home Assistant (POST)
+PORT_HA2=19101 # faux webhook Home Assistant lancé en retard (retour après panne)
+PORT_J=19102   # webhook : cible revenue, resynchronisée par le réessai lent
+PORT_K=19103   # webhook : transport borné (redirection, corps trop gros)
+PORT_BORNE=19104 # faux récepteur qui redirige ou répond un corps trop gros
 # Jeton de l'instance B, valeur d'essai inventée. Passé en en-tête : depuis la tâche 8,
 # le jeton dans l'URL (?token=) est refusé par défaut.
 JETON_B="jeton-essai-0123456789abcdef"
@@ -191,7 +198,7 @@ echo "==> Compilation du binaire"
 swift build --scratch-path "$SCRATCH" >/dev/null 2>"$WORK/build.err" || { cat "$WORK/build.err"; echo "build échouée"; exit 1; }
 BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/macstatusd"
 
-for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_H $PORT_I $PORT_HB; do
+for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_H $PORT_I $PORT_HB $PORT_HA $PORT_HA2 $PORT_J $PORT_K $PORT_BORNE; do
   port_libre "$port" || { echo "le port $port est déjà occupé : arrêt avant tout lancement"; exit 1; }
 done
 
@@ -228,6 +235,48 @@ class H(http.server.BaseHTTPRequestHandler):
 socketserver.TCPServer.allow_reuse_address = True
 socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
+
+# Faux webhook Home Assistant : accepte un POST, note le chemin, le Content-Type, l'en-tête d'essai et
+# le corps, et répond 200 sans corps (comme HA). Valeurs d'essai seulement.
+cat > "$WORK/hamock.py" <<'PY'
+import http.server, socketserver, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        corps = self.rfile.read(n).decode('utf-8', 'replace')
+        print("POST %s %s %s %s" % (self.path, self.headers.get('Content-Type'),
+                                    self.headers.get('X-Essai', '-'), corps), flush=True)
+        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()
+    def log_message(self, *a): pass
+socketserver.TCPServer.allow_reuse_address = True
+socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+# Faux récepteur hostile : POST /redir répond 302 vers /suivi (qui ne doit jamais être demandé),
+# GET /gros répond 200 avec un corps de 10 000 octets (au-delà du plafond de 4 Kio).
+cat > "$WORK/bornemock.py" <<'PY'
+import http.server, socketserver, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def repondre(self):
+        print(self.command, self.path, flush=True)
+        if self.path.startswith("/redir"):
+            self.send_response(302); self.send_header('Location', 'http://127.0.0.1:%s/suivi' % sys.argv[1])
+            self.send_header('Content-Length', '0'); self.end_headers()
+        elif self.path.startswith("/gros"):
+            self.send_response(200); self.send_header('Content-Length', '10000'); self.end_headers()
+            self.wfile.write(b'x' * 10000)
+        else:
+            self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()
+    def do_GET(self): self.repondre()
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get('Content-Length') or 0)); self.repondre()
+    def log_message(self, *a): pass
+socketserver.TCPServer.allow_reuse_address = True
+socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+# Identifiant de webhook et en-tête d'essai : inventés, ils ne doivent jamais paraître au journal
+# du daemon ni dans son /status.
+HA_WEBHOOK_ID="selftest-webhook-essai-0123456789"
+HA_ENTETE="valeur-essai-entete-abcdef"
 
 # Champs communs à toutes les instances : écoute locale, faux récepteur de
 # webhook, commandes inertes, aucune escalade.
@@ -292,15 +341,50 @@ done
 # Instances H et I : copies de A (webhook vers le faux récepteur, pas de battement de cœur) pour les cas
 # « sigterm-off » et « sigterm-marqueur ». Chacune a son accessoire, pour que le journal du faux
 # Homebridge dise sans ambiguïté qui a poussé quoi (sans tiret : le client encode tout sauf les alphanumériques).
-sed "s/\"port\": $PORT_A/\"port\": $PORT_H/; s|$WORK/a.log|$WORK/h.log|; s/\"accessory_id\": \"selftest\"/\"accessory_id\": \"selftestarret\"/; s/\"heartbeat_seconds\": 4/\"heartbeat_seconds\": 0/" \
-  "$WORK/a.json" > "$WORK/h.json"
+# H a deux cibles (webhook_targets) : le faux Homebridge en GET et le faux Home Assistant en POST.
+python3 - "$WORK/a.json" "$WORK/h.json" "$PORT_H" "$WORK/h.log" "$PORT_HB" "$PORT_HA" "$HA_WEBHOOK_ID" "$HA_ENTETE" <<'PY'
+import json, sys
+source, cible, port, journal, hb, ha, ident, entete = sys.argv[1:]
+c = json.load(open(source))
+c.pop("webhook_base_url")
+c.update({"port": int(port), "log_file": journal, "accessory_id": "selftestarret", "heartbeat_seconds": 0,
+          "webhook_targets": [
+              {"url": "http://127.0.0.1:%s/hook" % hb},
+              {"url": "http://127.0.0.1:%s/api/webhook/%s" % (ha, ident), "method": "POST",
+               "headers": {"X-Essai": entete}}]})
+json.dump(c, open(cible, "w"), indent=2)
+PY
 sed "s/\"port\": $PORT_A/\"port\": $PORT_I/; s|$WORK/a.log|$WORK/i.log|; s/\"accessory_id\": \"selftest\"/\"accessory_id\": \"selftestmarqueur\"/; s/\"heartbeat_seconds\": 4/\"heartbeat_seconds\": 0/" \
   "$WORK/a.json" > "$WORK/i.json"
+# Instance K : deux cibles vers le faux récepteur hostile, aucun réessai rapide, pas de battement de cœur.
+python3 - "$WORK/a.json" "$WORK/k.json" "$PORT_K" "$WORK/k.log" "$PORT_BORNE" <<'PY'
+import json, sys
+source, cible, port, journal, borne = sys.argv[1:]
+c = json.load(open(source))
+c.pop("webhook_base_url")
+c.update({"port": int(port), "log_file": journal, "accessory_id": "selftestborne", "heartbeat_seconds": 0,
+          "webhook_retries": 0,
+          "webhook_targets": [{"url": "http://127.0.0.1:%s/redir" % borne, "method": "POST"},
+                              {"url": "http://127.0.0.1:%s/gros" % borne}]})
+json.dump(c, open(cible, "w"), indent=2)
+PY
+# Instance J : une seule cible POST, vers un faux Home Assistant qui ne répond pas encore ; aucun
+# réessai rapide (abandon au premier échec), pas de battement de cœur : seul le réessai lent la resynchronise.
+python3 - "$WORK/a.json" "$WORK/j.json" "$PORT_J" "$WORK/j.log" "$PORT_HA2" <<'PY'
+import json, sys
+source, cible, port, journal, ha = sys.argv[1:]
+c = json.load(open(source))
+c.pop("webhook_base_url")
+c.update({"port": int(port), "log_file": journal, "accessory_id": "selftestretour", "heartbeat_seconds": 0,
+          "webhook_retries": 0,
+          "webhook_targets": [{"url": "http://127.0.0.1:%s/api/webhook/selftest-retour-essai" % ha, "method": "POST"}]})
+json.dump(c, open(cible, "w"), indent=2)
+PY
 
 # Garde : aucune instance ne démarre si sa configuration sort du cadre hermétique.
 # Seule D peut écouter sur « :: », et seulement avec le jeton d'essai.
 conformes=1
-for nom in a b c d e f g h i; do
+for nom in a b c d e f g h i j k; do
   attendu="127.0.0.1"
   [[ "$nom" == "d" ]] && attendu="::"
   python3 - "$WORK/$nom.json" "$attendu" "$JETON_B" <<'PY' || conformes=0
@@ -315,7 +399,10 @@ if c.get("off_command") != ["/usr/bin/true"]: erreurs.append("off_command")
 if c.get("wake_command") != ["/usr/bin/true"]: erreurs.append("wake_command")
 if c.get("off_escalate_to_display_sleep") is not False: erreurs.append("off_escalate_to_display_sleep")
 if c.get("stop_screensaver_on_wake") is not False: erreurs.append("stop_screensaver_on_wake")
-if not c.get("webhook_base_url", "").startswith("http://127.0.0.1:"): erreurs.append("webhook_base_url")
+if "webhook_targets" in c:
+    if not c["webhook_targets"] or any(not str(t.get("url", "")).startswith("http://127.0.0.1:") for t in c["webhook_targets"]):
+        erreurs.append("webhook_targets")
+elif not c.get("webhook_base_url", "").startswith("http://127.0.0.1:"): erreurs.append("webhook_base_url")
 if erreurs:
     print("  configuration non hermétique (%s) : %s" % (chemin, ", ".join(erreurs)))
     sys.exit(1)
@@ -336,6 +423,8 @@ print(d["state"], d["uptime_seconds"])' 2>/dev/null
 REEL_AVANT="$(reel_instantane)"
 
 python3 "$WORK/hbmock.py" $PORT_HB > "$WORK/hook.log" 2>&1 &
+PIDS+=($!)
+python3 "$WORK/hamock.py" $PORT_HA > "$WORK/ha.log" 2>&1 &
 PIDS+=($!)
 "$BIN" --config "$WORK/a.json" > "$WORK/a.out" 2>&1 &
 PIDS+=($!)
@@ -707,14 +796,44 @@ attendre_sortie() { # attendre_sortie <pid> <secondes> : vrai si le processus s'
 PID_H=$!
 PIDS+=($PID_H)
 if await_http $PORT_H 10 && await_push selftestarret 10; then ok "sigterm-off : instance démarrée, état initial publié"; else bad "sigterm-off : instance injoignable ou sans publication initiale"; fi
+nb_posts_ha() { # nb_posts_ha <accessoire> <true|false> : POST JSON reçus par le faux Home Assistant
+  grep -c "\"accessoryId\":\"$1\",\"state\":$2}" "$WORK/ha.log" 2>/dev/null || true
+}
+# /status de H : deux cibles, URL masquée, ni identifiant de webhook ni en-tête.
+STATUT_H="$(curl -fsS --max-time 2 "http://127.0.0.1:$PORT_H/status" 2>/dev/null)"
+VERDICT_H="$(printf '%s' "$STATUT_H" | python3 -c '
+import json, sys
+ident, entete = sys.argv[1], sys.argv[2]
+brut = sys.stdin.read()
+d = json.loads(brut)
+cibles = d["webhook"]["targets"]
+ok = (len(cibles) == 2 and cibles[1]["method"] == "POST"
+      and cibles[1]["url"].endswith("/api/webhook/<masqué>")
+      and ident not in brut and entete not in brut and "X-Essai" not in brut)
+print("ok" if ok else "ko")' "$HA_WEBHOOK_ID" "$HA_ENTETE" 2>/dev/null)"
+check "deux-cibles : /status, une entrée par cible, URL masquée, sans en-tête" "ok" "$VERDICT_H"
+if await_lignes "$WORK/ha.log" 1 5 && grep -qF "POST /api/webhook/$HA_WEBHOOK_ID application/json $HA_ENTETE {\"accessoryId\":\"selftestarret\",\"state\":" "$WORK/ha.log"; then
+  ok "deux-cibles : faux Home Assistant servi en POST JSON, avec l'en-tête de la cible"
+else
+  bad "deux-cibles : aucun POST JSON conforme reçu par le faux Home Assistant"
+fi
 AVANT_H="$(nb_pushs selftestarret false)"
+AVANT_HA="$(nb_posts_ha selftestarret false)"
 DEBUT_H=$SECONDS
 kill -TERM "$PID_H"
 if attendre_sortie "$PID_H" 5; then ok "sigterm-off : le daemon sort de lui-même ($((SECONDS - DEBUT_H)) s, ExitTimeOut 5 s)"; else bad "sigterm-off : le daemon n'est pas sorti en 5 s"; fi
 wait "$PID_H" 2>/dev/null; check "sigterm-off : code de sortie" "0" "$?"
 APRES_H="$(nb_pushs selftestarret false)"
 if [[ "$APRES_H" -gt "$AVANT_H" ]]; then ok "sigterm-off : state=false reçu par le faux Homebridge ($AVANT_H → $APRES_H)"; else bad "sigterm-off : aucun state=false reçu après le SIGTERM ($AVANT_H → $APRES_H)"; fi
+APRES_HA="$(nb_posts_ha selftestarret false)"
+if [[ "$APRES_HA" -gt "$AVANT_HA" ]]; then ok "sigterm-off : state=false reçu par le faux Home Assistant ($AVANT_HA → $APRES_HA)"; else bad "sigterm-off : aucun state=false reçu par le faux Home Assistant ($AVANT_HA → $APRES_HA)"; fi
+if grep -q "arrêt : OFF confirmé" "$WORK/h.log"; then ok "sigterm-off : « arrêt : OFF confirmé » au journal (livré aux deux cibles avant la sortie)"; else bad "sigterm-off : « arrêt : OFF confirmé » absent du journal"; fi
 if grep -q "arrêt terminé" "$WORK/h.log"; then ok "sigterm-off : « arrêt terminé » au journal"; else bad "sigterm-off : « arrêt terminé » absent du journal"; fi
+if grep -qF -e "$HA_WEBHOOK_ID" -e "$HA_ENTETE" "$WORK/h.log" "$WORK/h.out"; then
+  bad "deux-cibles : identifiant de webhook ou en-tête au journal de H"
+else
+  ok "deux-cibles : ni identifiant de webhook ni en-tête au journal de H"
+fi
 
 # sigterm-marqueur : un marqueur restart-pending récent (dossier d'essai, jamais le vrai) : rien n'est
 # publié, et le marqueur est supprimé.
@@ -735,6 +854,70 @@ check "sigterm-marqueur : rien reçu par le faux Homebridge" "$TOTAL_I" "$(grep 
 check "sigterm-marqueur : aucun state=false de plus" "$AVANT_I" "$(nb_pushs selftestmarqueur false)"
 if [[ -e "$SUPPORT_I/restart-pending" ]]; then bad "sigterm-marqueur : le marqueur n'a pas été supprimé"; else ok "sigterm-marqueur : marqueur supprimé"; fi
 if grep -q "redémarrage prévu" "$WORK/i.log"; then ok "sigterm-marqueur : « redémarrage prévu » au journal"; else bad "sigterm-marqueur : « redémarrage prévu » absent du journal"; fi
+
+echo
+echo "== 11. Webhook résilient : Home Assistant absent, puis de retour"
+# J publie vers un faux Home Assistant qui n'écoute pas encore : connexion refusée (-1004), abandon
+# immédiat (webhook_retries 0), sonde du chemin vers 127.0.0.1 seulement. Le faux revient ensuite :
+# le réessai lent (15 s après l'abandon) doit lui livrer l'état, sans battement de cœur.
+cible_j() { # cible_j <clé> : valeur de la première cible dans /status de J
+  curl -fsS --max-time 2 "http://127.0.0.1:$PORT_J/status" 2>/dev/null | python3 -c '
+import json, sys
+c = json.load(sys.stdin)["webhook"]["targets"][0]
+v = c.get(sys.argv[1])
+print("" if v is None else v)' "$1" 2>/dev/null || echo "__ERREUR__"
+}
+"$BIN" --config "$WORK/j.json" > "$WORK/j.out" 2>&1 &
+PID_J=$!
+PIDS+=($PID_J)
+if await_http $PORT_J 10; then ok "ha-retour : instance démarrée"; else bad "ha-retour : instance injoignable"; fi
+for _ in $(seq 40); do grep -q "abandonné" "$WORK/j.log" 2>/dev/null && break; sleep 0.25; done
+if grep -q "abandonné après 1 essais" "$WORK/j.log"; then ok "ha-retour : cible injoignable, série rapide abandonnée"; else bad "ha-retour : aucun abandon au journal de J"; fi
+check "ha-retour : phase de la cible" "réessai lent" "$(cible_j phase)"
+DEBUT_J=$SECONDS
+python3 "$WORK/hamock.py" $PORT_HA2 > "$WORK/ha2.log" 2>&1 &
+PID_HA2=$!
+PIDS+=($PID_HA2)
+RECU_J=0
+while [[ $SECONDS -lt $((DEBUT_J + 25)) ]]; do
+  grep -q "selftestretour" "$WORK/ha2.log" 2>/dev/null && { RECU_J=1; break; }
+  sleep 0.25
+done
+if [[ $RECU_J -eq 1 ]]; then ok "ha-retour : état livré par le réessai lent ($((SECONDS - DEBUT_J)) s après le retour, 60 s au plus)"; else bad "ha-retour : rien reçu 25 s après le retour du faux Home Assistant"; fi
+DESIRE_J="$(field $PORT_J webhook.desired)"
+if [[ -n "$DESIRE_J" && "$DESIRE_J" != "__ERREUR__" ]] && await_field $PORT_J webhook.confirmed "$DESIRE_J" 5; then
+  ok "ha-retour : état voulu confirmé dans /status (= $DESIRE_J)"
+else
+  bad "ha-retour : état voulu non confirmé dans /status ($DESIRE_J / $(field $PORT_J webhook.confirmed))"
+fi
+for _ in $(seq 20); do grep -q "de retour après" "$WORK/j.log" 2>/dev/null && break; sleep 0.25; done
+if grep -q "de retour après" "$WORK/j.log"; then ok "ha-retour : retour journalisé avec la durée de la panne"; else bad "ha-retour : « de retour après » absent du journal de J"; fi
+if grep -q "NSURLErrorDomain -1004" "$WORK/j.log"; then ok "ha-retour : domaine et code de l'erreur au journal"; else bad "ha-retour : domaine et code de l'erreur absents du journal"; fi
+if grep -q "accès au réseau local refusé" "$WORK/j.log"; then bad "ha-retour : refus d'accès au réseau local annoncé pour 127.0.0.1"; else ok "ha-retour : aucun refus d'accès au réseau local pour 127.0.0.1"; fi
+if grep -q "selftest-retour-essai" "$WORK/j.log"; then bad "ha-retour : identifiant de webhook au journal de J"; else ok "ha-retour : identifiant de webhook absent du journal de J"; fi
+arreter_pid "$PID_J"
+arreter_pid "$PID_HA2"
+
+# transport-borne : une redirection n'est pas suivie, un corps de plus de 4 Kio annule la requête.
+python3 "$WORK/bornemock.py" $PORT_BORNE > "$WORK/borne.log" 2>&1 &
+PID_BORNE=$!
+PIDS+=($PID_BORNE)
+sleep 0.5
+"$BIN" --config "$WORK/k.json" > "$WORK/k.out" 2>&1 &
+PID_K=$!
+PIDS+=($PID_K)
+if await_http $PORT_K 10; then ok "transport-borne : instance démarrée"; else bad "transport-borne : instance injoignable"; fi
+detail_k() { # detail_k <index> : détail de la cible dans /status de K
+  curl -fsS --max-time 2 "http://127.0.0.1:$PORT_K/status" 2>/dev/null | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["webhook"]["targets"][int(sys.argv[1])]["detail"])' "$1" 2>/dev/null || echo "__ERREUR__"
+}
+for _ in $(seq 20); do [[ "$(detail_k 1)" == erreur* && "$(detail_k 0)" == HTTP* ]] && break; sleep 0.25; done
+check "transport-borne : redirection refusée" "HTTP 302 : redirection refusée" "$(detail_k 0)"
+check "transport-borne : corps au-delà de 4 Kio" "erreur corps de réponse au-delà de 4 Kio, requête annulée" "$(detail_k 1)"
+if grep -q "/suivi" "$WORK/borne.log"; then bad "transport-borne : la redirection a été suivie"; else ok "transport-borne : la redirection n'a pas été suivie"; fi
+arreter_pid "$PID_K"
+arreter_pid "$PID_BORNE"
 
 # Instance réelle : inchangée (lue seulement).
 REEL_APRES="$(reel_instantane)"

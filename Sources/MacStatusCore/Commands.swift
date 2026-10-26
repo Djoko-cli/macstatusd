@@ -14,15 +14,20 @@ public protocol CommandActions: AnyObject {
     func stopScreenSaver()
 }
 
-/// Destination de l'état publié (webhook Homebridge aujourd'hui).
+/// Destination de l'état publié (webhooks : Homebridge, Home Assistant).
 public protocol StatePublisher: AnyObject {
     /// Demande la publication d'un état. `force` réémet même si l'état est déjà
     /// confirmé (battement de cœur, resynchronisation).
     func publish(_ state: Bool, force: Bool)
-    /// Prévient `done` quand l'état voulu est confirmé (`true`), quand son envoi est abandonné
-    /// ou quand `timeout` secondes se sont écoulées (`false`). Rien à livrer : `done(true)` tout
-    /// de suite. `done` est appelé exactement une fois, sur la file du moteur ; l'attente ne
-    /// bloque jamais cette file, et elle est retirée à l'échéance.
+    /// Arrêt du daemon : publie `state` en force et tout de suite, vers chaque destination. Une
+    /// requête en vol pour un autre état est annulée au lieu d'être attendue (R40).
+    func publishBeforeExit(_ state: Bool)
+    /// Prévient `done` quand l'état voulu est confirmé par toutes les destinations (`true`), quand
+    /// chacune a confirmé ou abandonné, ou quand `timeout` secondes se sont écoulées (`false`).
+    /// Déjà confirmé partout : `done(true)` tout de suite. Aucune destination utilisable (webhook
+    /// désactivé, mode dégradé, URL invalide) : `done(false)` tout de suite. `done` est appelé
+    /// exactement une fois, sur la file du moteur ; l'attente ne bloque jamais cette file, et elle
+    /// est retirée à l'échéance.
     func notifyWhenDelivered(timeout: Double, _ done: @escaping (Bool) -> Void)
     /// Diagnostic exposé dans /status, sous la clé `webhook`.
     var statusDictionary: [String: Any] { get }

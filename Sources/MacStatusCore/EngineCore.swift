@@ -412,9 +412,9 @@ public final class EngineCore {
     /// aucune action (réveil, OFF, économiseur), aucun battement de cœur ni nouvelle évaluation ;
     /// les lectures (`currentState`, `statusSnapshot`, `inspect`) restent possibles.
     ///
-    /// Avec `publishOff`, OFF est publié en `force`, ce qui remplace l'état voulu même si une
-    /// requête est en vol (le client l'envoie dès que celle-ci rend la main), puis `done` part à la
-    /// livraison, ou après `shutdownDeliveryTimeout` (2 s) au plus. Sans `publishOff` (redémarrage
+    /// Avec `publishOff`, OFF est publié en `force` par `publishBeforeExit` : une requête ON en vol
+    /// est annulée et OFF part aussitôt vers chaque cible, puis `done` part à la livraison
+    /// (toutes les cibles), ou après `shutdownDeliveryTimeout` (2 s) au plus. Sans `publishOff` (redémarrage
     /// prévu, mode dégradé, option désactivée), `done` part tout de suite. `done` est appelé
     /// exactement une fois par appel, sur la file du moteur. Un second appel ne publie rien.
     public func shutdown(publishOff: Bool, _ done: @escaping () -> Void) {
@@ -433,7 +433,8 @@ public final class EngineCore {
         logInfo("arrêt : publication OFF avant de partir")
         published = false
         publishedReason = "shutdown"
-        publisher.publish(false, force: true)
+        // Un ON en vol est annulé : OFF part tout de suite, sans attendre sa réponse (R40).
+        publisher.publishBeforeExit(false)
         publisher.notifyWhenDelivered(timeout: Self.shutdownDeliveryTimeout) { delivered in
             if delivered {
                 logInfo("arrêt : OFF confirmé")

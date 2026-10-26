@@ -145,10 +145,42 @@ private struct JSONBag {
     }
 }
 
+/// Destinataire d'un webhook : Homebridge (http-webhooks, GET), Home Assistant (POST), ou tout
+/// récepteur HTTP qui confirme par un 2xx.
+///
+/// - `GET` : l'URL reçoit `?accessoryId=<id>&state=true|false` (ou `&…` si elle a déjà une requête) ;
+/// - `POST` : l'URL telle quelle, corps JSON `{"accessoryId": <id>, "state": <booléen>}`.
+///
+/// `headers` peut porter un secret (jeton, clé) : ses valeurs ne sont jamais journalisées ni
+/// montrées dans `/status`, l'URL n'y paraît que masquée (`redactURL`).
+public struct WebhookTarget: Equatable {
+    public var url: String
+    /// "GET" ou "POST", en majuscules.
+    public var method: String
+    public var headers: [String: String]
+
+    public init(url: String, method: String = "GET", headers: [String: String] = [:]) {
+        self.url = url
+        self.method = method
+        self.headers = headers
+    }
+}
+
 public struct Config {
     // --- Webhook Homebridge (compatibilité avec les prototypes 4.x) ---
     public var enabled = false
     public var webhookBaseURL = ""
+    /// Cibles du webhook. Lues de `webhook_targets` quand la clé est présente ; à défaut,
+    /// `webhook_base_url` non vide donne une cible unique `{url, "GET", [:]}`. Une valeur affectée
+    /// (même vide) l'emporte sur `webhookBaseURL`.
+    public var webhookTargets: [WebhookTarget] {
+        get {
+            if let explicitWebhookTargets { return explicitWebhookTargets }
+            return webhookBaseURL.isEmpty ? [] : [WebhookTarget(url: webhookBaseURL, method: "GET", headers: [:])]
+        }
+        set { explicitWebhookTargets = newValue }
+    }
+    private var explicitWebhookTargets: [WebhookTarget]?
     public var accessoryID = "mac"
     public var webhookTimeoutMS = 4000
     public var webhookRetries = 3
@@ -226,7 +258,11 @@ public struct Config {
         "off_escalate_to_display_sleep", "command_confirm_timeout_ms", "command_escalate_after_ms",
         "stop_screensaver_on_wake", "off_command", "wake_command", "log_level", "log_file",
         "saver_dismiss_on_input", "saver_dismiss_grace_ms", "saver_redisplay_idle_seconds",
+        "webhook_targets",
     ]
+
+    /// Nombre maximal de cibles du webhook ; les suivantes sont écartées.
+    public static let maxWebhookTargets = 8
 
     /// Résultat d'un chargement : la config, son origine et les avertissements (sans secret).
     public typealias Loaded = (config: Config, origin: ConfigOrigin, warnings: [String])
@@ -262,6 +298,7 @@ public struct Config {
         cfg.bindAddress = "127.0.0.1"
         cfg.enabled = false
         cfg.webhookBaseURL = ""
+        cfg.webhookTargets = []
         cfg.webhookRetries = 0
         cfg.heartbeatSeconds = 0
         cfg.authToken = ""
@@ -440,18 +477,116 @@ public struct Config {
         }
         cfg.logFile = bag.string("log_file", cfg.logFile)
 
-        if !cfg.webhookBaseURL.isEmpty {
-            let scheme = URLComponents(string: cfg.webhookBaseURL)?.scheme?.lowercased()
-            let masked = redactURL(cfg.webhookBaseURL)
-            if masked == "<url invalide>" || (scheme != "http" && scheme != "https") {
-                // URL masquée : son identifiant de webhook et sa requête n'entrent jamais au journal.
-                bag.warn("webhook_base_url=\(masked) : URL http:// ou https:// attendue, les envois échoueront")
+        if let value = bag.raw["webhook_targets"] {
+            // `webhook_targets` présent : lui seul décide des cibles, même s'il est illisible.
+            cfg.webhookTargets = webhookTargets(from: value, bag: &bag)
+            if !cfg.webhookBaseURL.isEmpty {
+                bag.warn("webhook_targets et webhook_base_url présents : webhook_targets l'emporte, "
+                         + "webhook_base_url ignoré")
+            }
+            if cfg.enabled && cfg.webhookTargets.isEmpty {
+                bag.warn("enabled=true mais aucune cible valide dans webhook_targets → aucun push")
+            }
+        } else {
+            if !cfg.webhookBaseURL.isEmpty {
+                let masked = redactURL(cfg.webhookBaseURL)
+                if !isUsableWebhookURL(cfg.webhookBaseURL) {
+                    // URL masquée : son identifiant de webhook et sa requête n'entrent jamais au journal.
+                    bag.warn("webhook_base_url=\(masked) : URL http:// ou https:// attendue, les envois échoueront")
+                }
+            }
+            if cfg.enabled && cfg.webhookBaseURL.isEmpty {
+                bag.warn("enabled=true mais webhook_base_url vide → aucun push vers Homebridge")
             }
         }
-        if cfg.enabled && cfg.webhookBaseURL.isEmpty {
-            bag.warn("enabled=true mais webhook_base_url vide → aucun push vers Homebridge")
-        }
         return (cfg, .file, bag.warnings)
+    }
+
+    /// Vrai pour une URL `http://` ou `https://` lisible, avec un hôte. `redactURL` la lit aussi :
+    /// sinon elle ne pourrait même pas être citée au journal.
+    static func isUsableWebhookURL(_ text: String) -> Bool {
+        guard redactURL(text) != "<url invalide>", let parts = URLComponents(string: text),
+              let scheme = parts.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = parts.host, !host.isEmpty, URL(string: text) != nil else { return false }
+        return true
+    }
+
+    /// Lit `webhook_targets` : une liste d'objets `{url, method?, headers?}`. Une cible invalide est
+    /// écartée, avec un avertissement « webhook_targets : cible <n> … » (n compté à partir de 1).
+    /// Les messages ne citent jamais une valeur d'en-tête, et l'URL seulement masquée.
+    private static func webhookTargets(from value: Any, bag: inout JSONBag) -> [WebhookTarget] {
+        guard let list = value as? [Any] else {
+            bag.warn("webhook_targets : type inattendu (\(JSONBag.kind(value))), liste d'objets attendue → aucune cible")
+            return []
+        }
+        var targets: [WebhookTarget] = []
+        for (index, element) in list.enumerated() {
+            let label = "webhook_targets : cible \(index + 1)"
+            guard targets.count < maxWebhookTargets else {
+                bag.warn("webhook_targets : \(list.count) cibles, \(maxWebhookTargets) au plus → les suivantes sont écartées")
+                break
+            }
+            guard let object = element as? [String: Any] else {
+                bag.warn("\(label) : type inattendu (\(JSONBag.kind(element))), objet {url, method, headers} attendu → écartée")
+                continue
+            }
+            let unknown = object.keys.filter { !["url", "method", "headers"].contains($0) }.sorted()
+            if !unknown.isEmpty {
+                bag.warn("\(label) : clés inconnues ignorées: " + unknown.map { escapeForLog($0, limit: 32) }.joined(separator: ", "))
+            }
+            guard let url = object["url"] as? String, !url.isEmpty else {
+                bag.warn("\(label) : url absente ou pas une chaîne → écartée")
+                continue
+            }
+            guard isUsableWebhookURL(url) else {
+                bag.warn("\(label) : url=\(redactURL(url)) : URL http:// ou https:// attendue → écartée")
+                continue
+            }
+            var method = "GET"
+            if let raw = object["method"] {
+                guard let text = raw as? String, ["GET", "POST"].contains(text.uppercased()) else {
+                    let shown = (raw as? String).map { "« \(escapeForLog($0, limit: 16)) »" } ?? "(\(JSONBag.kind(raw)))"
+                    bag.warn("\(label) : méthode \(shown) non prise en charge (GET ou POST) → écartée")
+                    continue
+                }
+                method = text.uppercased()
+            }
+            var headers: [String: String] = [:]
+            if let raw = object["headers"] {
+                guard let dict = raw as? [String: Any] else {
+                    bag.warn("\(label) : headers de type \(JSONBag.kind(raw)), objet {nom: valeur} attendu → écartée")
+                    continue
+                }
+                var problem: String?
+                for name in dict.keys.sorted() {
+                    guard isHeaderName(name) else {
+                        problem = "nom d'en-tête « \(escapeForLog(name, limit: 32)) » invalide"
+                        break
+                    }
+                    guard let text = dict[name] as? String else {
+                        problem = "valeur de l'en-tête « \(name) » pas une chaîne"
+                        break
+                    }
+                    guard text.count <= 4096, !text.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+                        problem = "valeur de l'en-tête « \(name) » invalide (caractère de contrôle ou plus de 4096 caractères)"
+                        break
+                    }
+                    headers[name] = text
+                }
+                if let problem {
+                    bag.warn("\(label) : \(problem) → écartée")
+                    continue
+                }
+            }
+            targets.append(WebhookTarget(url: url, method: method, headers: headers))
+        }
+        return targets
+    }
+
+    /// Nom d'en-tête HTTP : un « token » (RFC 9110) d'au plus 64 caractères.
+    private static func isHeaderName(_ name: String) -> Bool {
+        let allowed = Set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        return !name.isEmpty && name.count <= 64 && name.allSatisfy { allowed.contains($0) }
     }
 
     /// Avertissements sur `auth_token`, sans jamais citer sa valeur : espaces de bord
