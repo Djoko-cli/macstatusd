@@ -34,12 +34,13 @@ final class PowerActions: CommandActions {
     }
 
     var hasOffOverride: Bool { !offCommandOverride.isEmpty }
+    var hasWakeOverride: Bool { !wakeCommandOverride.isEmpty }
 
     // MARK: - OFF
 
     func runOff(_ action: OffAction) {
         if !offCommandOverride.isEmpty {
-            launch(offCommandOverride, label: "off_command")
+            launch(offCommandOverride, label: "off_command", masked: true)
             return
         }
         switch action {
@@ -77,7 +78,7 @@ final class PowerActions: CommandActions {
     /// minutes. Avec une surcharge `wake_command`, rien n'est posé.
     func wake() {
         if !wakeCommandOverride.isEmpty {
-            launch(wakeCommandOverride, label: "wake_command")
+            launch(wakeCommandOverride, label: "wake_command", masked: true)
             return
         }
         queue.async { [self] in
@@ -174,7 +175,7 @@ final class PowerActions: CommandActions {
         if result == kIOReturnSuccess {
             logInfo("retenue d'écran: \(raison)")
         } else {
-            logDebug("retenue d'écran: relâchement après \(raison) sans objet (0x\(String(result, radix: 16)))")
+            logWarn("retenue d'écran: IOPMAssertionRelease après \(raison) a échoué (0x\(String(result, radix: 16)))")
         }
     }
 
@@ -201,8 +202,9 @@ final class PowerActions: CommandActions {
 
     // MARK: - Exécution
 
-    /// Lance sans attendre et sans tuyau : ne peut ni bloquer ni fuir.
-    private func launch(_ argv: [String], label: String) {
+    /// Lance sans attendre et sans tuyau : ne peut ni bloquer ni fuir. `masked` (commandes de la
+    /// config) : le journal ne montre que l'exécutable et le nombre d'arguments.
+    private func launch(_ argv: [String], label: String, masked: Bool = false) {
         queue.async {
             guard let executable = argv.first else { return }
             let process = Process()
@@ -213,7 +215,8 @@ final class PowerActions: CommandActions {
             process.standardInput = FileHandle.nullDevice
             do {
                 try process.run()
-                logInfo("\(label): lancé (\(argv.joined(separator: " ")))")
+                let shown = masked ? commandSummaryForLog(argv) : argv.joined(separator: " ")
+                logInfo("\(label): lancé (\(shown))")
             } catch {
                 logError("\(label): lancement impossible — \(error)")
             }

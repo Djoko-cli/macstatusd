@@ -133,7 +133,10 @@ let logFile: URL? = {
     if config.logFile.isEmpty { return Log.defaultLogFile() }
     return URL(fileURLWithPath: config.logFile)
 }()
-Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || options.foreground || options.debug)
+// `--once` et `--watch` : l'écho du journal va sur la sortie d'erreur, la sortie standard ne porte que
+// le JSON (ou le tableau de surveillance).
+Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || options.foreground || options.debug,
+                     echoDescriptor: (options.once || options.watch) ? STDERR_FILENO : STDOUT_FILENO)
 
 // MARK: - Modes de diagnostic
 

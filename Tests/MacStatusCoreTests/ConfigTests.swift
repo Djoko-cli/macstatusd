@@ -2,6 +2,16 @@ import XCTest
 @testable import MacStatusCore
 
 final class ConfigTests: XCTestCase {
+    /// `wake_command` défini : rien n'est posé par le réveil, `wake_hold_seconds` ne sert à rien.
+    func test_wakeCommandEtWakeHold_avertissement() {
+        let r = Config.parse(data: Data(#"{"wake_command":["/usr/bin/true"],"wake_hold_seconds":30}"#.utf8))
+        XCTAssertTrue(r.warnings.contains("wake_hold_seconds ignoré : wake_command défini"), "\(r.warnings)")
+        let sansRetenue = Config.parse(data: Data(#"{"wake_command":["/usr/bin/true"]}"#.utf8))
+        XCTAssertFalse(sansRetenue.warnings.contains { $0.contains("wake_hold_seconds") }, "\(sansRetenue.warnings)")
+        let sansCommande = Config.parse(data: Data(#"{"wake_hold_seconds":30}"#.utf8))
+        XCTAssertFalse(sansCommande.warnings.contains { $0.contains("wake_hold_seconds") }, "\(sansCommande.warnings)")
+    }
+
     func test_fichierAbsent_donneLesDefautsEtUnAvertissement() {
         let r = Config.parse(data: nil)
         XCTAssertFalse(r.config.enabled); XCTAssertEqual(r.config.port, 9090)

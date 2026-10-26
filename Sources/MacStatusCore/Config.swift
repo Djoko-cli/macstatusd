@@ -484,6 +484,9 @@ public struct Config {
         cfg.wakeHoldSeconds = bag.int("wake_hold_seconds", cfg.wakeHoldSeconds, min: 0, max: 600)
         cfg.offCommand = bag.command("off_command", cfg.offCommand)
         cfg.wakeCommand = bag.command("wake_command", cfg.wakeCommand)
+        if !cfg.wakeCommand.isEmpty, cfg.wakeHoldSeconds > 0 {
+            bag.warn("wake_hold_seconds ignoré : wake_command défini")
+        }
 
         cfg.logLevel = bag.string("log_level", cfg.logLevel)
         if !["error", "warn", "warning", "info", "debug", "trace"].contains(cfg.logLevel.lowercased()) {

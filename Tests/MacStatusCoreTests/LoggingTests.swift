@@ -27,6 +27,21 @@ final class LoggingTests: XCTestCase {
         logError("perdu"); logInfo("perdu aussi")
     }
 
+    /// `off_command` / `wake_command` au journal : l'exécutable (échappé) et le nombre d'arguments,
+    /// jamais les arguments (ils peuvent porter un jeton ou une adresse).
+    func test_resumeDeCommande_executableEtNombreDArgumentsSeulement() {
+        let resume = commandSummaryForLog(["/usr/local/bin/outil", "--jeton", "jeton-essai-0123456789abcdef", "198.51.100.7"])
+        XCTAssertEqual(resume, "/usr/local/bin/outil + 3 arguments")
+        XCTAssertFalse(resume.contains("jeton-essai"))
+        XCTAssertFalse(resume.contains("198.51.100.7"))
+        XCTAssertEqual(commandSummaryForLog(["/usr/bin/true"]), "/usr/bin/true + 0 argument")
+        XCTAssertEqual(commandSummaryForLog(["/bin/echo", "x"]), "/bin/echo + 1 argument")
+        // L'exécutable lui-même est échappé : il ne peut ni couper la ligne ni glisser une séquence.
+        XCTAssertEqual(commandSummaryForLog(["/home/exemple/a\nb\u{1B}", "x"]),
+                       "/home/exemple/a\\u{0A}b\\u{1B} + 1 argument")
+        XCTAssertEqual(commandSummaryForLog([]), "(commande vide)")
+    }
+
     func test_escapeForLog() {
         XCTAssertEqual(escapeForLog("a\u{1B}b\nc"), "a\\u{1B}b\\u{0A}c")
         XCTAssertEqual(escapeForLog(String(repeating: "x", count: 250)).count, 201)

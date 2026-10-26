@@ -469,13 +469,15 @@ public final class EngineCore {
     // MARK: - Réveil maîtrisé
 
     /// Seul point d'appel de `actions.wake()` : note que l'assertion qu'il pose est à relâcher.
+    /// Avec `wake_command`, rien n'est posé : rien à relâcher, ni à journaliser.
     private func wakeNow() {
-        wakeAssertionHeld = true
         wakeSaverWaitUntil = nil
         lightWake = false
-        wakeJustIssued = true
         deferredReleaseReason = nil
         actions.wake()
+        guard !actions.hasWakeOverride else { return }
+        wakeAssertionHeld = true
+        wakeJustIssued = true
     }
 
     /// Relâche l'assertion posée par `wake()`, une seule fois. Sans effet si rien n'est posé.
@@ -508,7 +510,8 @@ public final class EngineCore {
         } else {
             releaseWakeAssertion("ON confirmé par les faits")
         }
-        guard config.wakeHoldSeconds > 0, facts.sessionLocked else { return }
+        // Avec `wake_command`, `holdDisplay` ne pose rien (avertissement de config au démarrage).
+        guard config.wakeHoldSeconds > 0, facts.sessionLocked, !actions.hasWakeOverride else { return }
         // Une nouvelle retenue remplace l'ancienne (c'est `holdDisplay` qui le garantit).
         displayHoldUntil = now + Double(config.wakeHoldSeconds)
         actions.holdDisplay(seconds: Double(config.wakeHoldSeconds))
@@ -797,11 +800,13 @@ public final class EngineCore {
                         + "en marche (\(facts.screenSaverEvidence)) → réveil, sans intention")
                 wakeNow()
                 // Rien à confirmer : l'assertion tient tant que l'économiseur tourne, au plus un délai de commande.
-                wakeSaverWaitUntil = clock.monotonic() + Double(config.commandConfirmTimeoutMS) / 1000
+                if wakeAssertionHeld {
+                    wakeSaverWaitUntil = clock.monotonic() + Double(config.commandConfirmTimeoutMS) / 1000
+                }
             } else {
                 logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)) : réveil léger, sans intention")
                 wakeNow()
-                lightWake = true
+                lightWake = wakeAssertionHeld
             }
             evaluate(immediate: true)
             return

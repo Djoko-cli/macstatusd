@@ -8,6 +8,9 @@ import Foundation
 public protocol CommandActions: AnyObject {
     /// Une commande OFF personnalisée (`off_command`) remplace l'action configurée.
     var hasOffOverride: Bool { get }
+    /// Une commande de réveil personnalisée (`wake_command`) remplace l'assertion : `wake()` ne pose
+    /// alors rien, `releaseWake()` et `holdDisplay(seconds:)` sont sans effet.
+    var hasWakeOverride: Bool { get }
     func runOff(_ action: OffAction)
     func displaySleep()
     func wake()
@@ -21,6 +24,15 @@ public protocol CommandActions: AnyObject {
     /// `seconds <= 0` relâche la retenue en cours. Ne bloque jamais.
     func holdDisplay(seconds: Double)
     func stopScreenSaver()
+}
+
+/// Résumé d'une commande de surcharge (`off_command`, `wake_command`) pour le journal : l'exécutable,
+/// échappé, et le nombre d'arguments. Jamais les arguments eux-mêmes : ils peuvent porter un jeton,
+/// une adresse ou un nom.
+public func commandSummaryForLog(_ argv: [String]) -> String {
+    guard let executable = argv.first else { return "(commande vide)" }
+    let count = argv.count - 1
+    return "\(escapeForLog(executable)) + \(count) argument\(count > 1 ? "s" : "")"
 }
 
 /// Destination de l'état publié (webhooks : Homebridge, Home Assistant).

@@ -50,6 +50,8 @@ public final class Log: LogSink {
     private var bytes = 0
     private var writesSinceCheck = 0
     private var echoToStdout = true
+    /// Descripteur de l'écho : la sortie standard, ou la sortie d'erreur pour `--once` et `--watch`.
+    private var echoDescriptor: Int32 = STDOUT_FILENO
     /// Un échec a déjà été signalé pour l'épisode en cours (remis à faux par une ouverture réussie).
     private var failureReported = false
     /// Instant monotone (ns) avant lequel l'ouverture n'est pas retentée.
@@ -95,11 +97,14 @@ public final class Log: LogSink {
     }
 
     /// `maxBytes` : taille de rotation imposée par l'appelant (tests) ; sinon la variable d'environnement
-    /// d'essai, sinon 2 Mio.
-    public func configure(level: LogLevel, file: URL?, echoToStdout: Bool, maxBytes: Int? = nil) {
+    /// d'essai, sinon 2 Mio. `echoDescriptor` : où va l'écho (`echoToStdout`) ; la sortie d'erreur pour
+    /// `--once` et `--watch`, dont la sortie standard ne porte que leur propre affichage.
+    public func configure(level: LogLevel, file: URL?, echoToStdout: Bool,
+                          echoDescriptor: Int32 = STDOUT_FILENO, maxBytes: Int? = nil) {
         queue.sync {
             self.level = level
             self.echoToStdout = echoToStdout
+            self.echoDescriptor = echoDescriptor
             var size = maxBytes
             var notice: (LogLevel, String)?
             if size == nil, let text = ProcessInfo.processInfo.environment[Log.maxBytesEnvironmentKey] {
@@ -357,10 +362,10 @@ public final class Log: LogSink {
         _ = writeAll(descriptor, data)
     }
 
-    /// Écho sur la sortie standard. Un lecteur de tube parti (EPIPE) ou un descripteur fermé coupe
-    /// l'écho pour de bon ; un tube plein (EAGAIN) fait seulement perdre la ligne.
+    /// Écho sur `echoDescriptor` (la sortie standard par défaut). Un lecteur de tube parti (EPIPE) ou un
+    /// descripteur fermé coupe l'écho pour de bon ; un tube plein (EAGAIN) fait seulement perdre la ligne.
     private func echo(_ data: Data) {
-        guard let code = Log.writeAll(STDOUT_FILENO, data) else { return }
+        guard let code = Log.writeAll(echoDescriptor, data) else { return }
         if code != EAGAIN { echoToStdout = false }
     }
 

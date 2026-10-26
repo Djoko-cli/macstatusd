@@ -308,6 +308,21 @@ final class LogFichierTests: XCTestCase {
         XCTAssertTrue(signalements[0].contains("descripteur standard refusé"), signalements[0])
     }
 
+    // MARK: - Écho
+
+    /// `--once` et `--watch` : l'écho part sur le descripteur demandé (la sortie d'erreur en vrai), jamais
+    /// sur la sortie standard qui porte le JSON. Ici, un tube tient lieu de sortie d'erreur.
+    func test_echo_versLeDescripteurDemande() throws {
+        let tube = Pipe()
+        journal.configure(level: .debug, file: nil, echoToStdout: true,
+                          echoDescriptor: tube.fileHandleForWriting.fileDescriptor)
+        journal.log(.debug, "faits relus")
+        journal.flush()
+        try tube.fileHandleForWriting.close()
+        let lu = String(data: tube.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertTrue(lu.contains("DEBUG faits relus"), lu)
+    }
+
     // MARK: - Taille de rotation d'essai
 
     func test_tailleDeRotationReduite_ligneInfoAuDemarrage() {

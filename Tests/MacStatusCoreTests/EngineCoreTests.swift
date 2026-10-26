@@ -773,6 +773,34 @@ final class EngineCoreTests: XCTestCase {
                                               .releaseWake, .holdDisplay(60)])
     }
 
+    /// Avec `wake_command`, le réveil ne pose rien : ni relâchement d'assertion, ni retenue d'écran,
+    /// et le journal ne parle ni de l'un ni de l'autre.
+    func test_wakeCommand_niAssertionNiRetenue() {
+        sessionVerrouilleeEcranEteint()
+        actions.hasWakeOverride = true
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core), "ON confirmé")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appelsReveil, [])
+        XCTAssertFalse(journalContient("assertion de réveil relâchée"), "\(journal.lines.map { $0.1 })")
+        XCTAssertFalse(journalContient("retenue d'écran"), "\(journal.lines.map { $0.1 })")
+
+        // Réveil léger (R49) : la commande part, rien à relâcher ensuite.
+        core.requestOn(source: "essai")
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appels, [.wake, .wake])
+        XCTAssertEqual(actions.appelsReveil, [])
+        XCTAssertFalse(journalContient("assertion de réveil relâchée"))
+
+        // Un OFF ne lève aucune retenue qui n'existe pas.
+        core.requestOff(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [])
+    }
+
     /// Arrêt : la retenue en cours est levée.
     func test_arret_leveLaRetenue() {
         sessionVerrouilleeEcranEteint()

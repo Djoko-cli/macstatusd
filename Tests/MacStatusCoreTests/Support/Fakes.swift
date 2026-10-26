@@ -148,6 +148,8 @@ final class FakeActions: CommandActions {
     }
 
     var hasOffOverride = false
+    /// Vrai : une surcharge `wake_command` est définie, `wake()` ne pose rien à relâcher.
+    var hasWakeOverride = false
     private(set) var appels: [Appel] = []
 
     func runOff(_ action: OffAction) { appels.append(.runOff(action)) }
