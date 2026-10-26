@@ -493,7 +493,7 @@ F05, F30, F61, et F29 (masquage des URL).
   - rotation en 5 générations (`.1` à `.5`) de 2 Mio ;
   - sortie standard et erreur standard écrites sans lever d'exception, et l'écho est coupé après un EPIPE.
 
-- [ ] **Étape 1 : tests** :
+- [x] **Étape 1 : tests** :
   - `test_redactURL_motDePasseEtIdentifiantDeWebhook` :
     `http://u:secret@192.0.2.10:8123/api/webhook/abc123` → `http://u:***@192.0.2.10:8123/api/webhook/<masqué>` ;
   - `test_redactURL_invalide`.
@@ -503,10 +503,10 @@ F05, F30, F61, et F29 (masquage des URL).
     recréé ;
   - `journal-rotation` : 5 générations au plus ;
   - `stdout-ferme` : instance lancée en `-f | head -1`, toujours vivante 3 s plus tard.
-- [ ] **Étape 2 : lancer les tests** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre** ; `main.swift` et le client webhook journalisent l'URL par `redactURL`.
-- [ ] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Journal : écritures sans exception, réouverture, cinq générations ».
+- [x] **Étape 2 : lancer les tests** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre** ; `main.swift` et le client webhook journalisent l'URL par `redactURL`.
+- [x] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
+- [x] **Étape 5 : commit** « Journal : écritures sans exception, réouverture, cinq générations ».
 
 ### Tâche 12 : config sûre et mode dégradé
 
@@ -532,16 +532,16 @@ F18, F62, F64.
 - CLI : `--config` ou `--port` sans valeur, ou un port hors de 1…65535, font sortir en code 2 avec un
   message.
 
-- [ ] **Étape 1 : tests** :
+- [x] **Étape 1 : tests** :
   - `test_jsonInvalide_donneModeDegrade` : origine `.invalid`, `bindAddress == "127.0.0.1"`, `enabled == false` ;
   - `test_modeDegrade_commandesEt503` ;
   - `test_fichierAbsent_restePermissif` ;
   - `test_valeurHorsBornes_avertit` ;
   - `test_booleenChaine_offAccepte`.
-- [ ] **Étape 2 : `swift test`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Config : mode dégradé fermé, avertissements nommés, CLI validée ».
+- [x] **Étape 2 : `swift test`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test`** — attendu : OK.
+- [x] **Étape 5 : commit** « Config : mode dégradé fermé, avertissements nommés, CLI validée ».
 
 ### Tâche 13 : veille et réveil
 
@@ -570,16 +570,16 @@ F11, F12, F39, F74.
   - sur `.systemWillNotSleep` : `systemAsleep = false`, puis une évaluation non immédiate, sans toucher
     à l'intention.
 
-- [ ] **Étape 1 : tests** :
+- [x] **Étape 1 : tests** :
   - `test_reveilPendantUneCommandeOn_conserveLIntention` ;
   - `test_veilleAnnulee_neToucheNiIntentionNiNotification` ;
   - `test_veille_attenteAsynchrone_allowAppeleUneSeuleFois` ;
   - `test_veille_offDejaConfirme_aucunEnvoi` ;
   - `test_reveilApresVeilleCourte_pasDePublicationForcee`.
-- [ ] **Étape 2 : `swift test`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Veille : réveil fidèle à la commande, attente asynchrone ».
+- [x] **Étape 2 : `swift test`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test`** — attendu : OK.
+- [x] **Étape 5 : commit** « Veille : réveil fidèle à la commande, attente asynchrone ».
 
 ### Tâche 14 : arrêt propre
 
@@ -646,7 +646,7 @@ F20, F53, F54, F55, F57, F72 ; demande de la session HA.
   confirmé qui change et un retour après panne (avec la durée de la panne).
 - `/status` : une entrée par cible, l'URL passée par `redactURL`.
 
-- [ ] **Étape 1 : tests** :
+- [x] **Étape 1 : tests** :
   - `test_deuxCibles_unePanne_lAutreConfirmee` ;
   - `test_cibleRevenue_estResynchroniseeParLeReessaiLent` (quatrième point de vigilance : abandon,
     puis transport rétabli, état confirmé au plus tard à t + 60 s) ;
@@ -657,12 +657,12 @@ F20, F53, F54, F55, F57, F72 ; demande de la session HA.
   - `test_battementDeCoeurSansChangement_journaliseEnDebug` ;
   - `ConfigTests.test_webhookBaseURL_devientUneCible` ;
   - `ConfigTests.test_webhookTargets_lus`.
-- [ ] **Étape 2 : `swift test`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.** `URLSessionTransport` devient une session à délégué (redirection,
+- [x] **Étape 2 : `swift test`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.** `URLSessionTransport` devient une session à délégué (redirection,
   plafond) ; `NWPathMonitor` vit dans l'exécutable.
-- [ ] **Étape 4 : `swift test && bash scripts/selftest.sh`**, avec un faux webhook HA qui répond 200 sans
+- [x] **Étape 4 : `swift test && bash scripts/selftest.sh`**, avec un faux webhook HA qui répond 200 sans
   corps — attendu : OK.
-- [ ] **Étape 5 : commit** « Webhook : plusieurs cibles, réessai lent, retour du réseau, transport borné ».
+- [x] **Étape 5 : commit** « Webhook : plusieurs cibles, réessai lent, retour du réseau, transport borné ».
 
 ### Tâche 16 : une seule instance publie
 
@@ -677,13 +677,13 @@ F19.
   Tant qu'il est faux, aucune publication ni aucun battement de cœur ne part ; à son retour à vrai, l'état
   courant est publié en `force`.
 
-- [ ] **Étape 1 : tests** : `test_publicationBloquee_tantQueListenerPasPret`,
+- [x] **Étape 1 : tests** : `test_publicationBloquee_tantQueListenerPasPret`,
   `test_publicationReprise_forceAuRetour`.
-- [ ] **Étape 2 : `swift test`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test`, puis `selftest.sh`**, avec le nouveau cas `deux-instances` : la seconde
+- [x] **Étape 2 : `swift test`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test`, puis `selftest.sh`**, avec le nouveau cas `deux-instances` : la seconde
   instance, sans port, ne publie rien — attendu : OK.
-- [ ] **Étape 5 : commit** « Instance unique : seul le détenteur du port publie ».
+- [x] **Étape 5 : commit** « Instance unique : seul le détenteur du port publie ».
 
 ### Tâche 17 : réveil maîtrisé
 
@@ -702,22 +702,22 @@ F14 (C12), C15.
   le ON : `kIOPMAssertPreventUserIdleDisplaySleep` pendant ce délai, libérée à un OFF, au déverrouillage
   ou à l'échéance.
 
-- [ ] **Étape 1 : tests** :
+- [x] **Étape 1 : tests** :
   - `test_onConfirme_libereLAssertion` ;
   - `test_wakeHold0_aucuneRetenue` ;
   - `test_wakeHold60_retenueSurSessionVerrouillee`.
-- [ ] **Étape 2 : `swift test`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.** Le banc du plan 3 vérifie la durée réelle de l'assertion ;
+- [x] **Étape 2 : `swift test`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.** Le banc du plan 3 vérifie la durée réelle de l'assertion ;
   `pmset -g assertions` (en lecture seule) le montre dans la relecture.
-- [ ] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Réveil : assertion relâchée dès confirmation, retenue d'écran en option ».
+- [x] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
+- [x] **Étape 5 : commit** « Réveil : assertion relâchée dès confirmation, retenue d'écran en option ».
 
 ---
 
 ## Fin du plan 2
 
-- [ ] **Relecture de toute la branche par Opus** (sécurité et concurrence), avant le report sur `main`.
-- [ ] **Vérification finale** :
+- [x] **Relecture de toute la branche par Opus** (sécurité et concurrence), avant le report sur `main`.
+- [x] **Vérification finale** :
   - `swift test` → tout OK ;
   - `bash scripts/selftest.sh`, écran allumé puis écran éteint → aucun échec ;
   - `.build/debug/macstatusd --once` sur le vrai Mac → des faits cohérents avec ceux de l'instance réelle.
