@@ -104,6 +104,8 @@ public final class WebhookClient: StatePublisher {
     private var waiters: [DeliveryWaiter] = []
     private var lastNetworkKickAt: Double?
     private var unusableLogged = false
+    /// Vrai tant que le moteur interdit tout envoi (voir `setSendingSuspended`).
+    private var suspended = false
 
     /// État d'une cible. Classe : le client la modifie en place, et les rappels la retrouvent.
     private final class Target {
@@ -193,7 +195,7 @@ public final class WebhookClient: StatePublisher {
     /// confirmé (battement de cœur, resynchronisation) ; vers une cible au réessai lent, c'est un
     /// essai de plus, sans nouvelle série rapide.
     public func publish(_ state: Bool, force: Bool = false) {
-        guard enabled else { return }
+        guard enabled, !suspended else { return }
         logUnusableTargetsOnce()
         if desired != state {
             desired = state
@@ -225,7 +227,7 @@ public final class WebhookClient: StatePublisher {
     /// Limite connue : une requête annulée à l'échéance a pu atteindre la cible ; l'ordre d'arrivée
     /// n'est alors plus garanti. C'est le prix d'un départ borné.
     public func publishBeforeExit(_ state: Bool) {
-        guard enabled else { return }
+        guard enabled, !suspended else { return }
         logUnusableTargetsOnce()
         desired = state
         for target in targets where target.usable {
@@ -248,7 +250,7 @@ public final class WebhookClient: StatePublisher {
     /// confirmée et sans requête en vol, la tentative revient à 0 et l'envoi part tout de suite.
     /// Deux avis à moins de `networkKickInterval` secondes : le second ne fait rien.
     public func networkBecameAvailable() {
-        guard enabled, let desired else { return }
+        guard enabled, !suspended, let desired else { return }
         let now = clock.monotonic()
         if let last = lastNetworkKickAt, now >= last, now - last < Self.networkKickInterval {
             logDebug("webhook : avis de retour du réseau trop rapproché, ignoré")
@@ -265,6 +267,32 @@ public final class WebhookClient: StatePublisher {
         guard kicked > 0 else { return }
         lastNetworkKickAt = now
         logInfo("webhook : réseau disponible → renvoi immédiat vers \(kicked) cible(s) non confirmée(s)")
+    }
+
+    // MARK: - Suspension
+
+    /// Suspend ou rend les envois. Suspendu : plus aucune requête ne part (publication, réessais
+    /// rapides et lents, relance au retour du réseau, envoi d'arrêt), les minuteries de réessai sont
+    /// retirées et les réponses tardives ne relancent rien. Une requête déjà en vol n'est pas annulée.
+    /// À la levée, rien ne part de soi-même : les cibles non confirmées repartent d'une série rapide
+    /// neuve, et le moteur publie l'état courant en `force`.
+    public func setSendingSuspended(_ suspended: Bool) {
+        guard self.suspended != suspended else { return }
+        self.suspended = suspended
+        if suspended {
+            for target in targets {
+                cancelRetry(target)
+                cancelGrace(target)
+            }
+            logInfo("webhook : envois suspendus (cette instance ne publie plus)")
+        } else {
+            for target in targets {
+                target.attempt = 0
+                target.abandoned = false
+                target.slowIndex = 0
+            }
+            logInfo("webhook : envois repris")
+        }
     }
 
     // MARK: - Attente de livraison
@@ -332,7 +360,7 @@ public final class WebhookClient: StatePublisher {
     // MARK: - Envoi et réponse
 
     private func send(_ target: Target) {
-        guard let state = desired, let request = target.requests?[state] else { return }
+        guard !suspended, let state = desired, let request = target.requests?[state] else { return }
         cancelRetry(target)
         cancelGrace(target)
         target.generation += 1
@@ -394,6 +422,7 @@ public final class WebhookClient: StatePublisher {
 
     private func scheduleRetry(_ target: Target, after delay: TimeInterval) {
         cancelRetry(target)
+        guard !suspended else { return }
         let generation = target.generation
         target.retryDueAt = clock.monotonic() + delay
         target.retryTask = scheduler.schedule(after: delay) { [weak self, weak target] in
@@ -610,6 +639,7 @@ public final class WebhookClient: StatePublisher {
             "enabled": enabled,
             "failures_since_success": targets.reduce(0) { $0 + $1.failureCount },
             "in_flight": targets.contains { $0.inFlight },
+            "suspended": suspended,
         ]
         if !enabled {
             dict["detail"] = disabledDetail
@@ -647,6 +677,7 @@ public final class WebhookClient: StatePublisher {
     private func phase(of target: Target) -> String {
         if !target.usable { return "URL invalide" }
         if target.inFlight { return "en vol" }
+        if suspended { return "suspendu" }
         if target.abandoned { return "réessai lent" }
         if target.retryTask != nil { return "réessais rapides" }
         if let desired, target.confirmed == desired { return "confirmé" }

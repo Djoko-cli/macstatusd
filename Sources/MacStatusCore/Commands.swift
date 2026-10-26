@@ -40,9 +40,16 @@ public protocol StatePublisher: AnyObject {
     var deliveryCounts: (confirmed: Int, total: Int) { get }
     /// Diagnostic exposé dans /status, sous la clé `webhook`.
     var statusDictionary: [String: Any] { get }
+    /// Suspend (`true`) ou rend (`false`) tout envoi vers les destinations : publications, réessais
+    /// rapides et lents, relance au retour du réseau. Appelé par le moteur quand cette instance
+    /// n'a plus le droit de publier (port non détenu, session hors console). Une requête déjà en
+    /// vol n'est pas annulée, mais sa réponse ne relance plus rien. La levée ne renvoie rien d'elle-même :
+    /// le moteur publie ensuite l'état courant en `force`.
+    func setSendingSuspended(_ suspended: Bool)
 }
 
 public extension StatePublisher {
+    func setSendingSuspended(_ suspended: Bool) {}
     var hasUsableTarget: Bool { true }
     var deliveryCounts: (confirmed: Int, total: Int) { (0, hasUsableTarget ? 1 : 0) }
 }

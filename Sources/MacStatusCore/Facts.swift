@@ -46,6 +46,7 @@ public struct Facts {
             "session_locked": sessionLocked,
             "lock_evidence": lockEvidence,
             "console_user_logged_in": consoleUserLoggedIn,
+            "on_console": onConsole,
             "secure_input_active": secureInputActive,
         ]
     }

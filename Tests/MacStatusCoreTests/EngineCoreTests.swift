@@ -40,8 +40,16 @@ final class EngineCoreTests: XCTestCase {
         return signaux
     }
 
-    /// Moteur câblé comme l'exécuteur le câble, mais sur les faux.
-    private func moteur(_ config: Config = Config()) -> EngineCore {
+    /// Moteur câblé comme l'exécuteur le câble, mais sur les faux. `ecoute` : ce que le serveur HTTP
+    /// a annoncé de son port (`true` : détenu, `false` : occupé, `nil` : rien encore). Sans port
+    /// détenu, le moteur ne publie rien (tâche 16).
+    private func moteur(_ config: Config = Config(), ecoute: Bool? = true) -> EngineCore {
+        let core = moteurBrut(config)
+        if let ecoute { core.setListenerReady(ecoute) }
+        return core
+    }
+
+    private func moteurBrut(_ config: Config = Config()) -> EngineCore {
         let oracle = ScreenSaverOracle(
             minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
             dismissOnInput: config.saverDismissOnInput,
@@ -506,6 +514,12 @@ final class EngineCoreTests: XCTestCase {
     }
 
     private func moteur(publieur autre: StatePublisher) -> EngineCore {
+        let core = moteurBrut(publieur: autre)
+        core.setListenerReady(true)
+        return core
+    }
+
+    private func moteurBrut(publieur autre: StatePublisher) -> EngineCore {
         let config = Config()
         let oracle = ScreenSaverOracle(
             minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
@@ -1233,6 +1247,233 @@ final class EngineCoreTests: XCTestCase {
         core.shutdown(publishOff: true) { termines += 1 }
         XCTAssertEqual(termines, 2, "le second appel rend la main tout de suite")
         XCTAssertEqual(publieur.publications, publications)
+    }
+
+    // MARK: - Instance unique (tâche 16)
+
+    private func lignesDuJournal(contenant fragment: String) -> Int {
+        journal.lines.filter { $0.1.contains(fragment) }.count
+    }
+
+    /// Le serveur HTTP ne détient pas son port (occupé, en attente, en échec) : le moteur calcule
+    /// son état pour lui-même, mais rien ne part vers les cibles. Ni état, ni battement de cœur,
+    /// ni resynchronisation, ni commande, ni événement, ni scrutation.
+    func test_publicationBloquee_tantQueListenerPasPret() {
+        let core = moteur(ecoute: false)
+        core.start()
+        XCTAssertEqual(publieur.publications, [], "pas d'état initial annoncé sans le port")
+        XCTAssertEqual(core.currentState, true, "l'état local reste calculé")
+
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5); scruter(core, 1.0)
+        XCTAssertEqual(core.currentState, false)
+        core.heartbeat()
+        core.resync()
+        core.handle(.screensDidWake)
+        core.handle(.systemDidWake)
+        core.requestOn(source: "essai")
+        core.requestOff(source: "essai")
+        scruter(core, 30)
+        XCTAssertEqual(publieur.publications, [], "aucune publication tant que le port n'est pas détenu")
+        XCTAssertEqual(publieur.publicationsAvantDepart, 0)
+
+        let instantane = core.statusSnapshot()
+        XCTAssertEqual(instantane["publishing_allowed"] as? Bool, false)
+        XCTAssertEqual(instantane["publishing_reason"] as? String, "port occupé")
+    }
+
+    /// Au retour du port, l'état courant (celui calculé pendant le blocage) est publié en `force`,
+    /// une seule fois : répéter l'annonce, ou scruter ensuite, n'ajoute rien.
+    func test_publicationReprise_forceAuRetour() {
+        let core = moteur(ecoute: false)
+        core.start()
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5); scruter(core, 1.0)
+        XCTAssertEqual(publieur.publications, [])
+
+        core.setListenerReady(true)
+        XCTAssertEqual(publieur.publications, [Publication(etat: false, force: true)],
+                       "l'état courant (OFF) est publié en force dès le retour du port")
+        core.setListenerReady(true)
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertEqual(publieur.publications, [Publication(etat: false, force: true)],
+                       "une seule publication, même si l'annonce se répète")
+        XCTAssertEqual(publieur.suspensions, [true, false], "suspendu au départ, levé au retour du port")
+
+        // Oscillation : chaque retour publie une fois, jamais plus.
+        core.setListenerReady(false)
+        core.setListenerReady(true)
+        XCTAssertEqual(publieur.suspensions, [true, false, true, false])
+        XCTAssertEqual(publieur.publications.count, 2)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
+    }
+
+    /// Le publieur est suspendu dès que le moteur est bloqué : réessais et retour du réseau
+    /// ne peuvent plus rien envoyer ; il est levé avant la publication forcée.
+    func test_perteDuPort_suspendLePublieur_puisLeLeve() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(publieur.suspensions, [], "autorisé dès le départ : rien à suspendre")
+        core.setListenerReady(false)
+        XCTAssertEqual(publieur.suspensions, [true])
+        core.setListenerReady(false)
+        XCTAssertEqual(publieur.suspensions, [true], "pas de répétition")
+        core.setListenerReady(true)
+        XCTAssertEqual(publieur.suspensions, [true, false])
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: true))
+    }
+
+    /// La session quitte la console (changement rapide d'utilisateur) : rien ne part, puis la
+    /// publication reprend en force au retour. `onConsole` se relit à chaque scrutation.
+    func test_sessionHorsConsole_bloquePuisReprend() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false)])
+
+        signaux.etatSession.onConsole = false
+        scruter(core, 0.5)
+        core.heartbeat()
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5); scruter(core, 1.0)
+        XCTAssertEqual(core.currentState, false)
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false)],
+                       "rien de plus tant que la session n'est pas à la console")
+        XCTAssertEqual(core.statusSnapshot()["publishing_allowed"] as? Bool, false)
+        XCTAssertEqual(core.statusSnapshot()["publishing_reason"] as? String, "session hors console")
+
+        signaux.etatSession.onConsole = true
+        scruter(core, 0.5)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
+        XCTAssertEqual(publieur.publications.count, 2)
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertEqual(publieur.publications.count, 2, "une seule publication forcée au retour")
+        XCTAssertEqual(core.statusSnapshot()["publishing_allowed"] as? Bool, true)
+        XCTAssertEqual(core.statusSnapshot()["publishing_reason"] as? String, "prêt")
+    }
+
+    /// Une ligne INFO à chaque changement d'autorisation, avec sa raison : jamais une par scrutation.
+    func test_autorisation_uneLigneParChangement() {
+        let core = moteur(ecoute: false)
+        core.start()
+        for _ in 0..<5 { scruter(core, 0.5) }
+        XCTAssertEqual(lignesDuJournal(contenant: "publication bloquée"), 1)
+        XCTAssertTrue(journalContient("publication bloquée : port occupé"))
+
+        core.setListenerReady(true)
+        for _ in 0..<5 { scruter(core, 0.5) }
+        XCTAssertEqual(lignesDuJournal(contenant: "publication autorisée"), 1)
+        XCTAssertTrue(journalContient("publication autorisée : prêt"))
+
+        signaux.etatSession.onConsole = false
+        for _ in 0..<5 { scruter(core, 0.5) }
+        XCTAssertEqual(lignesDuJournal(contenant: "publication bloquée"), 2)
+        XCTAssertTrue(journalContient("publication bloquée : session hors console"))
+        XCTAssertTrue(journal.lines.filter { $0.1.contains("publication autorisée") || $0.1.contains("publication bloquée") }
+                        .allSatisfy { $0.0 == .info })
+    }
+
+    /// Avant que le serveur HTTP ait rien annoncé, la raison n'est pas « port occupé » : l'écoute
+    /// démarre seulement.
+    func test_avantToutAvisDuServeur_raisonEstEcouteEnCours() {
+        let core = moteur(ecoute: nil)
+        XCTAssertEqual(core.statusSnapshot()["publishing_allowed"] as? Bool, false)
+        XCTAssertEqual(core.statusSnapshot()["publishing_reason"] as? String, "écoute en cours")
+        core.start()
+        XCTAssertEqual(core.statusSnapshot()["publishing_reason"] as? String, "écoute en cours")
+        XCTAssertTrue(journalContient("publication bloquée : écoute en cours"))
+    }
+
+    /// Règle 1 : une instance qui n'a jamais été autorisée n'a rien annoncé, elle ne publie pas OFF
+    /// en partant.
+    func test_arret_instanceJamaisAutorisee_neFaitRien() {
+        let core = moteur(ecoute: false)
+        core.start()
+        var termines = 0
+        core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertEqual(termines, 1, "done part tout de suite")
+        XCTAssertEqual(publieur.publications, [])
+        XCTAssertEqual(publieur.publicationsAvantDepart, 0)
+        XCTAssertEqual(publieur.delaisDemandes, [])
+        XCTAssertTrue(journalContient("arrêt : aucune publication OFF (publication jamais autorisée)"))
+    }
+
+    /// Règle 2 : une instance autorisée puis bloquée (port perdu, console perdue) ne publie pas OFF
+    /// non plus : une autre session détient peut-être l'état.
+    func test_arret_instanceBloqueeApresAutorisation_neFaitRien() {
+        let core = moteur()
+        core.start()
+        let avant = publieur.publications
+        signaux.etatSession.onConsole = false
+        scruter(core, 0.5)
+        var termines = 0
+        core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertEqual(termines, 1)
+        XCTAssertEqual(publieur.publications, avant)
+        XCTAssertEqual(publieur.publicationsAvantDepart, 0)
+        XCTAssertTrue(journalContient("arrêt : aucune publication OFF (publication bloquée : session hors console)"))
+    }
+
+    /// Autorisée, l'instance publie toujours OFF en partant (comportement inchangé).
+    func test_arret_instanceAutorisee_publieOff() {
+        let core = moteur()
+        core.start()
+        core.shutdown(publishOff: true) {}
+        XCTAssertEqual(publieur.publicationsAvantDepart, 1)
+    }
+
+    /// Veille imminente sans droit de publier : la veille est autorisée aussitôt, sans attendre
+    /// une livraison qui ne viendra pas.
+    func test_veille_publicationBloquee_autoriseAussitot() {
+        publieur.livraisonManuelle = true
+        let core = moteur(ecoute: false)
+        core.start()
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertEqual(publieur.delaisDemandes, [])
+        XCTAssertEqual(publieur.publications, [])
+        XCTAssertFalse(core.currentState, "l'état local passe à OFF")
+        XCTAssertTrue(journalContient("veille : publication bloquée"))
+    }
+
+    /// Les faits exposent `on_console`.
+    func test_faits_exposentOnConsole() {
+        let core = moteur()
+        core.start()
+        let faits = core.statusSnapshot()["facts"] as? [String: Any]
+        XCTAssertEqual(faits?["on_console"] as? Bool, true)
+    }
+
+    /// De bout en bout avec le vrai client webhook : cible en panne, réessai lent en attente ; le
+    /// port est perdu → ni réessai, ni relance au retour du réseau, ni battement ; au retour, une
+    /// seule requête, en force.
+    func test_clientReel_rienNePartTantQueLaPublicationEstBloquee() {
+        let transport = FakeTransport(clock: horloge)
+        transport.reponseParDefaut = .failed(detail: "hors ligne")
+        let planificateur = TestScheduler(clock: horloge)
+        let client = clientWebhook(transport, planificateur)
+        let core = moteur(publieur: client)
+        core.start()
+        XCTAssertEqual(transport.requetes.count, 1)
+        planificateur.runDue(at: horloge.t + 30)           // série rapide épuisée → réessai lent
+        let avant = transport.requetes.count
+        XCTAssertGreaterThan(avant, 1)
+
+        core.setListenerReady(false)
+        planificateur.runDue(at: horloge.t + 600)
+        client.networkBecameAvailable()
+        core.heartbeat()
+        core.resync()
+        XCTAssertEqual(transport.requetes.count, avant, "rien ne part : ni réessai lent, ni réseau, ni battement")
+
+        transport.reponseParDefaut = .delivered(status: 200)
+        core.setListenerReady(true)
+        XCTAssertEqual(transport.requetes.count, avant + 1, "une seule requête au retour, en force")
+        XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "1")
+        planificateur.runDue(at: horloge.t + 600)
+        XCTAssertEqual(transport.requetes.count, avant + 1)
     }
 
     // MARK: - Diagnostic

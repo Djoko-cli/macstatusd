@@ -237,6 +237,13 @@ final class FakePublisher: StatePublisher {
     }
 
     var statusDictionary: [String: Any] { ["faux": true] }
+
+    /// Chaque appel à `setSendingSuspended`, dans l'ordre.
+    private(set) var suspensions: [Bool] = []
+
+    func setSendingSuspended(_ suspended: Bool) {
+        suspensions.append(suspended)
+    }
 }
 
 /// Transport simulé : note chaque requête (avec l'instant de l'horloge, si on en

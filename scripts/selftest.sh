@@ -19,6 +19,9 @@
 #     et I, par leur PID) ; l'instance réelle (9090) n'est que lue (GET /status), avant et après ;
 #   - les cas « journal-supprime », « journal-rotation » et « stdout-ferme » (section 9) n'écrivent
 #     que dans le dossier temporaire du script : jamais dans ~/Library/Logs/macstatusd ;
+#   - le cas « deux-instances » (section 12) lance deux instances sur le MÊME port d'essai, chacune avec
+#     son faux Homebridge : la seconde ne tient pas le port et ne doit rien envoyer ; elle ne publie
+#     qu'après l'arrêt de la première (par son PID) ; elles reçoivent --port en ligne de commande ;
 #   - seule exception, l'instance D du cas « message-ecoute » écoute sur « :: »
 #     (toutes interfaces) le temps de lire son message d'écoute, avec un jeton et les
 #     mêmes commandes inertes ; le script ne lui parle que par la boucle locale.
@@ -68,6 +71,9 @@ PORT_HA2=19101 # faux webhook Home Assistant lancé en retard (retour après pan
 PORT_J=19102   # webhook : cible revenue, resynchronisée par le réessai lent
 PORT_K=19103   # webhook : transport borné (redirection, corps trop gros)
 PORT_BORNE=19104 # faux récepteur qui redirige ou répond un corps trop gros
+PORT_L=19106   # deux-instances : port PARTAGÉ par les deux instances (la seconde ne le tient pas)
+PORT_HBL=19107 # deux-instances : faux Homebridge de la première instance
+PORT_HBM=19108 # deux-instances : faux Homebridge de la seconde instance
 # Jeton de l'instance B, valeur d'essai inventée. Passé en en-tête : depuis la tâche 8,
 # le jeton dans l'URL (?token=) est refusé par défaut.
 JETON_B="jeton-essai-0123456789abcdef"
@@ -198,7 +204,7 @@ echo "==> Compilation du binaire"
 swift build --scratch-path "$SCRATCH" >/dev/null 2>"$WORK/build.err" || { cat "$WORK/build.err"; echo "build échouée"; exit 1; }
 BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/macstatusd"
 
-for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_H $PORT_I $PORT_HB $PORT_HA $PORT_HA2 $PORT_J $PORT_K $PORT_BORNE; do
+for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_H $PORT_I $PORT_HB $PORT_HA $PORT_HA2 $PORT_J $PORT_K $PORT_BORNE $PORT_L $PORT_HBL $PORT_HBM; do
   port_libre "$port" || { echo "le port $port est déjà occupé : arrêt avant tout lancement"; exit 1; }
 done
 
@@ -381,10 +387,25 @@ c.update({"port": int(port), "log_file": journal, "accessory_id": "selftestretou
 json.dump(c, open(cible, "w"), indent=2)
 PY
 
+# Instances L et M (cas « deux-instances ») : copies de A, même port PORT_L, chacune avec son faux
+# Homebridge, son accessoire et son journal ; pas de battement de cœur (seules les publications
+# d'état comptent).
+for suite in "l:$PORT_HBL:selftestunique" "m:$PORT_HBM:selftestseconde"; do
+  python3 - "$WORK/a.json" "$WORK/${suite%%:*}.json" "$PORT_L" "$WORK/${suite%%:*}.log" \
+    "$(echo "$suite" | cut -d: -f2)" "$(echo "$suite" | cut -d: -f3)" <<'PY'
+import json, sys
+source, cible, port, journal, recepteur, accessoire = sys.argv[1:]
+c = json.load(open(source))
+c.update({"port": int(port), "log_file": journal, "accessory_id": accessoire, "heartbeat_seconds": 0,
+          "webhook_base_url": "http://127.0.0.1:%s/hook" % recepteur})
+json.dump(c, open(cible, "w"), indent=2)
+PY
+done
+
 # Garde : aucune instance ne démarre si sa configuration sort du cadre hermétique.
 # Seule D peut écouter sur « :: », et seulement avec le jeton d'essai.
 conformes=1
-for nom in a b c d e f g h i j k; do
+for nom in a b c d e f g h i j k l m; do
   attendu="127.0.0.1"
   [[ "$nom" == "d" ]] && attendu="::"
   python3 - "$WORK/$nom.json" "$attendu" "$JETON_B" <<'PY' || conformes=0
@@ -918,6 +939,62 @@ check "transport-borne : corps au-delà de 4 Kio" "erreur corps de réponse au-d
 if grep -q "/suivi" "$WORK/borne.log"; then bad "transport-borne : la redirection a été suivie"; else ok "transport-borne : la redirection n'a pas été suivie"; fi
 arreter_pid "$PID_K"
 arreter_pid "$PID_BORNE"
+
+echo
+echo "== 12. Une seule instance publie : le détenteur du port"
+# deux-instances : L tient le port PORT_L, M (même port, autre faux Homebridge) ne le peut pas.
+# M ne doit RIEN envoyer tant qu'elle ne tient pas le port ; quand L s'arrête, M reprend le port
+# (reprise du listener : attente de 5 s, puis nouvelle écoute) et publie alors l'état courant en force.
+# Les deux instances reçoivent --port en ligne de commande, en plus du port de leur configuration.
+SESSION_A_LA_CONSOLE="$(printf '%s' "$ONCE_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("on_console", False))' 2>/dev/null)"
+if [[ "$SESSION_A_LA_CONSOLE" != "True" ]]; then
+  saute "deux-instances" "la session n'est pas à la console : aucune instance ne publierait (on_console = $SESSION_A_LA_CONSOLE)"
+else
+  mkdir -p "$WORK/home-deux"
+  python3 "$WORK/hbmock.py" $PORT_HBL > "$WORK/hook-l.log" 2>&1 &
+  PIDS+=($!)
+  python3 "$WORK/hbmock.py" $PORT_HBM > "$WORK/hook-m.log" 2>&1 &
+  PIDS+=($!)
+  sleep 0.5
+  CFFIXED_USER_HOME="$WORK/home-deux" "$BIN" --config "$WORK/l.json" --port $PORT_L > "$WORK/l.out" 2>&1 &
+  PID_L=$!
+  PIDS+=($PID_L)
+  if await_http $PORT_L 10 && await_lignes "$WORK/hook-l.log" 1 10; then
+    ok "deux-instances : la première instance tient le port et publie son état initial"
+  else
+    bad "deux-instances : la première instance n'a pas publié (port $PORT_L)"
+  fi
+  check "deux-instances : la première est autorisée à publier (/status)" "True" "$(field $PORT_L publishing_allowed)"
+
+  CFFIXED_USER_HOME="$WORK/home-deux" "$BIN" --config "$WORK/m.json" --port $PORT_L > "$WORK/m.out" 2>&1 &
+  PID_M=$!
+  PIDS+=($PID_M)
+  # La reprise du listener se fait toutes les 5 s : on laisse passer deux cycles.
+  for _ in $(seq 40); do grep -q "publication bloquée : port occupé" "$WORK/m.log" 2>/dev/null && break; sleep 0.25; done
+  if grep -q "publication bloquée : port occupé" "$WORK/m.log"; then ok "deux-instances : la seconde journalise « publication bloquée : port occupé »"; else bad "deux-instances : « publication bloquée : port occupé » absent du journal de la seconde"; fi
+  sleep 12
+  check "deux-instances : la seconde n'a rien envoyé à son faux Homebridge" "0" "$(wc -l < "$WORK/hook-m.log" | tr -d ' ')"
+  if kill -0 "$PID_M" 2>/dev/null; then ok "deux-instances : la seconde tourne toujours (en attente du port)"; else bad "deux-instances : la seconde s'est arrêtée"; fi
+  check "deux-instances : le port répond toujours pour la première" "True" "$(field $PORT_L publishing_allowed)"
+  if grep -q "publication autorisée" "$WORK/m.log"; then bad "deux-instances : la seconde s'est crue autorisée"; else ok "deux-instances : la seconde ne s'est jamais crue autorisée"; fi
+
+  # Arrêt de la première, par son PID : la seconde reprend le port et publie en force.
+  kill -TERM "$PID_L"
+  if attendre_sortie "$PID_L" 5; then ok "deux-instances : la première s'arrête"; else bad "deux-instances : la première ne s'arrête pas"; fi
+  wait "$PID_L" 2>/dev/null
+  DEBUT_M=$SECONDS
+  if await_lignes "$WORK/hook-m.log" 1 30; then
+    ok "deux-instances : la seconde reprend le port et publie ($((SECONDS - DEBUT_M)) s après l'arrêt de la première)"
+  else
+    bad "deux-instances : la seconde n'a rien publié 30 s après l'arrêt de la première"
+  fi
+  if grep -q "publication autorisée : prêt" "$WORK/m.log"; then ok "deux-instances : « publication autorisée : prêt » au journal de la seconde"; else bad "deux-instances : « publication autorisée : prêt » absent du journal de la seconde"; fi
+  if grep -q "retour de l'autorisation" "$WORK/m.log"; then ok "deux-instances : l'état courant est publié en force au retour de l'autorisation"; else bad "deux-instances : aucune publication forcée au retour de l'autorisation"; fi
+  check "deux-instances : une seule publication au retour" "1" "$(grep -c 'accessoryId=selftestseconde&state=' "$WORK/hook-m.log" 2>/dev/null || true)"
+  check "deux-instances : la seconde est autorisée (/status)" "True" "$(field $PORT_L publishing_allowed)"
+  if grep -q "accessoryId=selftestseconde" "$WORK/hook-l.log"; then bad "deux-instances : le faux Homebridge de la première a reçu la seconde"; else ok "deux-instances : les deux récepteurs sont restés distincts"; fi
+  arreter_pid "$PID_M"
+fi
 
 # Instance réelle : inchangée (lue seulement).
 REEL_APRES="$(reel_instantane)"

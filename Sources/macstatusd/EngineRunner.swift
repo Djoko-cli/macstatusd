@@ -108,6 +108,15 @@ final class EngineRunner: EngineFacade {
         queue.async { [self] in webhook.networkBecameAvailable() }
     }
 
+    // MARK: - Détention du port
+
+    /// Le serveur HTTP détient (`true`) ou ne détient plus (`false`) son port : le moteur ne publie
+    /// qu'à cette condition (et si la session est à la console). L'avis arrive de la file du
+    /// serveur ; il est transmis sur celle du moteur, sans rien bloquer.
+    func listenerReadyChanged(_ ready: Bool) {
+        queue.async { [self] in core.setListenerReady(ready) }
+    }
+
     // MARK: - Événements système
 
     /// Le veilleur doit avoir été créé sur `queue` : ses rappels y arrivent.

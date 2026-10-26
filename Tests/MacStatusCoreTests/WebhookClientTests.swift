@@ -482,6 +482,64 @@ final class WebhookClientTests: XCTestCase {
         XCTAssertEqual(transport.requetes.count, avant + 4, "premier réessai rapide à +0,5 s")
     }
 
+    /// Tâche 16 : tant que le moteur interdit les envois, ni publication, ni réessai (rapide ou lent),
+    /// ni relance au retour du réseau, ni envoi d'arrêt ; la levée ne renvoie rien d'elle-même.
+    func test_envoisSuspendus_aucunReessaiNiRelanceNiPublication() {
+        transport.reponseParDefaut = .failed(detail: "hors ligne")
+        let client = creerClient(cibles: [cible("192.0.2.10")], essais: 0)
+        client.publish(true, force: false)               // abandon aussitôt → réessai lent à +15 s
+        XCTAssertEqual(transport.requetes.count, 1)
+        XCTAssertEqual(planificateur.pending, 1)
+
+        client.setSendingSuspended(true)
+        XCTAssertEqual(planificateur.pending, 0, "la minuterie du réessai lent est retirée")
+        XCTAssertEqual(client.statusDictionary["suspended"] as? Bool, true)
+        XCTAssertEqual(entreeCible(client, 0)["phase"] as? String, "suspendu")
+        transport.reponseParDefaut = .delivered(status: 200)
+        planificateur.runDue(at: 600)
+        client.networkBecameAvailable()
+        client.publish(true, force: true)
+        client.publish(false, force: false)
+        client.publishBeforeExit(false)
+        XCTAssertEqual(transport.requetes.count, 1, "aucun envoi tant que c'est suspendu")
+
+        client.setSendingSuspended(false)
+        XCTAssertEqual(transport.requetes.count, 1, "la levée ne renvoie rien d'elle-même")
+        XCTAssertEqual(client.statusDictionary["suspended"] as? Bool, false)
+        client.publish(false, force: true)
+        XCTAssertEqual(transport.requetes.count, 2)
+        XCTAssertEqual(transport.requetes.last?.url.absoluteString,
+                       "http://192.0.2.10:51828/?accessoryId=mac&state=false")
+        XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "0")
+    }
+
+    /// Une requête en vol au moment de la suspension n'est pas annulée, mais son échec ne planifie
+    /// aucun réessai, et sa réussite ne relance rien.
+    func test_envoisSuspendus_requeteEnVol_sonEchecNePlanifieRien() {
+        transport.differe = true
+        let client = creerClient(cibles: [cible("192.0.2.10")], essais: 3)
+        client.publish(true, force: false)
+        XCTAssertEqual(transport.reponsesEnAttente, 1)
+        client.setSendingSuspended(true)
+        XCTAssertEqual(transport.annulations.count, 0, "la requête en vol n'est pas annulée")
+
+        transport.script = [.failed(detail: "coupé")]
+        transport.terminerEnAttente()
+        XCTAssertEqual(planificateur.pending, 0, "aucun réessai planifié pendant la suspension")
+        planificateur.runDue(at: 600)
+        XCTAssertEqual(transport.requetes.count, 1)
+
+        // Réponse réussie d'un état périmé : le nouvel état voulu ne part pas non plus, suspendu.
+        client.setSendingSuspended(false)
+        transport.script = []
+        client.publish(true, force: true)                 // en vol
+        client.publish(false, force: false)               // voulu, derrière la requête en vol
+        XCTAssertEqual(transport.requetes.count, 2)
+        client.setSendingSuspended(true)
+        transport.terminerEnAttente()                     // l'état 1 est confirmé, mais 0 est voulu
+        XCTAssertEqual(transport.requetes.count, 2, "le nouvel état attend la fin de la suspension")
+    }
+
     func test_post_corpsJSON() throws {
         let jeton = "Bearer jeton-essai-0123456789abcdef"
         let client = creerClient(cibles: [cible("192.0.2.30", "POST", entetes: ["Authorization": jeton])])

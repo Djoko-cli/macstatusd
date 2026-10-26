@@ -249,6 +249,8 @@ if config.authToken.isEmpty {
 
 let router = Router(config: config, engine: engine, localNames: localNames, origin: configOrigin)
 let server = HTTPServer(port: config.port, bindAddress: config.bindAddress, router: router)
+// Une seule instance publie : celle dont le serveur détient le port (et dont la session est à la console).
+server.onListenerReadyChange = { engine.listenerReadyChanged($0) }
 server.start()
 
 // MARK: - Arrêt propre

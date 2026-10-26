@@ -13,6 +13,14 @@ import Foundation
 /// 7. sinon → ON (bureau, application, écran de verrouillage visible,
 ///    fenêtre de login : dans tous ces cas une UI est accessible).
 ///
+/// **Une seule instance publie.** Rien ne part vers les cibles (état, battement de cœur,
+/// resynchronisation, réessais, OFF de veille ou d'arrêt) tant que deux conditions ne sont pas
+/// réunies : le serveur HTTP détient son port (`setListenerReady`, annoncé par l'exécuteur) et
+/// la session est à la console (`Facts.onConsole`, relue à chaque rafraîchissement des faits). Une
+/// seconde instance lancée par erreur, ou un daemon resté dans une session sans console, calcule
+/// son état pour elle-même mais n'envoie rien. Au retour de l'autorisation, l'état courant est
+/// publié une fois en `force`.
+///
 /// Le moteur n'a ni file ni minuterie. **Contrat : on l'appelle toujours depuis
 /// une même file série** (celle de `EngineRunner` dans l'exécutable), ce qui
 /// exclut toute course entre les notifications système, le serveur HTTP et la
@@ -57,6 +65,22 @@ public final class EngineCore {
 
     /// Vrai une fois `shutdown` appelé : le moteur ne publie ni n'agit plus, jamais.
     private var isShutDown = false
+
+    // MARK: Autorisation de publier (tâche 16)
+
+    /// Ce que le serveur HTTP a annoncé de son écoute : `true` à `.ready`, `false` en attente,
+    /// en échec ou annulé, `nil` tant qu'il n'a rien dit.
+    private var listenerReady: Bool?
+    /// Les faits ont été lus au moins une fois (`onConsole` n'a de sens qu'ensuite).
+    private var factsRead = false
+    /// Dernier verdict journalisé ; `nil` avant la première lecture des faits.
+    private var loggedAuthorization: (allowed: Bool, reason: String)?
+    /// Une autorisation a déjà été accordée : sert au texte du journal d'arrêt.
+    private var everAuthorized = false
+    /// L'autorisation vient de revenir : la prochaine publication part en `force`, une seule fois.
+    private var resumePending = false
+    /// Miroir de l'état de suspension demandé au publieur (il démarre non suspendu).
+    private var publisherSuspended = false
 
     private var published: Bool?
     private var publishedReason = "startup"
@@ -178,9 +202,73 @@ public final class EngineCore {
 
     /// Battement de cœur : republie l'état courant, même déjà confirmé.
     public func heartbeat() {
-        guard !isShutDown, let state = published else { return }
+        guard !isShutDown, publishingAllowed, let state = published else { return }
         logDebug("battement de cœur → republication de l'état \(state ? "1" : "0")")
-        publisher.publish(state, force: true)
+        emit(state, force: true)
+    }
+
+    // MARK: - Autorisation de publier
+
+    /// Le serveur HTTP détient (`true`) ou ne détient plus (`false`) son port. Appelé depuis la
+    /// file du moteur. Sans effet si l'annonce ne change rien. Au retour à vrai (la session étant à
+    /// la console), l'état courant est publié en `force`, une seule fois.
+    public func setListenerReady(_ ready: Bool) {
+        guard !isShutDown, listenerReady != ready else { return }
+        listenerReady = ready
+        updateAuthorization()
+        resumeIfNeeded()
+    }
+
+    /// Vrai si cette instance peut publier : port détenu et session à la console.
+    public var publishingAllowed: Bool { authorizationVerdict().allowed }
+
+    private func authorizationVerdict() -> (allowed: Bool, reason: String) {
+        guard let listenerReady else { return (false, "écoute en cours") }
+        guard listenerReady else { return (false, "port occupé") }
+        guard factsRead else { return (false, "faits non lus") }
+        guard facts.onConsole else { return (false, "session hors console") }
+        return (true, "prêt")
+    }
+
+    /// Journalise (INFO) chaque changement d'autorisation ou de raison, une fois, et suspend ou
+    /// rend l'envoi au publieur (réessais, retour du réseau). Appelé à chaque rafraîchissement des
+    /// faits et à chaque annonce du serveur.
+    private func updateAuthorization() {
+        guard factsRead else { return }
+        let verdict = authorizationVerdict()
+        if let last = loggedAuthorization, last.allowed == verdict.allowed, last.reason == verdict.reason { return }
+        loggedAuthorization = verdict
+        if verdict.allowed {
+            logInfo("publication autorisée : \(verdict.reason)")
+            everAuthorized = true
+            // Le premier état publié part de lui-même (`start`) ; ensuite, un retour republie en force.
+            resumePending = published != nil
+        } else {
+            logInfo("publication bloquée : \(verdict.reason)")
+            resumePending = false
+        }
+        if publisherSuspended == verdict.allowed {
+            publisherSuspended = !verdict.allowed
+            publisher.setSendingSuspended(publisherSuspended)
+        }
+    }
+
+    /// Seul point de sortie vers le publieur : rien ne part sans autorisation. La première
+    /// publication après un retour d'autorisation est forcée, quelle que soit son origine.
+    private func emit(_ state: Bool, force: Bool) {
+        guard publishingAllowed else { return }
+        let forced = force || resumePending
+        if resumePending {
+            logDebug("publication de l'état \(state ? "1" : "0") en force au retour de l'autorisation")
+        }
+        resumePending = false
+        publisher.publish(state, force: forced)
+    }
+
+    /// Retour d'autorisation sans autre publication en route : l'état courant part en `force`.
+    private func resumeIfNeeded() {
+        guard resumePending, publishingAllowed, !isShutDown, let state = published else { return }
+        emit(state, force: true)
     }
 
     // MARK: - Faits
@@ -222,6 +310,8 @@ public final class EngineCore {
             logDebug("faits: \(summary(of: next))")
         }
         facts = next
+        factsRead = true
+        updateAuthorization()
     }
 
     // MARK: - Décision
@@ -243,6 +333,8 @@ public final class EngineCore {
     @discardableResult
     private func evaluate(immediate: Bool, force: Bool = false) -> Bool {
         guard !isShutDown else { return false }
+        // Retour d'autorisation non servi par cette évaluation : l'état courant part en force.
+        defer { resumeIfNeeded() }
         let now = clock.monotonic()
         let factual = factsVerdict()
         var resolved = factual
@@ -291,11 +383,11 @@ public final class EngineCore {
             lastTransitionAt = clock.wall()
             logInfo("état \(previous.map { $0 ? "ON" : "OFF" } ?? "—") → "
                     + "\(resolved.state ? "ON" : "OFF") (\(resolved.reason)) — faits: \(factsSummary())")
-            publisher.publish(resolved.state, force: false)
+            emit(resolved.state, force: false)
             return true
         } else if force, let state = published {
             publishedReason = resolved.reason
-            publisher.publish(state, force: true)
+            emit(state, force: true)
             return true
         }
         return false
@@ -305,7 +397,7 @@ public final class EngineCore {
     /// diffère (envoi perdu, abandonné ou encore en vol), et ne fait rien sinon.
     private func ensurePublished() {
         guard !isShutDown, let state = published else { return }
-        publisher.publish(state, force: false)
+        emit(state, force: false)
     }
 
     /// Une commande dont les faits ne confirment pas l'effet est réessayée une
@@ -359,6 +451,14 @@ public final class EngineCore {
         if !evaluate(immediate: true) {
             // OFF était déjà publié : on s'assure seulement qu'il est confirmé.
             ensurePublished()
+        }
+        guard publishingAllowed else {
+            // Une autre instance ou une autre session détient peut-être l'état : aucun OFF n'est
+            // annoncé, et la veille n'attend rien.
+            logInfo("veille : publication bloquée (\(authorizationVerdict().reason)) : aucun OFF envoyé "
+                    + "→ veille autorisée")
+            allow()
+            return
         }
         let sent = publisher.hasUsableTarget
         publisher.notifyWhenDelivered(timeout: Self.sleepDeliveryTimeout) { delivered in
@@ -451,6 +551,15 @@ public final class EngineCore {
         intent = nil
         guard publishOff else {
             logInfo("arrêt : aucune publication OFF")
+            done()
+            return
+        }
+        guard publishingAllowed else {
+            // Jamais autorisée : rien n'a été annoncé. Autorisée puis bloquée : une autre session
+            // détient peut-être l'état. Dans les deux cas, un OFF d'arrêt serait faux ou nuisible.
+            let why = everAuthorized ? "publication bloquée : \(authorizationVerdict().reason)"
+                                     : "publication jamais autorisée"
+            logInfo("arrêt : aucune publication OFF (\(why))")
             done()
             return
         }
@@ -606,6 +715,8 @@ public final class EngineCore {
             "off_action": config.offAction.rawValue,
             "webhook": publisher.statusDictionary,
             "session_context": signals.hasAquaSession() ? "aqua" : "headless",
+            "publishing_allowed": authorizationVerdict().allowed,
+            "publishing_reason": authorizationVerdict().reason,
         ]
         if isShutDown { dict["shutting_down"] = true }
         if let lastTransitionAt {

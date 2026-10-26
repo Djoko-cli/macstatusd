@@ -43,7 +43,12 @@ final class LiveSystemSignals: SystemSignals {
             if let sessions = registryProperty("IOConsoleUsers") as? [[String: Any]] {
                 let console = sessions.first { ($0["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue == true }
                 if let console {
-                    state.onConsole = true
+                    // La console est-elle celle de l'utilisateur du daemon ? Un daemon resté dans une
+                    // session passée en arrière-plan (changement rapide d'utilisateur) ne l'est pas.
+                    // Root n'a pas de session à lui : toute console compte. Propriétaire illisible :
+                    // on ne bloque pas par erreur.
+                    let owner = (console["kCGSSessionUserIDKey"] as? NSNumber)?.uint32Value
+                    state.onConsole = getuid() == 0 || owner == nil || owner == getuid()
                     if (console["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
                         state.loggedIn = true
                     }
