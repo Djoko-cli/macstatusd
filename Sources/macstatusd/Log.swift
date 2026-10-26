@@ -12,7 +12,10 @@ import MacStatusCore
 ///   par épisode d'échec ; l'ouverture est retentée au plus toutes les 60 s (horloge monotone).
 /// - Toutes les 100 écritures, l'inode du chemin est comparé à celui du fichier ouvert : un fichier
 ///   supprimé, renommé ou remplacé est rouvert.
-/// - Rotation en 5 générations (`.1` à `.5`) de 2 Mio, toutes en mode 600.
+/// - Rotation en 5 générations (`.1` à `.5`) de 2 Mio, toutes en mode 600. Une rotation qui échoue
+///   (dossier en lecture seule, disque plein) laisse les générations intactes, se signale une seule fois
+///   par épisode et n'est retentée qu'après `maxBytes` octets de plus ou 60 s.
+/// - Le fichier n'occupe jamais un descripteur standard (0, 1, 2), même si l'un d'eux était fermé.
 /// - Après un EPIPE (lecteur du tube fermé), l'écho sur la sortie standard est coupé pour de bon.
 ///
 /// C'est le récepteur de `MacStatusCore` : `main.swift` le branche sur `CoreLog.sink`.
@@ -46,8 +49,24 @@ final class Log: LogSink {
     private var failureReported = false
     /// Instant monotone (ns) avant lequel l'ouverture n'est pas retentée.
     private var nextOpenAttempt: UInt64 = 0
+    /// Une rotation a échoué : tant qu'elle n'a pas réussi, elle n'est retentée qu'à `rotationRetryBytes`
+    /// octets ou à `rotationRetryAt` (le premier des deux).
+    private var rotationFailed = false
+    private var rotationRetryBytes = 0
+    private var rotationRetryAt: UInt64 = 0
+    /// L'échec de rotation de l'épisode en cours a déjà été signalé (remis à faux par une rotation réussie).
+    private var rotationFailureReported = false
 
-    private init() {}
+    /// Instant monotone (ns) ; remplaçable par les tests.
+    var now: () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+    /// Signalement d'un échec : `os_log`, et la sortie d'erreur si l'écho est actif. Remplaçable par les tests.
+    var report: ((String) -> Void)?
+    /// Nombre de rotations tentées (réussies ou non), pour les tests.
+    private(set) var rotationAttempts = 0
+    /// Ouverture du fichier de journal ; remplaçable par les tests.
+    var opener: (String) -> Int32 = { open($0, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600) }
+
+    init() {}
 
     /// Choisit le chemin de log : explicite, sinon /opt/macstatusd/logs pour root,
     /// sinon ~/Library/Logs/macstatusd.
@@ -59,20 +78,39 @@ final class Log: LogSink {
         return home.appendingPathComponent("Library/Logs/macstatusd/macstatusd.log")
     }
 
-    func configure(level: LogLevel, file: URL?, echoToStdout: Bool) {
+    /// `maxBytes` : taille de rotation imposée par l'appelant (tests) ; sinon la variable d'environnement
+    /// d'essai, sinon 2 Mio.
+    func configure(level: LogLevel, file: URL?, echoToStdout: Bool, maxBytes: Int? = nil) {
         queue.sync {
             self.level = level
             self.echoToStdout = echoToStdout
-            if let text = ProcessInfo.processInfo.environment[Log.maxBytesEnvironmentKey],
-               let value = Int(text), value >= 4096 {
-                self.maxBytes = value
+            var size = maxBytes
+            var notice: (LogLevel, String)?
+            if size == nil, let text = ProcessInfo.processInfo.environment[Log.maxBytesEnvironmentKey] {
+                if let value = Int(text), value >= 4096 {
+                    size = value
+                    notice = (.info, "journal : taille de rotation réduite à \(value) octets "
+                              + "(\(Log.maxBytesEnvironmentKey), variable d'essai)")
+                } else {
+                    notice = (.warn, "\(Log.maxBytesEnvironmentKey) ignorée (entier d'au moins 4096 attendu) "
+                              + "→ rotation à \(Log.defaultMaxBytes) octets")
+                }
             }
+            self.maxBytes = size ?? Log.defaultMaxBytes
             closeFile()
             self.fileURL = file
             self.failureReported = false
             self.nextOpenAttempt = 0
+            self.rotationFailed = false
+            self.rotationFailureReported = false
             if file != nil { openFile() }
+            if let notice { log(notice.0, notice.1) }
         }
+    }
+
+    /// Descripteur du fichier ouvert (`-1` : aucun), pour les tests.
+    var openDescriptor: Int32 {
+        queue.sync { fd }
     }
 
     var currentLogPath: String? {
@@ -80,8 +118,6 @@ final class Log: LogSink {
     }
 
     // MARK: - Fichier
-
-    private static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
 
     private func closeFile() {
         if fd >= 0 { close(fd) }
@@ -94,25 +130,44 @@ final class Log: LogSink {
     /// actif (premier plan). Ferme le fichier et reporte la prochaine ouverture de 60 s.
     private func fileFailed(_ what: String, code: Int32) {
         closeFile()
-        nextOpenAttempt = Log.now() + Log.reopenDelayNanoseconds
+        nextOpenAttempt = now() + Log.reopenDelayNanoseconds
         guard !failureReported else { return }
         failureReported = true
         let path = fileURL?.path ?? "?"
         let detail = "journal fichier indisponible (\(path)) : \(what) : \(String(cString: strerror(code)))"
+        reportFailure(detail)
+    }
+
+    private func reportFailure(_ detail: String) {
+        if let report { report(detail); return }
         os_log("%{public}@", log: osLog, type: .error, detail)
         if echoToStdout { Log.safeWrite(STDERR_FILENO, Data("macstatusd: \(detail)\n".utf8)) }
     }
 
     /// Ouvre (ou rouvre) le fichier. Crée le dossier au besoin. Un fichier existant garde son contenu
     /// (écriture en fin de fichier) ; ses droits sont ramenés à 600 s'ils sont plus larges.
+    ///
+    /// Le fichier n'occupe jamais le descripteur 0, 1 ou 2 : si l'un d'eux était fermé, `open` le
+    /// rendrait, et l'écho (sortie standard) comme la fermeture de la rotation le brouilleraient.
+    /// Le descripteur est alors déplacé au-delà de 2, et le créneau standard laissé libre comme avant.
     private func openFile() {
         guard let url = fileURL else { return }
         let directory = url.deletingLastPathComponent().path
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-        let descriptor = open(url.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
+        var descriptor = opener(url.path)
         guard descriptor >= 0 else {
             fileFailed("ouverture impossible", code: errno)
             return
+        }
+        if descriptor <= STDERR_FILENO {
+            let moved = fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1)
+            let code = errno
+            close(descriptor)
+            guard moved > STDERR_FILENO else {
+                fileFailed("descripteur standard refusé", code: code)
+                return
+            }
+            descriptor = moved
         }
         var info = stat()
         if fstat(descriptor, &info) == 0 {
@@ -123,7 +178,6 @@ final class Log: LogSink {
         }
         fd = descriptor
         writesSinceCheck = 0
-        failureReported = false
     }
 
     /// Vrai si le chemin ne désigne plus le fichier ouvert (supprimé, renommé, remplacé).
@@ -135,25 +189,59 @@ final class Log: LogSink {
         return onDisk.st_ino != opened.st_ino || onDisk.st_dev != opened.st_dev
     }
 
-    private func rotate() {
-        guard let url = fileURL else { return }
+    /// Fait tourner les générations : `.4` devient `.5`, …, le journal courant devient `.1`.
+    ///
+    /// Le journal courant est écarté d'abord (`.rotating`) : si ce premier pas échoue, aucune génération
+    /// n'a bougé et rien n'est perdu. Renvoie faux si la rotation n'a pas eu lieu ; le journal courant
+    /// est alors rouvert et continue de grossir (voir `writeToFile`).
+    private func rotate() -> Bool {
+        rotationAttempts += 1
+        guard let url = fileURL else { return true }
+        let size = bytes
         closeFile()
-        let fm = FileManager.default
-        func generation(_ n: Int) -> String { url.path + ".\(n)" }
-        try? fm.removeItem(atPath: generation(Log.generations))
-        for n in stride(from: Log.generations - 1, through: 1, by: -1) {
-            try? fm.moveItem(atPath: generation(n), toPath: generation(n + 1))
+        defer { openFile() }
+        let path = url.path
+        let staging = path + ".rotating"
+        func generation(_ n: Int) -> String { path + ".\(n)" }
+        guard rename(path, staging) == 0 else {
+            noteRotationFailure("écartement du journal courant", code: errno, size: size)
+            return false
         }
-        try? fm.moveItem(atPath: url.path, toPath: generation(1))
+        unlink(generation(Log.generations))
+        for n in stride(from: Log.generations - 1, through: 1, by: -1) {
+            rename(generation(n), generation(n + 1))
+        }
+        guard rename(staging, generation(1)) == 0 else {
+            // Rare : le courant revient à sa place plutôt que de rester sous un nom provisoire.
+            let code = errno
+            rename(staging, path)
+            noteRotationFailure("passage du journal courant en .1", code: code, size: size)
+            return false
+        }
         for n in 1...Log.generations { chmod(generation(n), 0o600) }
-        openFile()
+        rotationFailed = false
+        rotationFailureReported = false
+        return true
+    }
+
+    /// Une rotation a échoué : prochaine tentative après `maxBytes` octets de plus ou 60 s. Un seul
+    /// signalement par épisode.
+    private func noteRotationFailure(_ what: String, code: Int32, size: Int) {
+        rotationFailed = true
+        rotationRetryBytes = size + maxBytes
+        rotationRetryAt = now() + Log.reopenDelayNanoseconds
+        guard !rotationFailureReported else { return }
+        rotationFailureReported = true
+        let path = fileURL?.path ?? "?"
+        reportFailure("rotation du journal impossible (\(path)) : \(what) : \(String(cString: strerror(code))) "
+                      + "→ retentée après \(maxBytes) octets de plus ou 60 s")
     }
 
     /// Écrit une ligne dans le fichier, sans lever d'exception ni bloquer sur un fichier absent.
     private func writeToFile(_ data: Data) {
         guard fileURL != nil else { return }
         if fd < 0 {
-            guard Log.now() >= nextOpenAttempt else { return }
+            guard now() >= nextOpenAttempt else { return }
             openFile()
             guard fd >= 0 else { return }
         }
@@ -170,8 +258,13 @@ final class Log: LogSink {
             fileFailed("écriture impossible", code: code)
             return
         }
+        failureReported = false   // une écriture réussie clôt l'épisode d'échec
         bytes += data.count
-        if bytes > maxBytes { rotate() }
+        if bytes > maxBytes {
+            // Après une rotation ratée, on ne la retente pas à chaque ligne.
+            if rotationFailed, bytes < rotationRetryBytes, now() < rotationRetryAt { return }
+            _ = rotate()
+        }
     }
 
     // MARK: - Écriture bas niveau

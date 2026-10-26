@@ -9,6 +9,6 @@ let package = Package(
         .target(name: "MacStatusCore", path: "Sources/MacStatusCore"),
         // Exécutable : câblage du daemon (arguments, journal fichier, serveur HTTP).
         .executableTarget(name: "macstatusd", dependencies: ["MacStatusCore"], path: "Sources/macstatusd"),
-        .testTarget(name: "MacStatusCoreTests", dependencies: ["MacStatusCore"], path: "Tests/MacStatusCoreTests"),
+        .testTarget(name: "MacStatusCoreTests", dependencies: ["MacStatusCore", "macstatusd"], path: "Tests/MacStatusCoreTests"),
     ]
 )
