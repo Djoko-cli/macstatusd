@@ -28,8 +28,16 @@ public final class EngineCore {
 
     private var facts = Facts()
     private var systemAsleep = false
-    /// Instant monotone de la dernière veille annoncée par `willSleep`, effacé au réveil.
-    private var sleepStartedAt: Double?
+    /// Dernière veille annoncée par `willSleep` : son début, et la fin une fois le réveil traité
+    /// (par `systemDidWake`, ou par `tick()` si l'avis de réveil manque). Gardée après le réveil,
+    /// pour que `tick()` reconnaisse le trou de scrutation qu'elle a causé (R38). Effacée si la
+    /// veille est annulée.
+    private var lastSleep: SleepSpan?
+
+    private struct SleepSpan {
+        let start: Double
+        var end: Double?
+    }
 
     /// Délai maximal d'attente de la livraison OFF avant d'autoriser la veille.
     static let sleepDeliveryTimeout: Double = 1.5
@@ -37,6 +45,12 @@ public final class EngineCore {
     static let longSleepThreshold: Double = 30
     /// Délai maximal d'attente de la livraison OFF à l'arrêt (sous le filet de 3 s et l'`ExitTimeOut` de 5 s).
     static let shutdownDeliveryTimeout: Double = 2
+
+    /// Marge de couverture d'un trou de scrutation par une veille : deux périodes de scrutation,
+    /// entre 1 et 3 s (bien moins que le seuil de trou, 10 s au moins).
+    private var sleepCoverMargin: Double {
+        min(3, max(1, 2 * Double(config.pollIntervalMS) / 1000))
+    }
 
     /// Vrai une fois `shutdown` appelé : le moteur ne publie ni n'agit plus, jamais.
     private var isShutDown = false
@@ -93,23 +107,55 @@ public final class EngineCore {
     }
 
     /// Un cycle de scrutation : relit les faits et réévalue l'état.
+    ///
+    /// Un trou dans la scrutation signifie veille, gel ou surcharge : on resynchronise au lieu de
+    /// faire confiance à l'état mémorisé, avec une publication forcée. Sauf si le trou est
+    /// couvert par la dernière veille (R38) : le tick précédent date au plus tôt de son début
+    /// (moins la marge), et le tick courant au plus tard de son réveil (plus la marge).
+    /// - réveil déjà traité : `tick()` ne force jamais, l'avis de réveil a décidé (forcé si la
+    ///   veille a duré 30 s ou plus) ; sinon une veille longue forcerait deux fois ;
+    /// - réveil pas encore traité (avis en retard ou perdu) : `tick()` le traite, et ne force que
+    ///   si la veille a duré 30 s ou plus ; l'avis qui arrive ensuite ne force plus.
     public func tick() {
         guard !isShutDown else { return }
         let now = clock.monotonic()
-        let gap = now - lastTickAt
+        let previous = lastTickAt
+        let gap = now - previous
         lastTickAt = now
 
-        // Un trou dans la scrutation signifie veille, gel ou surcharge : on
-        // resynchronise au lieu de faire confiance à l'état mémorisé.
         let recovering = gap > max(10, Double(config.pollIntervalMS) / 1000 * 20)
+        var force = recovering
+        var covered = false
         if recovering {
-            logWarn("interruption de \(String(format: "%.1f", gap)) s détectée → resynchronisation")
+            let shown = String(format: "%.1f", gap)
+            let margin = sleepCoverMargin
+            if var sleep = lastSleep, previous >= sleep.start - margin, now <= (sleep.end ?? now) + margin {
+                covered = true
+                if sleep.end != nil {
+                    force = false
+                    logInfo("interruption de \(shown) s couverte par la veille (réveil déjà traité) "
+                            + "→ resynchronisation sans republication forcée")
+                } else {
+                    let slept = now - sleep.start
+                    force = slept >= Self.longSleepThreshold
+                    sleep.end = now
+                    lastSleep = sleep
+                    logWarn("interruption de \(shown) s couverte par la veille, réveil non encore notifié "
+                            + "(\(String(format: "%.1f", slept)) s de veille) → resynchronisation"
+                            + (force ? ", republication forcée" : " sans republication forcée"))
+                }
+            } else {
+                logWarn("interruption de \(shown) s détectée → resynchronisation")
+            }
             systemAsleep = false
             saver.noteNotification(active: false)
         }
 
         refreshFacts()
-        evaluate(immediate: recovering, force: recovering)
+        if !evaluate(immediate: recovering, force: force), covered {
+            // Pas de `force`, mais un état publié et non confirmé (envoi perdu avant le gel) repart.
+            ensurePublished()
+        }
     }
 
     /// Battement de cœur : republie l'état courant, même déjà confirmé.
@@ -283,18 +329,27 @@ public final class EngineCore {
         }
         logInfo("veille imminente → publication OFF avant gel du daemon")
         systemAsleep = true
-        sleepStartedAt = clock.monotonic()
-        intent = nil
+        // Deux avis de veille sans réveil entre eux : le début reste celui du premier.
+        if lastSleep == nil || lastSleep?.end != nil {
+            lastSleep = SleepSpan(start: clock.monotonic())
+        }
+        if let abandoned = intent {
+            logInfo("intention \(abandoned.target ? "ON" : "OFF") abandonnée : veille")
+            intent = nil
+        }
         refreshFacts()
         if !evaluate(immediate: true) {
             // OFF était déjà publié : on s'assure seulement qu'il est confirmé.
             ensurePublished()
         }
         publisher.notifyWhenDelivered(timeout: Self.sleepDeliveryTimeout) { delivered in
-            if delivered {
+            if !delivered {
+                logWarn("veille : OFF non confirmé en \(Self.sleepDeliveryTimeout) s → veille autorisée quand même")
+            } else if self.published == false {
                 logInfo("veille : OFF confirmé → veille autorisée")
             } else {
-                logWarn("veille : OFF non confirmé en \(Self.sleepDeliveryTimeout) s → veille autorisée quand même")
+                // Une commande ON est arrivée entre-temps : c'est elle qui vient d'être livrée.
+                logInfo("veille : état voulu redevenu ON avant la confirmation de OFF → veille autorisée")
             }
             allow()
         }
@@ -307,14 +362,20 @@ public final class EngineCore {
             // La commande en cours est gardée : un /wake réveille le Mac, et ce réveil ne doit
             // pas effacer la commande qui l'a causé (elle s'escalade et attend les faits).
             let now = clock.monotonic()
-            let slept = sleepStartedAt.map { now - $0 }
-            sleepStartedAt = nil
+            // Durée connue seulement pour le premier traitement du réveil d'une veille annoncée.
+            var slept: Double?
+            if var sleep = lastSleep, sleep.end == nil {
+                slept = now - sleep.start
+                sleep.end = now
+                lastSleep = sleep
+            }
             systemAsleep = false
             saver.noteNotification(active: false)
             refreshFacts()
             // Après une veille longue, Homebridge a pu perdre l'état : on le force. Après une
-            // veille courte (ou de durée inconnue : second avis de réveil), on ne renvoie que si
-            // l'état confirmé diffère. Les trous de scrutation restent rattrapés par `tick()`.
+            // veille courte (ou de durée inconnue : second avis de réveil, ou réveil déjà traité
+            // par `tick()`), on ne renvoie que si l'état confirmé diffère. Le trou de scrutation
+            // de la veille ne force plus dans `tick()` (R38).
             let long = slept.map { $0 >= Self.longSleepThreshold } ?? false
             if let slept {
                 logInfo("réveil après \(String(format: "%.1f", slept)) s de veille"
@@ -327,7 +388,7 @@ public final class EngineCore {
             // Veille annulée : ni réveil ni nouvel état. La commande en cours et la notification
             // de l'économiseur restent ; l'état revient par le lissage habituel.
             systemAsleep = false
-            sleepStartedAt = nil
+            lastSleep = nil
             refreshFacts()
             evaluate(immediate: false)
         case .screenSaverDidStart:

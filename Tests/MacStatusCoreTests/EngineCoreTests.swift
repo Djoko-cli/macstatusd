@@ -763,6 +763,177 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(accord.hasRun)
     }
 
+    // MARK: - Trou de scrutation couvert par une veille (R38)
+
+    private var publicationsForcees: Int { publieur.publications.filter { $0.force }.count }
+
+    /// Écran éteint de bout en bout : l'état reste OFF à travers la veille, aucune transition
+    /// ne masque le drapeau `force` (une transition publie toujours sans `force`).
+    private func moteurEcranEteint() -> EngineCore {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(publicationsForcees, 0)
+        return core
+    }
+
+    /// R38 : une veille courte fait un trou de scrutation de plus de 10 s. Ce trou est couvert
+    /// par la veille : `tick()` ne force pas, le réveil (veille < 30 s) non plus.
+    func test_trouCouvertParUneVeilleCourte_neForcePas() {
+        let core = moteurEcranEteint()
+        core.willSleep {}
+        horloge.advance(15)
+        core.tick()
+        core.handle(.systemDidWake)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(publicationsForcees, 0, "\(publieur.publications)")
+        XCTAssertTrue(journalContient("couverte par la veille"), "\(journal.lines)")
+    }
+
+    /// R38 : veille de 40 s. Que la scrutation passe avant ou après l'avis de réveil, une seule
+    /// publication forcée en tout.
+    func test_trouCouvertParUneVeilleLongue_uneSeulePublicationForcee() {
+        // Scrutation d'abord (secours si l'avis IOKit est perdu), puis l'avis de réveil.
+        let core = moteurEcranEteint()
+        core.willSleep {}
+        horloge.advance(40)
+        core.tick()
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+        core.handle(.systemDidWake)
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+
+        // Avis de réveil d'abord (il force), puis la scrutation (elle ne force plus).
+        publieur = FakePublisher()
+        let autre = moteurEcranEteint()
+        autre.willSleep {}
+        horloge.advance(40)
+        autre.handle(.systemDidWake)
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+        horloge.advance(0.5)
+        autre.tick()
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+        XCTAssertFalse(autre.currentState)
+    }
+
+    /// Trou couvert, sans `force` : un OFF publié mais jamais confirmé avant le gel repart quand
+    /// même, sans `force`, dès la première scrutation après le réveil.
+    func test_trouCouvert_etatNonConfirme_estRenvoyeSansForce() {
+        publieur.livraisonManuelle = true
+        let core = moteurEcranEteint()
+        core.willSleep {}
+        publieur.terminerSansLivrer()
+        let envoisAvant = publieur.envois.count
+        horloge.advance(15)
+        core.tick()
+        XCTAssertEqual(publieur.envois.count, envoisAvant + 1, "\(publieur.envois)")
+        XCTAssertEqual(publieur.envois.last, Publication(etat: false, force: false))
+        XCTAssertEqual(publicationsForcees, 0)
+    }
+
+    /// Trou de 15 s sans veille annoncée : forcé, comme avant.
+    func test_trouSansVeille_forceToujours() {
+        let core = moteurEcranEteint()
+        scruter(core, 15)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
+        XCTAssertEqual(publicationsForcees, 1)
+        XCTAssertTrue(journalContient("interruption de 15.0 s détectée → resynchronisation"))
+    }
+
+    /// Un trou qui déborde de la veille (gel avant la veille, ou après le réveil) n'est pas
+    /// couvert : forcé, comme avant.
+    func test_trouQuiDebordeDeLaVeille_force() {
+        // Dernière scrutation 12 s avant la veille annoncée (gel), réveil 5 s plus tard.
+        let core = moteurEcranEteint()
+        horloge.advance(12)
+        core.willSleep {}
+        horloge.advance(5)
+        core.tick()
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+
+        // Veille de 5 s, réveil traité, puis 12 s sans scrutation (gel après le réveil).
+        publieur = FakePublisher()
+        let autre = moteurEcranEteint()
+        autre.willSleep {}
+        horloge.advance(5)
+        autre.handle(.systemDidWake)
+        XCTAssertEqual(publicationsForcees, 0)
+        horloge.advance(12)
+        autre.tick()
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+    }
+
+    // MARK: - Veille : détails (tâche 13, tour 1)
+
+    /// Une veille qui abandonne une commande en cours le dit au journal (INFO).
+    func test_veille_abandonDIntention_journalise() {
+        let core = moteur()
+        core.start()
+        core.requestOff(source: "essai")
+        XCTAssertNotNil(commandeEnAttente(core))
+        core.willSleep {}
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journal.lines.contains { $0.0 == .info && $0.1.contains("intention OFF abandonnée : veille") },
+                      "\(journal.lines)")
+
+        // Sans commande en cours : rien de tel.
+        journal.lines = []
+        core.willSleep {}
+        XCTAssertFalse(journalContient("abandonnée"))
+    }
+
+    /// Deux avis de veille sans réveil : le début de la veille est celui du premier.
+    func test_deuxVeillesSansReveil_gardentLePremierDebut() {
+        let core = moteur()
+        core.start()
+        signaux.etatEcran.asleep = true   // pas de transition au réveil : on voit le drapeau `force`
+        core.willSleep {}
+        horloge.advance(20)
+        core.willSleep {}
+        horloge.advance(15)
+        core.handle(.systemDidWake)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
+        XCTAssertTrue(journalContient("réveil après 35.0 s de veille"), "\(journal.lines)")
+    }
+
+    /// OFF déjà publié mais pas confirmé (envoi perdu) : `willSleep` le renvoie avant la veille.
+    func test_veille_offPublieNonConfirme_estRenvoye() {
+        publieur.livraisonManuelle = true
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        publieur.terminerSansLivrer()
+        XCTAssertEqual(publieur.envois, [Publication(etat: false, force: false)])
+
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(publieur.envois, [Publication(etat: false, force: false),
+                                         Publication(etat: false, force: false)])
+        XCTAssertEqual(autorisations, 0, "attend la livraison du renvoi")
+        publieur.livrer()
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertTrue(journalContient("veille : OFF confirmé"))
+    }
+
+    /// « OFF confirmé » ne sort que si l'état voulu est encore OFF à la livraison.
+    func test_veille_offConfirme_seulementSiLEtatVouluEstEncoreOff() {
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        // Une commande ON arrive avant la confirmation de OFF.
+        core.requestOn(source: "essai")
+        XCTAssertTrue(core.currentState)
+        publieur.livrer()
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertFalse(journalContient("OFF confirmé"), "\(journal.lines)")
+        XCTAssertTrue(journalContient("veille : état voulu redevenu ON"), "\(journal.lines)")
+    }
+
     // MARK: - Arrêt
 
     /// Tâche 14 : l'arrêt publie OFF en `force`, attend 2 s au plus, puis le moteur ne fait plus rien.
