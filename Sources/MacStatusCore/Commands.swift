@@ -29,8 +29,16 @@ public protocol StatePublisher: AnyObject {
     /// exactement une fois, sur la file du moteur ; l'attente ne bloque jamais cette file, et elle
     /// est retirée à l'échéance.
     func notifyWhenDelivered(timeout: Double, _ done: @escaping (Bool) -> Void)
+    /// Vrai si au moins une destination peut recevoir un envoi. Faux : webhook désactivé, mode
+    /// dégradé, aucune cible ou URL invalide ; rien n'est alors envoyé, et le journal ne doit pas
+    /// parler d'un OFF « confirmé ».
+    var hasUsableTarget: Bool { get }
     /// Diagnostic exposé dans /status, sous la clé `webhook`.
     var statusDictionary: [String: Any] { get }
+}
+
+public extension StatePublisher {
+    var hasUsableTarget: Bool { true }
 }
 
 /// Rappel à usage unique : seul le premier `run()` exécute le travail, les suivants sont sans

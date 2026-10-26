@@ -388,6 +388,36 @@ final class ConfigOriginTests: XCTestCase {
         XCTAssertEqual(Config.parse(data: Data(#"{"auth_token": ""}"#.utf8)).origin, .file)
     }
 
+    /// Ruling R43 : si le JSON a été lu (ici, un `auth_token` mal typé), le mode dégradé garde le
+    /// `port` du fichier ; seuls un fichier illisible ou un JSON invalide prennent 9090.
+    func test_modeDegrade_jsonLu_gardeLePortDuFichier() {
+        let r = Config.parse(data: Data(#"{"auth_token": 12345678901234567, "port": 19190, "bind_address": "0.0.0.0"}"#.utf8))
+        XCTAssertEqual(r.origin, .invalid(reason: "auth_token doit être une chaîne JSON"))
+        XCTAssertEqual(r.config.port, 19190)
+        XCTAssertEqual(r.config.bindAddress, "127.0.0.1")
+        XCTAssertFalse(r.config.enabled)
+        XCTAssertEqual(r.config.authToken, "")
+
+        // Port sous forme de chaîne (accepté ailleurs) ; hors bornes ou mal typé : le défaut.
+        XCTAssertEqual(Config.parse(data: Data(#"{"auth_token": null, "port": "19191"}"#.utf8)).config.port, 19191)
+        for port in ["70000", "0", "-5", "true", #""abc""#, "1.5", "null", "[19190]"] {
+            let v = Config.parse(data: Data(#"{"auth_token": 1, "port": \#(port)}"#.utf8))
+            XCTAssertEqual(v.origin, .invalid(reason: "auth_token doit être une chaîne JSON"), port)
+            XCTAssertEqual(v.config.port, 9090, port)
+        }
+        // Aucun port dans le fichier : le défaut.
+        XCTAssertEqual(Config.parse(data: Data(#"{"auth_token": 1}"#.utf8)).config.port, 9090)
+        // L'avertissement du mode dégradé ne change pas.
+        XCTAssertEqual(r.warnings.count, 1, "\(r.warnings)")
+
+        // JSON invalide ou pas un objet : le port du fichier n'est pas fiable, défaut 9090.
+        for json in [#"{"port": 19190, "enabled":"#, #"[{"port": 19190}]"#, "port=19190"] {
+            let v = Config.parse(data: Data(json.utf8))
+            guard case .invalid = v.origin else { return XCTFail("mode dégradé attendu : \(json)") }
+            XCTAssertEqual(v.config.port, 9090, json)
+        }
+    }
+
     func test_cliPort_bornes() {
         XCTAssertEqual(Config.portArgument("1"), 1)
         XCTAssertEqual(Config.portArgument("19190"), 19190)

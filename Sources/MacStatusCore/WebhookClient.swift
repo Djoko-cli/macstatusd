@@ -280,6 +280,9 @@ public final class WebhookClient: StatePublisher {
         }
     }
 
+    /// Vrai si le client est actif et qu'au moins une cible a une URL utilisable.
+    public var hasUsableTarget: Bool { enabled && targets.contains(where: \.usable) }
+
     /// Attentes de livraison en cours (diagnostic et tests).
     var pendingDeliveryNotifications: Int { waiters.count }
 

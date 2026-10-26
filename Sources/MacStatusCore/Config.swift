@@ -314,9 +314,14 @@ public struct Config {
 
     /// Message du mode dégradé fermé. `adjective` : « illisible » (lecture ou JSON en échec) ou
     /// « invalide » (JSON lu, mais une valeur interdit de s'en servir).
-    private static func invalid(reason: String, source: String?, adjective: String = "illisible") -> Loaded {
+    ///
+    /// `port` : celui du fichier, quand le JSON a été lu (Ruling R43) ; `nil` (fichier illisible ou JSON
+    /// invalide) garde le défaut 9090.
+    private static func invalid(reason: String, source: String?, adjective: String = "illisible",
+                                port: UInt16? = nil) -> Loaded {
         let lieu = source.map { "config \($0)" } ?? "config"
-        let config = degraded()
+        var config = degraded()
+        if let port { config.port = port }
         let warning = "\(lieu) \(adjective) (\(reason)) → mode dégradé fermé : écoute sur "
             + "\(config.bindAddress) seulement, commandes et /health en 503, webhooks coupés"
         return (config, .invalid(reason: reason), [warning])
@@ -404,7 +409,12 @@ public struct Config {
         //   `JSONSerialization` ne signale pas les doublons ;
         // - un `auth_token: ""` explicite vaut « aucun jeton » : seule la boucle locale est servie.
         if let token = raw["auth_token"], !(token is String) {
-            return invalid(reason: "auth_token doit être une chaîne JSON", source: source, adjective: "invalide")
+            // Le JSON a été lu : le `port` du fichier est gardé (sans avertissement ici, le mode dégradé
+            // en porte déjà un), sinon le défaut ; jamais de repli sur une valeur hors bornes.
+            var portBag = JSONBag(raw: raw, known: knownKeys)
+            let port = UInt16(portBag.int("port", Int(Config().port), min: 1, max: 65_535, outOfRange: .fallback))
+            return invalid(reason: "auth_token doit être une chaîne JSON", source: source, adjective: "invalide",
+                           port: port)
         }
 
         var bag = JSONBag(raw: raw, known: knownKeys)

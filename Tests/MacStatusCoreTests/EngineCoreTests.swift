@@ -864,6 +864,64 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
     }
 
+    // MARK: - Réveil perdu (lot de retouches avant la tâche 16)
+
+    /// Veille courte (5 s, moins que le seuil de trou) dont ni `HasPoweredOn` ni `didWake` ne sont
+    /// arrivés : sans rattrapage, `system_asleep` resterait vrai indéfiniment (OFF). Au-delà de
+    /// 35 s sans avis de réveil, la scrutation continue rattrape le réveil, sans republication forcée.
+    func test_reveilPerdu_scrutationContinue_rattrapeAvant36s() {
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+        XCTAssertTrue(core.currentState)
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["state"] as? String, "0")
+
+        // 5 s de veille réelle : le Mac dort, aucun tick ; puis scrutation continue, pas d'avis.
+        horloge.advance(5)
+        for _ in 0..<60 { scruter(core, 0.5) }   // 35 s depuis la veille
+        XCTAssertFalse(core.currentState, "pas avant le délai de 35 s")
+        XCTAssertFalse(journalContient("réveil non signalé"))
+        scruter(core, 0.5)                        // 35,5 s
+        XCTAssertTrue(core.currentState, "réveil rattrapé : ON")
+        XCTAssertTrue(journalContient("réveil non signalé : rattrapé"), "\(journal.lines)")
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "desktop-ui")
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: false))
+        XCTAssertEqual(publicationsForcees, 0, "\(publieur.publications)")
+        XCTAssertEqual((core.statusSnapshot()["facts"] as? [String: Any])?["system_asleep"] as? Bool, false)
+
+        // L'avis de réveil qui arriverait enfin ne force rien et ne change rien.
+        let avant = publieur.envois.count
+        core.handle(.systemDidWake)
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publicationsForcees, 0)
+        XCTAssertEqual(publieur.envois.count, avant, "rien de plus n'est envoyé")
+    }
+
+    /// Une veille dont l'avis de réveil arrive à temps ne déclenche jamais le rattrapage, et une
+    /// veille longue traitée par le chemin du trou non plus (`end` renseigné).
+    func test_reveilPerdu_pasDeRattrapageSiLeReveilEstTraite() {
+        let core = moteur()
+        core.start()
+        core.willSleep {}
+        horloge.advance(8)
+        core.handle(.systemDidWake)
+        XCTAssertTrue(core.currentState)
+        for _ in 0..<100 { scruter(core, 0.5) }
+        XCTAssertFalse(journalContient("réveil non signalé"), "\(journal.lines)")
+
+        // Veille longue : le trou de scrutation la traite, pas le rattrapage.
+        let autre = moteur()
+        autre.start()
+        autre.willSleep {}
+        horloge.advance(60)
+        autre.tick()
+        XCTAssertTrue(journalContient("couverte par la veille"))
+        XCTAssertFalse(journalContient("réveil non signalé"), "\(journal.lines)")
+    }
+
     // MARK: - Veille : détails (tâche 13, tour 1)
 
     /// Une veille qui abandonne une commande en cours le dit au journal (INFO).
@@ -1014,6 +1072,41 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(termine, 1)
         XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "0")
         XCTAssertTrue(journalContient("arrêt : OFF confirmé"))
+    }
+
+    /// Lot de retouches : sans cible utilisable (webhooks coupés), l'arrêt ne prétend pas qu'OFF est
+    /// « confirmé » (ni « non confirmé en 2 s ») : OFF n'est publié que localement, et `done` part tout de suite.
+    func test_arret_webhooksCoupes_offPubliePlocalement() {
+        // Client réel désactivé par la configuration.
+        var config = Config()
+        config.enabled = false
+        let client = WebhookClient(config: config, transport: FakeTransport(clock: horloge),
+                                   scheduler: TestScheduler(clock: horloge), clock: horloge)
+        for publieurCoupe in [client as StatePublisher, { () -> StatePublisher in
+            let faux = FakePublisher(); faux.cibleUtilisable = false; return faux }()] {
+            journal.lines = []
+            let core = moteur(publieur: publieurCoupe)
+            core.start()
+            var termine = 0
+            core.shutdown(publishOff: true) { termine += 1 }
+            XCTAssertEqual(termine, 1)
+            XCTAssertTrue(journalContient("arrêt : OFF publié localement (webhooks coupés)"), "\(journal.lines)")
+            XCTAssertFalse(journalContient("OFF confirmé"), "\(journal.lines)")
+            XCTAssertFalse(journalContient("non confirmé"), "\(journal.lines)")
+        }
+    }
+
+    /// Même formulation à la veille : rien n'est envoyé, `allow` part aussitôt.
+    func test_veille_webhooksCoupes_offPubliePlocalement() {
+        let faux = FakePublisher()
+        faux.cibleUtilisable = false
+        let core = moteur(publieur: faux)
+        core.start()
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertTrue(journalContient("veille : OFF publié localement (webhooks coupés)"), "\(journal.lines)")
+        XCTAssertFalse(journalContient("confirmé"), "\(journal.lines)")
     }
 
     /// Tâche 14 : si OFF ne peut pas être livré, `done` part au délai de 2 s, une seule fois.

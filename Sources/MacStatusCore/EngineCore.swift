@@ -45,6 +45,9 @@ public final class EngineCore {
     static let longSleepThreshold: Double = 30
     /// Délai maximal d'attente de la livraison OFF à l'arrêt (sous le filet de 3 s et l'`ExitTimeOut` de 5 s).
     static let shutdownDeliveryTimeout: Double = 2
+    /// Au-delà de cette durée sans avis de réveil, `tick()` conclut que l'avis est perdu : la veille
+    /// annoncée plus tôt ne peut pas durer (la scrutation tourne, donc le Mac est éveillé).
+    static let lostWakeDelay: Double = 35
 
     /// Marge de couverture d'un trou de scrutation par une veille : deux périodes de scrutation,
     /// entre 1 et 3 s (bien moins que le seuil de trou, 10 s au moins).
@@ -151,8 +154,23 @@ public final class EngineCore {
             saver.noteNotification(active: false)
         }
 
+        // Réveil perdu : une veille courte (moins que le seuil de trou) dont ni `HasPoweredOn` ni
+        // `didWake` ne sont arrivés laisserait `system_asleep` vrai pour toujours. Si la scrutation
+        // tourne plus de `lostWakeDelay` après l'avis de veille, le Mac est éveillé : on le rattrape,
+        // sans republication forcée.
+        var lostWake = false
+        if !recovering, systemAsleep, var sleep = lastSleep, sleep.end == nil,
+           now - sleep.start > Self.lostWakeDelay {
+            sleep.end = now
+            lastSleep = sleep
+            systemAsleep = false
+            saver.noteNotification(active: false)
+            lostWake = true
+            logWarn("réveil non signalé : rattrapé (veille annoncée il y a \(String(format: "%.1f", now - sleep.start)) s)")
+        }
+
         refreshFacts()
-        if !evaluate(immediate: recovering, force: force), covered {
+        if !evaluate(immediate: recovering || lostWake, force: force), covered || lostWake {
             // Pas de `force`, mais un état publié et non confirmé (envoi perdu avant le gel) repart.
             ensurePublished()
         }
@@ -342,8 +360,11 @@ public final class EngineCore {
             // OFF était déjà publié : on s'assure seulement qu'il est confirmé.
             ensurePublished()
         }
+        let sent = publisher.hasUsableTarget
         publisher.notifyWhenDelivered(timeout: Self.sleepDeliveryTimeout) { delivered in
-            if !delivered {
+            if !sent {
+                logInfo("veille : OFF publié localement (webhooks coupés) → veille autorisée")
+            } else if !delivered {
                 logWarn("veille : OFF non confirmé en \(Self.sleepDeliveryTimeout) s → veille autorisée quand même")
             } else if self.published == false {
                 logInfo("veille : OFF confirmé → veille autorisée")
@@ -434,9 +455,12 @@ public final class EngineCore {
         published = false
         publishedReason = "shutdown"
         // Un ON en vol est annulé : OFF part tout de suite, sans attendre sa réponse (R40).
+        let sent = publisher.hasUsableTarget
         publisher.publishBeforeExit(false)
         publisher.notifyWhenDelivered(timeout: Self.shutdownDeliveryTimeout) { delivered in
-            if delivered {
+            if !sent {
+                logInfo("arrêt : OFF publié localement (webhooks coupés)")
+            } else if delivered {
                 logInfo("arrêt : OFF confirmé")
             } else {
                 logWarn("arrêt : OFF non confirmé en \(Self.shutdownDeliveryTimeout) s → départ quand même")

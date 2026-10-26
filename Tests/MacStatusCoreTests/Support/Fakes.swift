@@ -174,6 +174,9 @@ final class FakePublisher: StatePublisher {
     /// Les appels qu'un client réel aurait transmis.
     private(set) var envois: [Publication] = []
     var livraisonManuelle = false
+    /// Faux : aucune destination utilisable (webhooks coupés). `notifyWhenDelivered` répond `false`.
+    var cibleUtilisable = true
+    var hasUsableTarget: Bool { cibleUtilisable }
     private(set) var voulu: Bool?
     private(set) var confirme: Bool?
     /// Délai passé à chaque `notifyWhenDelivered`, dans l'ordre.
@@ -202,6 +205,10 @@ final class FakePublisher: StatePublisher {
 
     func notifyWhenDelivered(timeout: Double, _ done: @escaping (Bool) -> Void) {
         delaisDemandes.append(timeout)
+        guard cibleUtilisable else {
+            done(false)
+            return
+        }
         guard let voulu, voulu != confirme else {
             done(true)
             return
