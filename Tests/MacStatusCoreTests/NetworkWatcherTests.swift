@@ -1,6 +1,6 @@
 import XCTest
 import Network
-@testable import macstatusd
+@testable import MacStatusNet
 
 /// Lot 2, point 8 : la signature du chemin réseau ne compte que le Wi-Fi, l'Ethernet filaire et le
 /// cellulaire. Un tunnel (VPN), le bouclage ou une interface « autre » qui apparaît ou disparaît ne

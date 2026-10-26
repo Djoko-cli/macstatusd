@@ -14,13 +14,16 @@ import MacStatusCore
 ///   supprimé, renommé ou remplacé est rouvert.
 /// - Rotation en 5 générations (`.1` à `.5`) de 2 Mio, toutes en mode 600. Une rotation qui échoue
 ///   (dossier en lecture seule, disque plein) laisse les générations intactes, se signale une seule fois
-///   par épisode et n'est retentée qu'après `maxBytes` octets de plus ou 60 s.
+///   par épisode et n'est retentée qu'après `maxBytes` octets de plus ou 60 s. Si elle échoue
+///   durablement et que le fichier atteint 4 × `maxBytes`, l'écriture fichier cesse (un seul
+///   signalement) ; elle reprend à la rotation réussie suivante, dont la première ligne dit combien
+///   de rotations ont été ratées (et combien de lignes n'ont pas été écrites).
 /// - Le fichier n'occupe jamais un descripteur standard (0, 1, 2), même si l'un d'eux était fermé.
 /// - Après un EPIPE (lecteur du tube fermé), l'écho sur la sortie standard est coupé pour de bon.
 ///
 /// C'est le récepteur de `MacStatusCore` : `main.swift` le branche sur `CoreLog.sink`.
-final class Log: LogSink {
-    static let shared = Log()
+public final class Log: LogSink {
+    public static let shared = Log()
 
     /// Variable d'environnement de test : taille de rotation réduite (en octets, 4096 au moins).
     /// Elle sert au selftest, qui ne peut pas écrire plusieurs fois 2 Mio en un temps raisonnable.
@@ -28,6 +31,8 @@ final class Log: LogSink {
     static let defaultMaxBytes = 2 * 1024 * 1024
     static let generations = 5
     static let checkEveryWrites = 100
+    /// Plafond du fichier tant que la rotation échoue : `rotationFailureCapFactor × maxBytes`.
+    static let rotationFailureCapFactor = 4
     static let reopenDelayNanoseconds: UInt64 = 60 * 1_000_000_000
 
     private let queue = DispatchQueue(label: "macstatusd.log", qos: .utility)
@@ -56,6 +61,14 @@ final class Log: LogSink {
     private var rotationRetryAt: UInt64 = 0
     /// L'échec de rotation de l'épisode en cours a déjà été signalé (remis à faux par une rotation réussie).
     private var rotationFailureReported = false
+    /// Rotations ratées depuis la dernière réussie (remis à zéro par une rotation réussie).
+    private var rotationFailureCount = 0
+    /// Le fichier a atteint le plafond : plus aucune écriture fichier jusqu'à une rotation réussie.
+    private var capped = false
+    /// Le plafond de l'épisode en cours a déjà été signalé.
+    private var capReported = false
+    /// Lignes non écrites dans le fichier depuis le plafond.
+    private var linesDroppedAtCap = 0
 
     /// Instant monotone (ns) ; remplaçable par les tests.
     var now: () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
@@ -65,12 +78,15 @@ final class Log: LogSink {
     private(set) var rotationAttempts = 0
     /// Ouverture du fichier de journal ; remplaçable par les tests.
     var opener: (String) -> Int32 = { open($0, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600) }
+    /// Plus petit descripteur que le fichier peut occuper : au-delà des trois descripteurs standard.
+    /// Les tests le relèvent pour jouer le déplacement sans fermer le moindre descripteur du processus.
+    var firstAllowedDescriptor: Int32 = STDERR_FILENO + 1
 
     init() {}
 
     /// Choisit le chemin de log : explicite, sinon /opt/macstatusd/logs pour root,
     /// sinon ~/Library/Logs/macstatusd.
-    static func defaultLogFile() -> URL {
+    public static func defaultLogFile() -> URL {
         if getuid() == 0 {
             return URL(fileURLWithPath: "/opt/macstatusd/logs/macstatusd.log")
         }
@@ -80,7 +96,7 @@ final class Log: LogSink {
 
     /// `maxBytes` : taille de rotation imposée par l'appelant (tests) ; sinon la variable d'environnement
     /// d'essai, sinon 2 Mio.
-    func configure(level: LogLevel, file: URL?, echoToStdout: Bool, maxBytes: Int? = nil) {
+    public func configure(level: LogLevel, file: URL?, echoToStdout: Bool, maxBytes: Int? = nil) {
         queue.sync {
             self.level = level
             self.echoToStdout = echoToStdout
@@ -103,6 +119,10 @@ final class Log: LogSink {
             self.nextOpenAttempt = 0
             self.rotationFailed = false
             self.rotationFailureReported = false
+            self.rotationFailureCount = 0
+            self.capped = false
+            self.capReported = false
+            self.linesDroppedAtCap = 0
             if file != nil { openFile() }
             if let notice { log(notice.0, notice.1) }
         }
@@ -113,7 +133,7 @@ final class Log: LogSink {
         queue.sync { fd }
     }
 
-    var currentLogPath: String? {
+    public var currentLogPath: String? {
         queue.sync { fileURL?.path }
     }
 
@@ -149,7 +169,8 @@ final class Log: LogSink {
     ///
     /// Le fichier n'occupe jamais le descripteur 0, 1 ou 2 : si l'un d'eux était fermé, `open` le
     /// rendrait, et l'écho (sortie standard) comme la fermeture de la rotation le brouilleraient.
-    /// Le descripteur est alors déplacé au-delà de 2, et le créneau standard laissé libre comme avant.
+    /// Le descripteur est alors déplacé au-delà de 2 (`firstAllowedDescriptor`), et le créneau standard
+    /// laissé libre comme avant.
     private func openFile() {
         guard let url = fileURL else { return }
         let directory = url.deletingLastPathComponent().path
@@ -159,11 +180,11 @@ final class Log: LogSink {
             fileFailed("ouverture impossible", code: errno)
             return
         }
-        if descriptor <= STDERR_FILENO {
-            let moved = fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1)
+        if descriptor < firstAllowedDescriptor {
+            let moved = fcntl(descriptor, F_DUPFD_CLOEXEC, firstAllowedDescriptor)
             let code = errno
             close(descriptor)
-            guard moved > STDERR_FILENO else {
+            guard moved >= firstAllowedDescriptor else {
                 fileFailed("descripteur standard refusé", code: code)
                 return
             }
@@ -224,9 +245,27 @@ final class Log: LogSink {
         return true
     }
 
+    /// Tente une rotation. À la réussite, l'épisode d'échec est clos : le plafond est levé et la première
+    /// ligne du nouveau fichier dit combien de rotations ont été ratées (et de lignes non écrites).
+    private func rotateAndClose() {
+        let failures = rotationFailureCount
+        let dropped = linesDroppedAtCap
+        guard rotate() else { return }
+        rotationFailureCount = 0
+        capped = false
+        capReported = false
+        linesDroppedAtCap = 0
+        guard failures > 0 else { return }
+        var text = "journal : rotation réussie après \(failures) rotation(s) ratée(s)"
+        if dropped > 0 { text += ", \(dropped) ligne(s) non écrite(s) au plafond" }
+        let line = "\(formatter.string(from: Date())) \(LogLevel.warn.tag) \(text)\n"
+        if let data = line.data(using: .utf8), fd >= 0, Log.writeAll(fd, data) == nil { bytes += data.count }
+    }
+
     /// Une rotation a échoué : prochaine tentative après `maxBytes` octets de plus ou 60 s. Un seul
     /// signalement par épisode.
     private func noteRotationFailure(_ what: String, code: Int32, size: Int) {
+        rotationFailureCount += 1
         rotationFailed = true
         rotationRetryBytes = size + maxBytes
         rotationRetryAt = now() + Log.reopenDelayNanoseconds
@@ -235,6 +274,15 @@ final class Log: LogSink {
         let path = fileURL?.path ?? "?"
         reportFailure("rotation du journal impossible (\(path)) : \(what) : \(String(cString: strerror(code))) "
                       + "→ retentée après \(maxBytes) octets de plus ou 60 s")
+    }
+
+    /// Signale une seule fois par épisode que le fichier a atteint son plafond.
+    private func reportCap() {
+        guard !capReported else { return }
+        capReported = true
+        let path = fileURL?.path ?? "?"
+        reportFailure("journal fichier au plafond (\(path)) : \(bytes) octets, rotation toujours impossible "
+                      + "→ plus aucune écriture fichier jusqu'à une rotation réussie (retentée toutes les 60 s)")
     }
 
     /// Écrit une ligne dans le fichier, sans lever d'exception ni bloquer sur un fichier absent.
@@ -254,6 +302,19 @@ final class Log: LogSink {
                 guard fd >= 0 else { return }
             }
         }
+        if rotationFailed, bytes >= Log.rotationFailureCapFactor * maxBytes {
+            // Rotation ratée durablement et fichier au plafond : plus d'écriture fichier. La rotation
+            // reste retentée toutes les 60 s ; à sa réussite la ligne en cours est écrite normalement.
+            if !capped {
+                capped = true
+                reportCap()
+            }
+            if now() >= rotationRetryAt { rotateAndClose() }
+            guard !capped, fd >= 0 else {
+                linesDroppedAtCap += 1
+                return
+            }
+        }
         if let code = Log.writeAll(fd, data) {
             fileFailed("écriture impossible", code: code)
             return
@@ -263,7 +324,7 @@ final class Log: LogSink {
         if bytes > maxBytes {
             // Après une rotation ratée, on ne la retente pas à chaque ligne.
             if rotationFailed, bytes < rotationRetryBytes, now() < rotationRetryAt { return }
-            _ = rotate()
+            rotateAndClose()
         }
     }
 
@@ -305,7 +366,7 @@ final class Log: LogSink {
 
     // MARK: - LogSink
 
-    func log(_ level: LogLevel, _ message: String) {
+    public func log(_ level: LogLevel, _ message: String) {
         queue.async { [self] in
             guard level <= self.level else { return }
             let line = "\(formatter.string(from: Date())) \(level.tag) \(message)\n"
@@ -322,7 +383,7 @@ final class Log: LogSink {
         }
     }
 
-    func flush() {
+    public func flush() {
         queue.sync {
             if fd >= 0 { fsync(fd) }
         }

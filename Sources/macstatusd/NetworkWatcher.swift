@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import MacStatusCore
+import MacStatusNet
 
 /// Surveille le chemin réseau (`NWPathMonitor`) et prévient quand il redevient utilisable, pour
 /// que le client webhook renvoie tout de suite l'état aux cibles non confirmées.
@@ -52,18 +53,6 @@ final class NetworkWatcher {
             logInfo("réseau : chemin de nouveau utilisable")
         }
         onAvailable?()
-    }
-}
-
-/// Signature d'un chemin réseau : son statut et ses interfaces pertinentes (Wi-Fi, Ethernet filaire,
-/// cellulaire), triées. Deux chemins de même signature ne se distinguent pour aucun envoi.
-enum NetworkPathSignature {
-    static let relevantTypes: Set<NWInterface.InterfaceType> = [.wifi, .wiredEthernet, .cellular]
-
-    static func make(status: NWPath.Status, interfaces: [(name: String, type: NWInterface.InterfaceType)]) -> String {
-        let relevant = interfaces.filter { relevantTypes.contains($0.type) }
-            .map { "\($0.name):\($0.type)" }.sorted().joined(separator: ",")
-        return "\(status) \(relevant)"
     }
 }
 

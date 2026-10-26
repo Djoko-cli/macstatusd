@@ -1,6 +1,6 @@
 import XCTest
 import MacStatusCore
-@testable import macstatusd
+@testable import MacStatusLog
 
 /// Journal fichier de l'exécutable (`Log`) : rotation, échecs signalés une fois, descripteur sûr.
 /// Chaque test a son propre dossier temporaire, sa propre instance de `Log` et une horloge manuelle ;
@@ -138,6 +138,90 @@ final class LogFichierTests: XCTestCase {
         XCTAssertLessThan((try? FileManager.default.attributesOfItem(atPath: fichier.path)[.size] as? Int) ?? 0, 4096)
     }
 
+    /// Lot 3, point 4 : une rotation ratée durablement ne laisse pas le fichier grossir sans fin. Au-delà
+    /// de 4 × `maxBytes`, l'écriture fichier cesse (un seul signalement) ; elle reprend à la rotation
+    /// réussie suivante, dont la première ligne dit combien de rotations ont été ratées.
+    func test_rotationRateeDurable_plafonneLeFichierPuisReprend() throws {
+        try XCTSkipIf(getuid() == 0, "root passe outre les droits du dossier")
+        let maxBytes = 4096
+        journal.configure(level: .info, file: fichier, echoToStdout: false, maxBytes: maxBytes)
+        ecrire(0)
+        journal.flush()
+        XCTAssertEqual(chmod(dossier.path, 0o500), 0)
+
+        func taille() -> Int {
+            (try? FileManager.default.attributesOfItem(atPath: fichier.path)[.size] as? Int) ?? 0
+        }
+        var n = 1
+        // Beaucoup plus de lignes qu'il n'en tient dans 4 × maxBytes, sans que l'horloge avance.
+        while n < 400 { ecrire(n); n += 1 }
+        journal.flush()
+        let plafond = 4 * maxBytes
+        XCTAssertGreaterThanOrEqual(taille(), plafond, "le fichier a grossi jusqu'au plafond")
+        XCTAssertLessThan(taille(), plafond + 200, "puis plus du tout (une ligne de dépassement au plus)")
+        let figee = taille()
+        for _ in 0..<50 { ecrire(n); n += 1 }
+        journal.flush()
+        XCTAssertEqual(taille(), figee, "plus aucune écriture fichier au plafond")
+
+        let plafonnement = signalements.filter { $0.contains("plafond") }
+        XCTAssertEqual(plafonnement.count, 1, "un seul signalement du plafond : \(signalements)")
+        XCTAssertEqual(signalements.filter { $0.contains("rotation") && !$0.contains("plafond") }.count, 1,
+                       "et un seul pour la rotation : \(signalements)")
+        XCTAssertEqual(signalements.count, 2, "\(signalements)")
+
+        // Au plafond, la rotation est toujours retentée après 60 s, et échoue encore : rien ne change.
+        let tentatives = journal.rotationAttempts
+        instant += 61 * 1_000_000_000
+        ecrire(n); n += 1
+        journal.flush()
+        XCTAssertEqual(journal.rotationAttempts, tentatives + 1, "tentative après 60 s, même au plafond")
+        XCTAssertEqual(taille(), figee)
+        XCTAssertEqual(signalements.count, 2, "pas de nouveau signalement : \(signalements)")
+
+        // Dossier rétabli : la rotation réussit, l'écriture reprend, la nouvelle première ligne le dit.
+        XCTAssertEqual(chmod(dossier.path, 0o700), 0)
+        instant += 61 * 1_000_000_000
+        ecrire(n); n += 1
+        journal.flush()
+        XCTAssertGreaterThan(taille(), 0)
+        XCTAssertLessThan(taille(), 4096)
+        let lignes = contenu(fichier.path).split(separator: "\n").map(String.init)
+        XCTAssertGreaterThanOrEqual(lignes.count, 2, "\(lignes)")
+        XCTAssertTrue(lignes.first?.contains("rotation(s) ratée(s)") ?? false, "\(lignes)")
+        let total = journal.rotationAttempts - 1
+        XCTAssertTrue(lignes.first?.contains("\(total) rotation(s) ratée(s)") ?? false,
+                      "N = nombre de rotations ratées (\(total)) : \(lignes)")
+        XCTAssertTrue(lignes.first?.contains("ligne(s) non écrite(s)") ?? false, "\(lignes)")
+        XCTAssertEqual(numeros(fichier.path), [n - 1], "la ligne qui a déclenché la rotation est écrite")
+        XCTAssertTrue(contenu(fichier.path + ".1").contains("ligne 0 "), "ancien journal en .1")
+
+        // L'épisode est clos : les écritures suivantes sont normales, sans rappel.
+        ecrire(n); journal.flush()
+        XCTAssertEqual(numeros(fichier.path), [n - 1, n])
+        XCTAssertEqual(contenu(fichier.path).components(separatedBy: "rotation(s) ratée(s)").count, 2)
+    }
+
+    /// Une rotation ratée puis réussie sans atteindre le plafond écrit aussi la ligne « N rotation(s)
+    /// ratée(s) » (R45 d), mais sans « ligne(s) non écrite(s) » : rien n'a été perdu.
+    func test_rotationReussieApresEchec_ecritLeNombreDeRotationsRatees() throws {
+        try XCTSkipIf(getuid() == 0, "root passe outre les droits du dossier")
+        journal.configure(level: .info, file: fichier, echoToStdout: false, maxBytes: 4096)
+        ecrire(0)
+        journal.flush()
+        XCTAssertEqual(chmod(dossier.path, 0o500), 0)
+        var n = 1
+        while journal.rotationAttempts == 0, n < 200 { ecrire(n); n += 1; journal.flush() }
+        XCTAssertEqual(journal.rotationAttempts, 1)
+        XCTAssertEqual(chmod(dossier.path, 0o700), 0)
+        instant += 61 * 1_000_000_000
+        ecrire(n); journal.flush()
+        XCTAssertEqual(journal.rotationAttempts, 2)
+        let premiere = contenu(fichier.path).split(separator: "\n").first.map(String.init) ?? ""
+        XCTAssertTrue(premiere.contains("1 rotation(s) ratée(s)"), premiere)
+        XCTAssertFalse(premiere.contains("non écrite"), premiere)
+    }
+
     // MARK: - Échecs signalés une fois
 
     /// Écriture impossible à chaque fois (descripteur ouvert en lecture seule : `EBADF`), alors que
@@ -181,21 +265,47 @@ final class LogFichierTests: XCTestCase {
 
     // MARK: - Descripteur sûr
 
-    /// Si l'entrée standard est fermée, `open` rendrait 0 : le journal ne doit jamais occuper un
-    /// descripteur standard (l'écho écrit sur 1, la rotation ferme son descripteur).
-    func test_descripteurStandard_jamaisPourLeJournal() throws {
-        let sauvegarde = dup(STDIN_FILENO)
-        try XCTSkipIf(sauvegarde < 0, "entrée standard indisponible")
-        close(STDIN_FILENO)
+    /// Le journal n'occupe jamais un descripteur standard (l'écho écrit sur 1, la rotation ferme son
+    /// descripteur). Le test ne ferme rien du processus : l'`opener` rend un descripteur ordinaire et le
+    /// seuil de repli (`firstAllowedDescriptor`, 3 en production) est relevé au-dessus, pour que le même
+    /// code de déplacement (`F_DUPFD_CLOEXEC`, fermeture de l'original) joue comme avec un 0, 1 ou 2.
+    func test_descripteurTropBas_estDeplaceAuDessusDuSeuil() throws {
+        XCTAssertEqual(journal.firstAllowedDescriptor, STDERR_FILENO + 1, "seuil de production : au-delà de 2")
+        let seuil: Int32 = 200
+        var ouvert: Int32 = -1
+        journal.firstAllowedDescriptor = seuil
+        journal.opener = { chemin in
+            ouvert = open(chemin, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
+            return ouvert
+        }
         journal.configure(level: .info, file: fichier, echoToStdout: false)
         let descripteur = journal.openDescriptor
         ecrire(1); journal.flush()
         journal.configure(level: .info, file: nil, echoToStdout: false)
-        dup2(sauvegarde, STDIN_FILENO)
-        close(sauvegarde)
 
-        XCTAssertGreaterThan(descripteur, 2, "descripteur du journal")
+        XCTAssertGreaterThanOrEqual(ouvert, 0)
+        XCTAssertLessThan(ouvert, seuil, "l'opener rend un descripteur sous le seuil")
+        XCTAssertGreaterThanOrEqual(descripteur, seuil, "descripteur du journal déplacé au-dessus du seuil")
+        XCTAssertEqual(fcntl(ouvert, F_GETFD), -1, "l'original est fermé, il ne fuit pas")
         XCTAssertEqual(numeros(fichier.path), [1], "le journal s'écrit quand même")
+        XCTAssertTrue(signalements.isEmpty, "\(signalements)")
+    }
+
+    /// Aucun descripteur disponible au-dessus du seuil : échec signalé une fois, rien ne plante, le
+    /// descripteur de l'opener n'est pas laissé ouvert.
+    func test_deplacementRefuse_signaleEtFermeLOriginal() throws {
+        var ouvert: Int32 = -1
+        journal.firstAllowedDescriptor = 1 << 30           // au-delà de la limite : F_DUPFD échoue (EINVAL)
+        journal.opener = { chemin in
+            ouvert = open(chemin, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
+            return ouvert
+        }
+        journal.configure(level: .info, file: fichier, echoToStdout: false)
+        ecrire(1); journal.flush()
+        XCTAssertEqual(journal.openDescriptor, -1)
+        XCTAssertEqual(fcntl(ouvert, F_GETFD), -1, "l'original est fermé")
+        XCTAssertEqual(signalements.count, 1, "\(signalements)")
+        XCTAssertTrue(signalements[0].contains("descripteur standard refusé"), signalements[0])
     }
 
     // MARK: - Taille de rotation d'essai

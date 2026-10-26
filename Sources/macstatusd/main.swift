@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import MacStatusCore
+import MacStatusLog
 
 // SIGPIPE tuerait le process lors d'une écriture sur un tube ou un socket fermé (écho du journal
 // vers `| head`, réponse réseau interrompue) : ignoré dès le départ, les écritures rendent EPIPE.
