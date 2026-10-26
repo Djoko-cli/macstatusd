@@ -827,7 +827,7 @@ APRES_H="$(nb_pushs selftestarret false)"
 if [[ "$APRES_H" -gt "$AVANT_H" ]]; then ok "sigterm-off : state=false reçu par le faux Homebridge ($AVANT_H → $APRES_H)"; else bad "sigterm-off : aucun state=false reçu après le SIGTERM ($AVANT_H → $APRES_H)"; fi
 APRES_HA="$(nb_posts_ha selftestarret false)"
 if [[ "$APRES_HA" -gt "$AVANT_HA" ]]; then ok "sigterm-off : state=false reçu par le faux Home Assistant ($AVANT_HA → $APRES_HA)"; else bad "sigterm-off : aucun state=false reçu par le faux Home Assistant ($AVANT_HA → $APRES_HA)"; fi
-if grep -q "arrêt : OFF confirmé" "$WORK/h.log"; then ok "sigterm-off : « arrêt : OFF confirmé » au journal (livré aux deux cibles avant la sortie)"; else bad "sigterm-off : « arrêt : OFF confirmé » absent du journal"; fi
+if grep -q "arrêt : OFF confirmé par 2/2 cibles" "$WORK/h.log"; then ok "sigterm-off : « arrêt : OFF confirmé par 2/2 cibles » au journal (livré aux deux cibles avant la sortie)"; else bad "sigterm-off : « arrêt : OFF confirmé par 2/2 cibles » absent du journal"; fi
 if grep -q "arrêt terminé" "$WORK/h.log"; then ok "sigterm-off : « arrêt terminé » au journal"; else bad "sigterm-off : « arrêt terminé » absent du journal"; fi
 if grep -qF -e "$HA_WEBHOOK_ID" -e "$HA_ENTETE" "$WORK/h.log" "$WORK/h.out"; then
   bad "deux-cibles : identifiant de webhook ou en-tête au journal de H"
@@ -872,7 +872,7 @@ PID_J=$!
 PIDS+=($PID_J)
 if await_http $PORT_J 10; then ok "ha-retour : instance démarrée"; else bad "ha-retour : instance injoignable"; fi
 for _ in $(seq 40); do grep -q "abandonné" "$WORK/j.log" 2>/dev/null && break; sleep 0.25; done
-if grep -q "abandonné après 1 essais" "$WORK/j.log"; then ok "ha-retour : cible injoignable, série rapide abandonnée"; else bad "ha-retour : aucun abandon au journal de J"; fi
+if grep -q "abandonné après 1 essai " "$WORK/j.log"; then ok "ha-retour : cible injoignable, série rapide abandonnée"; else bad "ha-retour : aucun abandon au journal de J"; fi
 check "ha-retour : phase de la cible" "réessai lent" "$(cible_j phase)"
 DEBUT_J=$SECONDS
 python3 "$WORK/hamock.py" $PORT_HA2 > "$WORK/ha2.log" 2>&1 &

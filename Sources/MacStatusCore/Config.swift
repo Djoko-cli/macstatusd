@@ -577,11 +577,24 @@ public struct Config {
                         problem = "valeur de l'en-tête « \(name) » pas une chaîne"
                         break
                     }
-                    guard text.count <= 4096, !text.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
-                        problem = "valeur de l'en-tête « \(name) » invalide (caractère de contrôle ou plus de 4096 caractères)"
+                    guard isHeaderValue(text) else {
+                        problem = "valeur de l'en-tête « \(escapeForLog(name, limit: 32)) » invalide "
+                            + "(ASCII visible, espace et tabulation seulement, 4096 octets au plus)"
                         break
                     }
                     headers[name] = text
+                }
+                if problem == nil {
+                    // Deux noms qui ne diffèrent que par la casse feraient un doublon à l'envoi.
+                    var seen: [String: String] = [:]
+                    for name in dict.keys.sorted() {
+                        if let first = seen[name.lowercased()] {
+                            problem = "en-tête en doublon à la casse près (« \(escapeForLog(first, limit: 32)) » et "
+                                + "« \(escapeForLog(name, limit: 32)) »)"
+                            break
+                        }
+                        seen[name.lowercased()] = name
+                    }
                 }
                 if let problem {
                     bag.warn("\(label) : \(problem) → écartée")
@@ -591,6 +604,14 @@ public struct Config {
             targets.append(WebhookTarget(url: url, method: method, headers: headers))
         }
         return targets
+    }
+
+    /// Valeur d'en-tête HTTP : ASCII visible (0x21 à 0x7E), espace et tabulation, 4096 octets au plus.
+    /// Tout le reste (contrôles, DEL, octets hauts, accents) est refusé : la valeur part telle quelle
+    /// sur le fil, sans codage.
+    static func isHeaderValue(_ text: String) -> Bool {
+        let bytes = text.utf8
+        return bytes.count <= 4096 && bytes.allSatisfy { $0 == 0x09 || (0x20...0x7E).contains($0) }
     }
 
     /// Nom d'en-tête HTTP : un « token » (RFC 9110) d'au plus 64 caractères.

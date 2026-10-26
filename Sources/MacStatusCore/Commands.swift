@@ -19,8 +19,9 @@ public protocol StatePublisher: AnyObject {
     /// Demande la publication d'un état. `force` réémet même si l'état est déjà
     /// confirmé (battement de cœur, resynchronisation).
     func publish(_ state: Bool, force: Bool)
-    /// Arrêt du daemon : publie `state` en force et tout de suite, vers chaque destination. Une
-    /// requête en vol pour un autre état est annulée au lieu d'être attendue (R40).
+    /// Arrêt du daemon : publie `state` en force vers chaque destination. Une requête en vol pour un
+    /// autre état garde une courte grâce (500 ms) pour aboutir, `state` part alors après elle ; encore
+    /// en vol à l'échéance, elle est annulée au lieu d'être attendue davantage (R40).
     func publishBeforeExit(_ state: Bool)
     /// Prévient `done` quand l'état voulu est confirmé par toutes les destinations (`true`), quand
     /// chacune a confirmé ou abandonné, ou quand `timeout` secondes se sont écoulées (`false`).
@@ -33,12 +34,17 @@ public protocol StatePublisher: AnyObject {
     /// dégradé, aucune cible ou URL invalide ; rien n'est alors envoyé, et le journal ne doit pas
     /// parler d'un OFF « confirmé ».
     var hasUsableTarget: Bool { get }
+    /// Cibles qui ont confirmé l'état voulu (`confirmed`) sur le nombre de cibles configurées
+    /// (`total`, 0 si le webhook est désactivé). Sert au journal d'arrêt et de veille :
+    /// « OFF confirmé par n/m cibles ».
+    var deliveryCounts: (confirmed: Int, total: Int) { get }
     /// Diagnostic exposé dans /status, sous la clé `webhook`.
     var statusDictionary: [String: Any] { get }
 }
 
 public extension StatePublisher {
     var hasUsableTarget: Bool { true }
+    var deliveryCounts: (confirmed: Int, total: Int) { (0, hasUsableTarget ? 1 : 0) }
 }
 
 /// Rappel à usage unique : seul le premier `run()` exécute le travail, les suivants sont sans

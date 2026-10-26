@@ -503,6 +503,61 @@ final class ConfigOriginTests: XCTestCase {
         }
     }
 
+    /// Lot 2, point 9 : une valeur d'en-tête est en ASCII visible, plus l'espace et la tabulation,
+    /// 4096 octets au plus (et non 4096 caractères).
+    func test_webhookTargets_valeurDEnTete_asciiVisibleEt4096Octets() throws {
+        func resultat(_ valeur: String) throws -> Config.Loaded {
+            let json = try JSONSerialization.data(withJSONObject: [
+                "enabled": true,
+                "webhook_targets": [["url": "http://192.0.2.10/hook", "headers": ["X-Cle": valeur]]],
+            ] as [String: Any])
+            return Config.parse(data: json)
+        }
+        for valide in ["jeton-essai-0123456789abcdef", "Bearer jeton avec espaces", "a\tb", "~!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}", String(repeating: "a", count: 4096)] {
+            let r = try resultat(valide)
+            XCTAssertEqual(r.config.webhookTargets.count, 1, "valeur acceptée attendue : \(valide.prefix(20)) \(r.warnings)")
+            XCTAssertTrue(r.warnings.isEmpty, "\(r.warnings)")
+        }
+        let invalides = [
+            "jetón-essai",                                  // accent
+            "jeton-\u{1F600}",                              // émoji
+            "jeton\u{7F}",                                  // DEL
+            "jeton\nautre",                                 // retour à la ligne
+            "jeton\u{0}",                                   // NUL
+            "jeton\u{80}",                                  // C1
+            String(repeating: "a", count: 4097),            // trop long
+            String(repeating: "é", count: 2049),            // 4098 octets, 2049 caractères
+        ]
+        for invalide in invalides {
+            let r = try resultat(invalide)
+            XCTAssertEqual(r.config.webhookTargets, [], "valeur refusée attendue : \(invalide.prefix(20))")
+            XCTAssertTrue(r.warnings.contains { $0.hasPrefix("webhook_targets : cible 1 ") && $0.contains("écartée") }, "\(r.warnings)")
+            XCTAssertFalse(r.warnings.contains { $0.contains("jeton") }, "valeur citée : \(r.warnings)")
+        }
+    }
+
+    /// Lot 2, point 9 : deux en-têtes qui ne diffèrent que par la casse feraient un doublon à
+    /// l'envoi : la cible est écartée, avec un avertissement qui ne cite aucune valeur.
+    func test_webhookTargets_doublonDEnTeteALaCasseHPres_cibleEcartee() {
+        let json = #"""
+        {"enabled": true, "webhook_targets": [
+          {"url": "http://192.0.2.10/hook"},
+          {"url": "http://192.0.2.11/hook", "headers": {"X-Cle": "jeton-essai-0123456789abcdef", "x-cle": "jeton-essai-fedcba9876543210"}},
+          {"url": "http://192.0.2.12/hook", "headers": {"X-Cle": "valeur-a", "X-Autre": "valeur-b"}}
+        ]}
+        """#
+        let r = Config.parse(data: Data(json.utf8))
+        XCTAssertEqual(r.origin, .file)
+        XCTAssertEqual(r.config.webhookTargets.map(\.url), ["http://192.0.2.10/hook", "http://192.0.2.12/hook"])
+        let avertissement = r.warnings.first { $0.hasPrefix("webhook_targets : cible 2 ") }
+        XCTAssertNotNil(avertissement, "\(r.warnings)")
+        XCTAssertTrue(avertissement?.contains("écartée") ?? false)
+        XCTAssertTrue(avertissement?.contains("doublon") ?? false, avertissement ?? "")
+        for texte in r.warnings {
+            XCTAssertFalse(texte.contains("0123456789abcdef") || texte.contains("fedcba9876543210"), "secret au journal : \(texte)")
+        }
+    }
+
     func test_webhookTargets_typeInattendu_ouListeVide() {
         let r = Config.parse(data: Data(#"{"enabled": true, "webhook_targets": "http://192.0.2.10/hook", "webhook_base_url": "http://192.0.2.10:51828/"}"#.utf8))
         XCTAssertEqual(r.config.webhookTargets, [], "webhook_targets présent : il décide, même illisible")

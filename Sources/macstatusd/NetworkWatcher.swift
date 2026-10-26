@@ -7,8 +7,10 @@ import MacStatusCore
 ///
 /// `onAvailable` part (sur la file du moniteur) seulement pour un **vrai changement** vers
 /// `.satisfied` : retour depuis un chemin non satisfait, ou chemin satisfait dont les interfaces
-/// ont changé (passage du Wi-Fi à l'Ethernet). Le premier relevé sert de référence et ne prévient
-/// pas ; les relevés `.satisfied` répétés à l'identique ne préviennent pas non plus (pas de rafale).
+/// **pertinentes** ont changé (passage du Wi-Fi à l'Ethernet). Seuls le Wi-Fi, l'Ethernet filaire
+/// et le cellulaire comptent : un tunnel (VPN), le bouclage ou une interface « autre » qui va et
+/// vient ne relance rien. Le premier relevé sert de référence et ne prévient pas ; les relevés
+/// `.satisfied` répétés à l'identique ne préviennent pas non plus (pas de rafale).
 final class NetworkWatcher {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "macstatusd.network")
@@ -29,8 +31,8 @@ final class NetworkWatcher {
 
     private func handle(_ path: NWPath) {
         let satisfied = path.status == .satisfied
-        let interfaces = path.availableInterfaces.map { "\($0.name):\($0.type)" }.sorted().joined(separator: ",")
-        let signature = "\(path.status) \(interfaces)"
+        let signature = NetworkPathSignature.make(
+            status: path.status, interfaces: path.availableInterfaces.map { ($0.name, $0.type) })
         defer {
             lastSignature = signature
             lastSatisfied = satisfied
@@ -44,8 +46,24 @@ final class NetworkWatcher {
             logInfo("réseau : chemin non utilisable (\(path.status))")
             return
         }
-        logInfo(lastSatisfied ? "réseau : interfaces changées, chemin utilisable" : "réseau : chemin de nouveau utilisable")
+        if lastSatisfied {
+            logDebug("réseau : interfaces changées, chemin utilisable")
+        } else {
+            logInfo("réseau : chemin de nouveau utilisable")
+        }
         onAvailable?()
+    }
+}
+
+/// Signature d'un chemin réseau : son statut et ses interfaces pertinentes (Wi-Fi, Ethernet filaire,
+/// cellulaire), triées. Deux chemins de même signature ne se distinguent pour aucun envoi.
+enum NetworkPathSignature {
+    static let relevantTypes: Set<NWInterface.InterfaceType> = [.wifi, .wiredEthernet, .cellular]
+
+    static func make(status: NWPath.Status, interfaces: [(name: String, type: NWInterface.InterfaceType)]) -> String {
+        let relevant = interfaces.filter { relevantTypes.contains($0.type) }
+            .map { "\($0.name):\($0.type)" }.sorted().joined(separator: ",")
+        return "\(status) \(relevant)"
     }
 }
 

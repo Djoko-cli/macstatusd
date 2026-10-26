@@ -362,12 +362,15 @@ public final class EngineCore {
         }
         let sent = publisher.hasUsableTarget
         publisher.notifyWhenDelivered(timeout: Self.sleepDeliveryTimeout) { delivered in
+            let (confirmed, total) = self.publisher.deliveryCounts
             if !sent {
-                logInfo("veille : OFF publié localement (webhooks coupés) → veille autorisée")
+                logInfo("veille : OFF publié localement (webhooks coupés) : aucune cible → veille autorisée")
             } else if !delivered {
-                logWarn("veille : OFF non confirmé en \(Self.sleepDeliveryTimeout) s → veille autorisée quand même")
+                logWarn("veille : " + Self.undeliveredText(confirmed: confirmed, total: total,
+                                                           timeout: Self.sleepDeliveryTimeout)
+                        + " → veille autorisée quand même")
             } else if self.published == false {
-                logInfo("veille : OFF confirmé → veille autorisée")
+                logInfo("veille : OFF confirmé par \(confirmed)/\(total) cibles → veille autorisée")
             } else {
                 // Une commande ON est arrivée entre-temps : c'est elle qui vient d'être livrée.
                 logInfo("veille : état voulu redevenu ON avant la confirmation de OFF → veille autorisée")
@@ -434,7 +437,7 @@ public final class EngineCore {
     /// les lectures (`currentState`, `statusSnapshot`, `inspect`) restent possibles.
     ///
     /// Avec `publishOff`, OFF est publié en `force` par `publishBeforeExit` : une requête ON en vol
-    /// est annulée et OFF part aussitôt vers chaque cible, puis `done` part à la livraison
+    /// garde 500 ms pour aboutir (OFF part ensuite), puis est annulée ; `done` part à la livraison
     /// (toutes les cibles), ou après `shutdownDeliveryTimeout` (2 s) au plus. Sans `publishOff` (redémarrage
     /// prévu, mode dégradé, option désactivée), `done` part tout de suite. `done` est appelé
     /// exactement une fois par appel, sur la file du moteur. Un second appel ne publie rien.
@@ -454,19 +457,30 @@ public final class EngineCore {
         logInfo("arrêt : publication OFF avant de partir")
         published = false
         publishedReason = "shutdown"
-        // Un ON en vol est annulé : OFF part tout de suite, sans attendre sa réponse (R40).
+        // Un ON en vol garde 500 ms pour aboutir (OFF part alors après lui) ; muet, il est annulé (R40).
         let sent = publisher.hasUsableTarget
         publisher.publishBeforeExit(false)
         publisher.notifyWhenDelivered(timeout: Self.shutdownDeliveryTimeout) { delivered in
+            let (confirmed, total) = self.publisher.deliveryCounts
             if !sent {
-                logInfo("arrêt : OFF publié localement (webhooks coupés)")
+                logInfo("arrêt : OFF publié localement (webhooks coupés) : aucune cible")
             } else if delivered {
-                logInfo("arrêt : OFF confirmé")
+                logInfo("arrêt : OFF confirmé par \(confirmed)/\(total) cibles")
             } else {
-                logWarn("arrêt : OFF non confirmé en \(Self.shutdownDeliveryTimeout) s → départ quand même")
+                logWarn("arrêt : " + Self.undeliveredText(confirmed: confirmed, total: total,
+                                                          timeout: Self.shutdownDeliveryTimeout)
+                        + " → départ quand même")
             }
             done()
         }
+    }
+
+    /// Texte d'une livraison incomplète à l'échéance : aucune cible n'a confirmé (« non confirmé »),
+    /// ou seulement une partie (« confirmé par n/m cibles seulement »), sans nier celles qui ont répondu.
+    private static func undeliveredText(confirmed: Int, total: Int, timeout: Double) -> String {
+        confirmed == 0
+            ? "OFF non confirmé en \(timeout) s (0/\(total) cibles)"
+            : "OFF confirmé par \(confirmed)/\(total) cibles seulement en \(timeout) s"
     }
 
     // MARK: - Commandes

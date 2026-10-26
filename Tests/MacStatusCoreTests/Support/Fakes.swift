@@ -177,6 +177,9 @@ final class FakePublisher: StatePublisher {
     /// Faux : aucune destination utilisable (webhooks coupés). `notifyWhenDelivered` répond `false`.
     var cibleUtilisable = true
     var hasUsableTarget: Bool { cibleUtilisable }
+    var deliveryCounts: (confirmed: Int, total: Int) {
+        (cibleUtilisable && voulu != nil && confirme == voulu ? 1 : 0, cibleUtilisable ? 1 : 0)
+    }
     private(set) var voulu: Bool?
     private(set) var confirme: Bool?
     /// Délai passé à chaque `notifyWhenDelivered`, dans l'ordre.

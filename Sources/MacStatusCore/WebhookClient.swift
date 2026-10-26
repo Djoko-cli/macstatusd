@@ -85,6 +85,9 @@ public final class WebhookClient: StatePublisher {
     static let slowRetryDelays: [TimeInterval] = [15, 30, 60]
     /// Intervalle minimal entre deux relances par `networkBecameAvailable` (pas de rafale).
     static let networkKickInterval: TimeInterval = 2
+    /// Grâce de l'arrêt : une requête ON déjà en vol dispose de ce délai pour aboutir avant d'être
+    /// annulée au profit de OFF. Courte, pour que le départ reste sous le délai de livraison de 2 s.
+    static let exitGraceDelay: TimeInterval = 0.5
 
     private let transport: WebhookTransport
     private let scheduler: Scheduler
@@ -123,6 +126,8 @@ public final class WebhookClient: StatePublisher {
         var generation = 0
         var retryTask: Cancellable?
         var retryDueAt: Double?
+        /// Minuterie de grâce de l'arrêt (voir `publishBeforeExit`), gardée par la génération.
+        var graceTask: Cancellable?
         var lastAttemptAt: Date?
         var lastSuccessAt: Date?
         var lastDetail = "aucun envoi"
@@ -206,12 +211,19 @@ public final class WebhookClient: StatePublisher {
         }
     }
 
-    /// Arrêt : publie `state` en force, tout de suite, vers chaque cible. Une requête en vol pour un
-    /// autre état est annulée (R40) ; une requête en vol pour ce même état est gardée, sa réponse
-    /// vaut confirmation. Les minuteries en attente sont remplacées par l'envoi.
+    /// Arrêt : publie `state` en force vers chaque cible, sans attendre le battement de cœur. Les
+    /// minuteries en attente sont remplacées par l'envoi.
     ///
-    /// Limite connue : une requête annulée a pu atteindre la cible ; rien ne garantit alors l'ordre
-    /// d'arrivée des deux requêtes (voir le rapport de la tâche 15).
+    /// **Requête en vol pour un autre état** (un ON, à l'arrêt) : elle n'est pas annulée tout de
+    /// suite, car une requête annulée a pu atteindre la cible sans qu'on le sache, et rien ne
+    /// garantit alors l'ordre d'arrivée des deux requêtes. L'état voulu devient `state` ; si l'ON
+    /// aboutit (ou échoue) dans la grâce de `exitGraceDelay` (500 ms), OFF part par le chemin
+    /// normal, après lui, donc dans l'ordre. Si l'ON est encore en vol à l'échéance, il est annulé
+    /// et OFF part aussitôt. Une requête en vol pour ce même état est gardée : sa réponse vaut
+    /// confirmation.
+    ///
+    /// Limite connue : une requête annulée à l'échéance a pu atteindre la cible ; l'ordre d'arrivée
+    /// n'est alors plus garanti. C'est le prix d'un départ borné.
     public func publishBeforeExit(_ state: Bool) {
         guard enabled else { return }
         logUnusableTargetsOnce()
@@ -223,8 +235,10 @@ public final class WebhookClient: StatePublisher {
             target.confirmed = nil
             if let flying = target.inFlightState {
                 if flying == state { continue }
-                cancelInFlight(target)
-                logInfo("webhook \(target.label) : requête état=\(flying ? "1" : "0") en vol annulée pour l'arrêt")
+                logDebug("webhook \(target.label) : requête état=\(flying ? "1" : "0") en vol, "
+                         + "grâce de 500 ms avant de l'annuler pour l'arrêt")
+                scheduleExitGrace(target)
+                continue
             }
             send(target)
         }
@@ -283,6 +297,13 @@ public final class WebhookClient: StatePublisher {
     /// Vrai si le client est actif et qu'au moins une cible a une URL utilisable.
     public var hasUsableTarget: Bool { enabled && targets.contains(where: \.usable) }
 
+    /// Cibles qui ont confirmé l'état voulu, sur toutes les cibles configurées (0 si désactivé).
+    public var deliveryCounts: (confirmed: Int, total: Int) {
+        guard enabled else { return (0, 0) }
+        guard let desired else { return (0, targets.count) }
+        return (targets.filter { $0.usable && $0.confirmed == desired }.count, targets.count)
+    }
+
     /// Attentes de livraison en cours (diagnostic et tests).
     var pendingDeliveryNotifications: Int { waiters.count }
 
@@ -313,6 +334,7 @@ public final class WebhookClient: StatePublisher {
     private func send(_ target: Target) {
         guard let state = desired, let request = target.requests?[state] else { return }
         cancelRetry(target)
+        cancelGrace(target)
         target.generation += 1
         let generation = target.generation
         target.inFlightState = state
@@ -335,6 +357,7 @@ public final class WebhookClient: StatePublisher {
     /// dans l'appel à `cancel()`) soit ignorée.
     private func cancelInFlight(_ target: Target) {
         let token = target.inFlightToken
+        cancelGrace(target)
         target.generation += 1
         target.inFlightState = nil
         target.inFlightToken = nil
@@ -345,6 +368,28 @@ public final class WebhookClient: StatePublisher {
         target.retryTask?.cancel()
         target.retryTask = nil
         target.retryDueAt = nil
+    }
+
+    private func cancelGrace(_ target: Target) {
+        target.graceTask?.cancel()
+        target.graceTask = nil
+    }
+
+    /// Grâce de l'arrêt : si la requête en vol (d'un autre état que le voulu) l'est encore à
+    /// l'échéance, elle est annulée et l'état voulu part. Gardée par la génération et `inFlight` :
+    /// une réponse, un envoi ou une annulation survenus entre-temps la rendent sans effet.
+    private func scheduleExitGrace(_ target: Target) {
+        cancelGrace(target)
+        let generation = target.generation
+        target.graceTask = scheduler.schedule(after: Self.exitGraceDelay) { [weak self, weak target] in
+            guard let self, let target else { return }
+            guard target.generation == generation, let flying = target.inFlightState, flying != desired else { return }
+            target.graceTask = nil
+            cancelInFlight(target)
+            logInfo("webhook \(target.label) : requête état=\(flying ? "1" : "0") encore en vol après 500 ms "
+                    + "→ annulée pour l'arrêt")
+            send(target)
+        }
     }
 
     private func scheduleRetry(_ target: Target, after delay: TimeInterval) {
@@ -446,7 +491,8 @@ public final class WebhookClient: StatePublisher {
             scheduleRetry(target, after: delay)
             return
         }
-        logError("webhook \(target.description) abandonné après \(target.attempt + 1) essais — "
+        let tries = target.attempt + 1
+        logError("webhook \(target.description) abandonné après \(tries) \(tries == 1 ? "essai" : "essais") — "
                  + "réessai lent dans 15 s, 30 s, puis toutes les 60 s")
         target.attempt = 0
         target.abandoned = true

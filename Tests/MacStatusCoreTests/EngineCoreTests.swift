@@ -496,6 +496,15 @@ final class EngineCoreTests: XCTestCase {
         return WebhookClient(config: config, transport: transport, scheduler: planificateur, clock: horloge)
     }
 
+    private func clientWebhookDeuxCibles(_ transport: FakeTransport, _ planificateur: TestScheduler) -> WebhookClient {
+        var config = Config()
+        config.enabled = true
+        config.webhookTargets = [WebhookTarget(url: "http://192.0.2.10:51828/", method: "GET", headers: [:]),
+                                 WebhookTarget(url: "http://192.0.2.11:51828/", method: "GET", headers: [:])]
+        config.accessoryID = "mac"
+        return WebhookClient(config: config, transport: transport, scheduler: planificateur, clock: horloge)
+    }
+
     private func moteur(publieur autre: StatePublisher) -> EngineCore {
         let config = Config()
         let oracle = ScreenSaverOracle(
@@ -1034,8 +1043,9 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(journalContient("ignorée : arrêt en cours"))
     }
 
-    /// Tâche 14, puis 15 (R40) : une requête ON en vol est annulée à l'arrêt ; OFF part tout de suite
-    /// (bien avant le délai de 2 s), et `done` n'est appelé qu'à sa confirmation.
+    /// Tâche 14, puis 15 (R40), puis lot 2 (point 6) : une requête ON muette en vol est annulée à
+    /// l'arrêt après 500 ms de grâce ; OFF part alors (bien avant le délai de 2 s), et `done`
+    /// n'est appelé qu'à sa confirmation.
     func test_arret_requeteEnVol_estAnnulee_OFFPartAussitot() {
         // Faux publieur : l'arrêt passe par la publication avant le départ.
         publieur.livraisonManuelle = true
@@ -1063,15 +1073,18 @@ final class EngineCoreTests: XCTestCase {
         var termine = 0
         let debut = horloge.t
         reel.shutdown(publishOff: true) { termine += 1 }
-        XCTAssertEqual(transport.annulations.count, 1, "l'ON en vol est annulé")
+        XCTAssertEqual(transport.annulations.count, 0, "l'ON en vol garde 500 ms de grâce")
+        XCTAssertEqual(transport.requetes.count, 1)
+        planificateur.runDue(at: debut + 0.5)
+        XCTAssertEqual(transport.annulations.count, 1, "l'ON encore en vol est annulé à 500 ms")
         XCTAssertEqual(transport.requetes.count, 2, "OFF part sans attendre la réponse de l'ON")
         XCTAssertTrue(transport.requetes[1].url.absoluteString.hasSuffix("state=false"))
-        XCTAssertLessThan(transport.instants[1] - debut, 2)
+        XCTAssertEqual(transport.instants[1] - debut, 0.5, accuracy: 0.001)
         XCTAssertEqual(termine, 0)
         transport.terminerEnAttente()   // l'OFF aboutit
         XCTAssertEqual(termine, 1)
         XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "0")
-        XCTAssertTrue(journalContient("arrêt : OFF confirmé"))
+        XCTAssertTrue(journalContient("arrêt : OFF confirmé par 1/1 cibles"), "\(journal.lines)")
     }
 
     /// Lot de retouches : sans cible utilisable (webhooks coupés), l'arrêt ne prétend pas qu'OFF est
@@ -1090,7 +1103,7 @@ final class EngineCoreTests: XCTestCase {
             var termine = 0
             core.shutdown(publishOff: true) { termine += 1 }
             XCTAssertEqual(termine, 1)
-            XCTAssertTrue(journalContient("arrêt : OFF publié localement (webhooks coupés)"), "\(journal.lines)")
+            XCTAssertTrue(journalContient("arrêt : OFF publié localement (webhooks coupés) : aucune cible"), "\(journal.lines)")
             XCTAssertFalse(journalContient("OFF confirmé"), "\(journal.lines)")
             XCTAssertFalse(journalContient("non confirmé"), "\(journal.lines)")
         }
@@ -1105,8 +1118,65 @@ final class EngineCoreTests: XCTestCase {
         var autorisations = 0
         core.willSleep { autorisations += 1 }
         XCTAssertEqual(autorisations, 1)
-        XCTAssertTrue(journalContient("veille : OFF publié localement (webhooks coupés)"), "\(journal.lines)")
+        XCTAssertTrue(journalContient("veille : OFF publié localement (webhooks coupés) : aucune cible"), "\(journal.lines)")
         XCTAssertFalse(journalContient("confirmé"), "\(journal.lines)")
+    }
+
+    /// Lot 2, point 7 : le journal d'arrêt compte les cibles. Deux cibles qui confirment : « 2/2 » ;
+    /// une seule : « 1/2 seulement » en WARN, jamais un « OFF confirmé » sans nombre ni un « non confirmé »
+    /// qui nierait la cible qui a répondu.
+    func test_arret_journalCompteLesCibles() {
+        let planificateur = TestScheduler(clock: horloge)
+        let transport = FakeTransport(clock: horloge)
+        let client = clientWebhookDeuxCibles(transport, planificateur)
+        let core = moteur(publieur: client)
+        core.start()
+        var termine = 0
+        core.shutdown(publishOff: true) { termine += 1 }
+        XCTAssertEqual(termine, 1)
+        XCTAssertTrue(journalContient("arrêt : OFF confirmé par 2/2 cibles"), "\(journal.lines)")
+
+        journal.lines = []
+        let transport2 = FakeTransport(clock: horloge)
+        transport2.hotesDifferes = ["192.0.2.11"]
+        let planificateur2 = TestScheduler(clock: horloge)
+        let client2 = clientWebhookDeuxCibles(transport2, planificateur2)
+        let core2 = moteur(publieur: client2)
+        core2.start()
+        var termine2 = 0
+        let debut = horloge.t
+        core2.shutdown(publishOff: true) { termine2 += 1 }
+        planificateur2.runDue(at: debut + 2)
+        XCTAssertEqual(termine2, 1)
+        let ligne = journal.lines.first { $0.1.contains("arrêt : OFF confirmé par 1/2 cibles seulement") }
+        XCTAssertEqual(ligne?.0, .warn, "\(journal.lines)")
+        XCTAssertFalse(journalContient("OFF non confirmé"), "\(journal.lines)")
+    }
+
+    /// Lot 2, point 7 : à la veille aussi, « OFF confirmé par n/m cibles ».
+    func test_veille_journalCompteLesCibles() {
+        let planificateur = TestScheduler(clock: horloge)
+        let transport = FakeTransport(clock: horloge)
+        let client = clientWebhookDeuxCibles(transport, planificateur)
+        let core = moteur(publieur: client)
+        core.start()
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(autorisations, 1)
+        XCTAssertTrue(journalContient("veille : OFF confirmé par 2/2 cibles"), "\(journal.lines)")
+
+        journal.lines = []
+        let transport2 = FakeTransport(clock: horloge)
+        transport2.hotesDifferes = ["192.0.2.11"]
+        let planificateur2 = TestScheduler(clock: horloge)
+        let core2 = moteur(publieur: clientWebhookDeuxCibles(transport2, planificateur2))
+        core2.start()
+        var autorisations2 = 0
+        let debut = horloge.t
+        core2.willSleep { autorisations2 += 1 }
+        planificateur2.runDue(at: debut + 1.5)
+        XCTAssertEqual(autorisations2, 1)
+        XCTAssertTrue(journalContient("veille : OFF confirmé par 1/2 cibles seulement"), "\(journal.lines)")
     }
 
     /// Tâche 14 : si OFF ne peut pas être livré, `done` part au délai de 2 s, une seule fois.
@@ -1129,7 +1199,7 @@ final class EngineCoreTests: XCTestCase {
         transport.terminerEnAttente()
         planificateur.runDue(at: debut + 10)
         XCTAssertEqual(termine, 1)
-        XCTAssertTrue(journalContient("OFF non confirmé en 2.0 s"))
+        XCTAssertTrue(journalContient("OFF non confirmé en 2.0 s (0/1 cibles)"), "\(journal.lines)")
     }
 
     /// Tâche 14 : sans `publishOff` (redémarrage prévu, mode dégradé), rien n'est publié et `done`

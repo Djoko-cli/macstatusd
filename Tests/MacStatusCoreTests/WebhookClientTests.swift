@@ -578,8 +578,9 @@ final class WebhookClientTests: XCTestCase {
 
     // MARK: - Tâche 15 : arrêt (ajouts 1 et 2)
 
-    /// Ajout 1 (R40) : à l'arrêt, l'ON en vol est annulé et OFF part tout de suite.
-    func test_avantDepart_annuleLaRequeteEnVol_OFFPartAussitot() {
+    /// Ajout 1 (R40), précisé par le lot 2 (point 6) : à l'arrêt, l'ON en vol n'est pas annulé
+    /// tout de suite. Muet, il est annulé à 500 ms, et OFF part alors vers chaque cible.
+    func test_avantDepart_ONmuet_estAnnuleA500ms_OFFPartEnsuite() {
         transport.differe = true
         let client = creerClient(cibles: [cible("192.0.2.10"), cible("192.0.2.11", "POST")])
         client.publish(true, force: false)
@@ -587,10 +588,16 @@ final class WebhookClientTests: XCTestCase {
         var reponses: [Bool] = []
         client.publishBeforeExit(false)
         client.notifyWhenDelivered(timeout: 2) { reponses.append($0) }
-        XCTAssertEqual(transport.annulations.count, 2, "chaque ON en vol est annulé")
-        XCTAssertEqual(transport.requetes.count, 4, "OFF part tout de suite vers chaque cible")
-        XCTAssertEqual(Array(transport.instants.suffix(2)), [0, 0])
+        XCTAssertEqual(transport.annulations.count, 0, "l'ON en vol garde sa chance")
+        XCTAssertEqual(transport.requetes.count, 2, "OFF n'est pas encore parti")
+        planificateur.runDue(at: 0.4)
+        XCTAssertEqual(transport.annulations.count, 0, "rien avant 500 ms")
+        planificateur.runDue(at: 0.5)
+        XCTAssertEqual(transport.annulations.count, 2, "chaque ON encore en vol est annulé à 500 ms")
+        XCTAssertEqual(transport.requetes.count, 4, "OFF part aussitôt vers chaque cible")
+        XCTAssertEqual(Array(transport.instants.suffix(2)), [0.5, 0.5])
         XCTAssertTrue(transport.requetes[2].url.absoluteString.hasSuffix("state=false"))
+        XCTAssertTrue(journal.lines.contains { $0.0 == .info && $0.1.contains("annulée pour l'arrêt") }, "\(journal.lines)")
         transport.terminerEnAttente()
         XCTAssertEqual(reponses, [], "toutes les cibles doivent confirmer")
         transport.terminerEnAttente()
@@ -598,7 +605,71 @@ final class WebhookClientTests: XCTestCase {
         // Un OFF déjà en vol n'est pas annulé pour être renvoyé.
         client.publish(true, force: false)
         client.publishBeforeExit(true)
+        planificateur.runDue(at: 5)
         XCTAssertEqual(transport.annulations.count, 2)
+    }
+
+    /// Lot 2, point 6 : un ON qui aboutit à 300 ms (dans la grâce) est suivi de OFF par le chemin
+    /// normal ; rien n'est annulé, et la minuterie de grâce ne touche pas l'OFF en vol.
+    func test_avantDepart_ONquiAboutitA300ms_OFFPartApresLui() {
+        transport.differe = true
+        let client = creerClient(cibles: [cible("192.0.2.10")])
+        client.publish(true, force: false)
+        var reponses: [Bool] = []
+        client.publishBeforeExit(false)
+        client.notifyWhenDelivered(timeout: 2) { reponses.append($0) }
+        XCTAssertEqual(transport.requetes.count, 1, "OFF attend la réponse de l'ON")
+        planificateur.runDue(at: 0.3)
+        transport.terminerEnAttente()   // l'ON aboutit à 300 ms
+        XCTAssertEqual(transport.requetes.count, 2)
+        XCTAssertTrue(transport.requetes[0].url.absoluteString.hasSuffix("state=true"))
+        XCTAssertTrue(transport.requetes[1].url.absoluteString.hasSuffix("state=false"), "OFF après l'ON")
+        XCTAssertEqual(transport.instants, [0, 0.3])
+        XCTAssertEqual(reponses, [])
+        planificateur.runDue(at: 0.5)
+        XCTAssertEqual(transport.annulations.count, 0, "la grâce ne touche pas l'OFF en vol")
+        XCTAssertEqual(transport.requetes.count, 2)
+        XCTAssertEqual(planificateur.pending, 1, "seule l'attente de livraison reste planifiée")
+        transport.terminerEnAttente()
+        XCTAssertEqual(reponses, [true])
+        XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "0")
+    }
+
+    /// Lot 2, point 6 : une minuterie de grâce déjà partie malgré son annulation (course) est
+    /// périmée par la génération : elle n'annule pas l'OFF en vol.
+    func test_avantDepart_minuterieDeGracePerimee_neToucheRien() {
+        planificateur.ignorerAnnulations = true
+        transport.differe = true
+        let client = creerClient(cibles: [cible("192.0.2.10")])
+        client.publish(true, force: false)
+        client.publishBeforeExit(false)
+        transport.terminerEnAttente()   // l'ON aboutit : OFF part
+        XCTAssertEqual(transport.requetes.count, 2)
+        planificateur.runDue(at: 0.5)   // la minuterie de grâce passe quand même
+        XCTAssertEqual(transport.annulations.count, 0)
+        XCTAssertEqual(transport.requetes.count, 2)
+        XCTAssertEqual(transport.reponsesEnAttente, 1, "l'OFF reste en vol")
+    }
+
+    /// Lot 2, point 6 : un ON qui échoue pendant la grâce laisse partir OFF tout de suite.
+    func test_avantDepart_ONquiEchoueDansLaGrace_OFFPartToutDeSuite() {
+        transport.differe = true
+        transport.reponsesParHote["192.0.2.10"] = .failed(detail: "hors ligne")
+        let client = creerClient(cibles: [cible("192.0.2.10")])
+        client.publish(true, force: false)
+        var reponses: [Bool] = []
+        client.publishBeforeExit(false)
+        client.notifyWhenDelivered(timeout: 2) { reponses.append($0) }
+        transport.reponsesParHote["192.0.2.10"] = .delivered(status: 200)
+        planificateur.runDue(at: 0.2)
+        transport.terminerEnAttente()   // l'ON échoue
+        XCTAssertEqual(transport.requetes.count, 2)
+        XCTAssertTrue(transport.requetes[1].url.absoluteString.hasSuffix("state=false"))
+        XCTAssertEqual(transport.instants, [0, 0.2])
+        planificateur.runDue(at: 0.6)
+        XCTAssertEqual(transport.annulations.count, 0)
+        transport.terminerEnAttente()
+        XCTAssertEqual(reponses, [true])
     }
 
     /// Ajout 2 : `webhook_retries = 0`, l'ON en vol échoue alors que l'état voulu est devenu OFF :
@@ -694,6 +765,22 @@ final class WebhookClientTests: XCTestCase {
         XCTAssertEqual(reponses, [], "la première cible est encore en vol")
         transport.terminerEnAttente(hote: "192.0.2.10")
         XCTAssertEqual(reponses, [false])
+    }
+
+    /// Lot 2, point 10 : l'accord du message d'abandon suit le nombre d'essais.
+    func test_abandon_accordDuNombreDEssais() {
+        transport.reponseParDefaut = .failed(detail: "hors ligne")
+        let un = creerClient(cibles: [cible("192.0.2.10")], essais: 0)
+        un.publish(true, force: false)
+        let abandonUn = journal.lines.first { $0.1.contains("abandonné après") }
+        XCTAssertTrue(abandonUn?.1.contains("abandonné après 1 essai —") ?? false, "\(journal.lines)")
+
+        journal.lines = []
+        let quatre = creerClient(cibles: [cible("192.0.2.11")], essais: 3)
+        quatre.publish(true, force: false)
+        planificateur.runDue(at: 100)
+        let abandonQuatre = journal.lines.first { $0.1.contains("abandonné après") && $0.1.contains("192.0.2.11") }
+        XCTAssertTrue(abandonQuatre?.1.contains("abandonné après 4 essais —") ?? false, "\(journal.lines)")
     }
 
     // MARK: - Tâche 15 : accès au réseau local
