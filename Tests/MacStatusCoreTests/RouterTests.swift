@@ -554,6 +554,119 @@ final class RouterTests: XCTestCase {
     }
 }
 
+// MARK: - Tâche 12 : mode dégradé (config invalide)
+
+final class RouterDegradedModeTests: XCTestCase {
+    private let jeton = "jeton-essai-0123456789abcdef"
+    private let raison = "Unexpected end of file around line 1, column 40."
+    private var moteur: FakeEngine!
+    private var capture: CaptureLog!
+    private var ancienRecepteur: LogSink?
+
+    override func setUp() {
+        super.setUp()
+        moteur = FakeEngine()
+        capture = CaptureLog()
+        ancienRecepteur = CoreLog.sink
+        CoreLog.sink = capture
+    }
+
+    override func tearDown() {
+        CoreLog.sink = ancienRecepteur
+        super.tearDown()
+    }
+
+    /// Routeur construit comme `main.swift` le fait pour une config tronquée.
+    private func routeurDegrade() -> Router {
+        let lu = Config.parse(data: Data(#"{"auth_token": "jeton-essai-0123456789abcdef", "port":"#.utf8))
+        guard case .invalid = lu.origin else { XCTFail("origine \(lu.origin)"); return Router(config: lu.config, engine: moteur) }
+        return Router(config: lu.config, engine: moteur, origin: .invalid(reason: raison))
+    }
+
+    private func requete(_ chemin: String, methode: String = "GET", headers: [String: String] = [:],
+                         local: Bool) -> HTTPRequest {
+        HTTPRequest(method: methode, target: chemin, path: chemin, version: "HTTP/1.1",
+                    headers: headers.merging(["host": "127.0.0.1:9090"]) { valeur, _ in valeur },
+                    peer: local ? "127.0.0.1" : "192.0.2.10", peerIsLoopback: local)
+    }
+
+    private func texte(_ reponse: HTTPResponse) -> String { String(decoding: reponse.body, as: UTF8.self) }
+
+    func test_modeDegrade_commandesEt503() {
+        let r = routeurDegrade()
+        let commandes = Route.allCases.filter { $0.routeClass == .command }.map(\.rawValue)
+        XCTAssertEqual(Set(commandes), ["/sleep", "/off", "/wake", "/on", "/resync"])
+
+        // Commandes et /health : 503 pour tous, avec ou sans jeton, avant la politique d'accès
+        // (méthode, Origin, Host et jeton ne changent rien).
+        let variantes: [(String, [String: String], Bool)] = [
+            ("GET", [:], true), ("GET", [:], false),
+            ("GET", ["x-auth-token": jeton], true), ("GET", ["x-auth-token": jeton], false),
+            ("GET", ["x-auth-token": "faux"], false),
+            ("POST", [:], true), ("GET", ["origin": "http://192.0.2.99"], true),
+            ("GET", ["sec-fetch-site": "cross-site"], true), ("GET", ["host": "attaquant.example"], true),
+        ]
+        for chemin in commandes + ["/health"] {
+            for (methode, entetes, local) in variantes {
+                let reponse = r.handle(requete(chemin, methode: methode, headers: entetes, local: local))
+                let cas = "\(methode) \(chemin) \(entetes) local=\(local)"
+                XCTAssertEqual(reponse.status, 503, cas)
+                XCTAssertEqual(reponse.reasonPhrase, "Service Unavailable", cas)
+                XCTAssertEqual(texte(reponse), "config invalide", cas)
+            }
+        }
+        // Aucune commande n'atteint le moteur.
+        XCTAssertTrue(moteur.appels.isEmpty, "\(moteur.appels)")
+
+        // Un 503 n'est pas un échec d'accès : aucun pair n'est interdit, rien au journal.
+        for _ in 0..<(Router.failureLimit + 5) { _ = r.handle(requete("/wake", local: false)) }
+        XCTAssertEqual(r.handle(requete("/wake", local: false)).status, 503)
+        XCTAssertTrue(capture.lines.isEmpty, "\(capture.lines)")
+
+        // 400 et 404 passent toujours en premier.
+        XCTAssertEqual(r.handle(.failure(.missingHost)).status, 400)
+        XCTAssertEqual(r.handle(requete("/inconnu", local: true)).status, 404)
+        XCTAssertEqual(r.handle(requete("/WAKE", local: true)).status, 404)
+    }
+
+    func test_modeDegrade_lecturesSoumisesALaPolitique() throws {
+        let r = routeurDegrade()
+        moteur.etat = false
+
+        // Boucle locale sans jeton : servies.
+        let etat = r.handle(requete("/state", local: true))
+        XCTAssertEqual(etat.status, 200)
+        XCTAssertEqual(texte(etat), "0")
+
+        let statut = r.handle(requete("/status", local: true))
+        XCTAssertEqual(statut.status, 200)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: statut.body) as? [String: Any])
+        XCTAssertEqual(json["config_error"] as? String, raison)
+        XCTAssertEqual(json["faux"] as? Bool, true, "le reste de l'instantané est gardé")
+
+        // Hors boucle locale : aucun jeton n'a été lu du fichier invalide → 403, même avec l'ancien jeton.
+        XCTAssertEqual(r.handle(requete("/state", local: false)).status, 403)
+        XCTAssertEqual(r.handle(requete("/status", headers: ["x-auth-token": jeton], local: false)).status, 403)
+        // Page web du Mac : refusée par la politique.
+        XCTAssertEqual(r.handle(requete("/status", headers: ["sec-fetch-site": "cross-site"], local: true)).status, 403)
+        XCTAssertFalse(moteur.appels.contains { if case .off = $0 { return true }; if case .on = $0 { return true }; return $0 == .resync })
+    }
+
+    func test_modeNormal_niConfigErrorNi503() throws {
+        for origine in [ConfigOrigin.file, .defaultsAbsent] {
+            moteur = FakeEngine()
+            var config = Config()
+            config.authToken = jeton
+            let r = Router(config: config, engine: moteur, origin: origine)
+            XCTAssertEqual(r.handle(requete("/health", local: false)).status, 200)
+            XCTAssertEqual(r.handle(requete("/wake", headers: ["x-auth-token": jeton], local: false)).status, 200)
+            let statut = r.handle(requete("/status", local: true))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: statut.body) as? [String: Any])
+            XCTAssertNil(json["config_error"], "\(origine)")
+        }
+    }
+}
+
 private extension Result {
     var failureValue: Failure? {
         if case .failure(let erreur) = self { return erreur }

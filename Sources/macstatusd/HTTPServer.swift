@@ -51,8 +51,9 @@ final class HTTPServer {
 
     init(port: UInt16, bindAddress: String, router: Router) {
         self.port = port
-        // `Config` a déjà validé l'adresse ; par prudence, une valeur invalide garde le défaut.
-        self.listenAddress = ListenAddress(bindAddress: bindAddress) ?? .dualStack
+        // `Config` a déjà validé l'adresse ; par prudence, une valeur invalide donne le repli
+        // fermé de `Config` (boucle locale seulement), jamais l'écoute sur toutes les interfaces.
+        self.listenAddress = ListenAddress(bindAddress: bindAddress) ?? .ipv4("127.0.0.1")
         self.router = router
     }
 

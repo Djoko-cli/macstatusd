@@ -93,6 +93,7 @@ public struct HTTPResponse {
         case 405: return "Method Not Allowed"
         case 413: return "Payload Too Large"
         case 429: return "Too Many Requests"
+        case 503: return "Service Unavailable"
         default: return "Error"
         }
     }

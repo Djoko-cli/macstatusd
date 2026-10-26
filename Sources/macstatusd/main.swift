@@ -21,6 +21,12 @@ struct Options {
     var disableWebhook = false
 }
 
+/// Erreur d'usage : message sur stderr, code de sortie 2, avant toute lecture ou écoute.
+func usageError(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("macstatusd: \(message) (--help pour l'aide)\n".utf8))
+    exit(2)
+}
+
 func parseOptions() -> Options {
     var options = Options()
     var arguments = Array(CommandLine.arguments.dropFirst())
@@ -29,9 +35,19 @@ func parseOptions() -> Options {
         arguments.removeFirst()
         switch argument {
         case "--config":
-            if let value = arguments.first { options.configPath = value; arguments.removeFirst() }
+            // Une option à la place du chemin (`--config --once`) compte comme une valeur absente.
+            guard let value = arguments.first, !value.isEmpty, !value.hasPrefix("-") else {
+                usageError("--config attend un chemin de fichier")
+            }
+            options.configPath = value
+            arguments.removeFirst()
         case "--port":
-            if let value = arguments.first, let port = UInt16(value) { options.portOverride = port; arguments.removeFirst() }
+            guard let value = arguments.first else { usageError("--port attend un numéro de port (1 à 65535)") }
+            guard let port = Config.portArgument(value) else {
+                usageError("--port \"\(escapeForLog(value, limit: 32))\" invalide : entier de 1 à 65535 attendu")
+            }
+            options.portOverride = port
+            arguments.removeFirst()
         case "--debug":
             options.debug = true
         case "--foreground", "-f":
@@ -52,7 +68,7 @@ func parseOptions() -> Options {
             Usage: macstatusd [options]
 
               --config <chemin>   configuration JSON (défaut: \(macstatusdConfigPath))
-              --port <n>          surcharge le port HTTP
+              --port <n>          surcharge le port HTTP (1 à 65535)
               --debug             journalisation détaillée
               --foreground, -f    écrit aussi sur la sortie standard
               --once              affiche l'état et les faits en JSON, puis quitte
@@ -72,6 +88,8 @@ func parseOptions() -> Options {
             Accès : jeton par l'en-tête X-Auth-Token ou Authorization: Bearer (auth_token).
             Commandes : jeton exigé. Lectures : jeton exigé hors boucle locale.
             Sans jeton configuré : boucle locale seulement. /health est toujours servi.
+            Config illisible ou invalide : mode dégradé (écoute sur 127.0.0.1 seulement,
+            commandes et /health en 503, aucun webhook, config_error dans /status).
             """)
             exit(0)
         default:
@@ -89,9 +107,22 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 // MARK: - Configuration et journalisation
 
-var (config, configWarnings) = Config.load(path: options.configPath)
+let loadedConfig = Config.load(path: options.configPath)
+var config = loadedConfig.config
+let configOrigin = loadedConfig.origin
+let configWarnings = loadedConfig.warnings
 if let port = options.portOverride { config.port = port }
 if options.disableWebhook { config.enabled = false }
+/// Raison du mode dégradé, ou `nil` si la config est utilisable.
+let configError: String? = {
+    if case .invalid(let reason) = configOrigin { return reason }
+    return nil
+}()
+if configError != nil {
+    // Mode dégradé fermé, quoi qu'aient fait les options : boucle locale, aucun envoi.
+    config.bindAddress = "127.0.0.1"
+    config.enabled = false
+}
 
 let isTTY = isatty(STDOUT_FILENO) == 1
 let logLevel: LogLevel = options.debug ? .debug : LogLevel.parse(config.logLevel)
@@ -104,6 +135,14 @@ Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || opti
 
 // MARK: - Modes de diagnostic
 
+// `--once` et `--watch` n'écrivent pas de journal : les avertissements de config vont sur stderr
+// (la sortie standard de `--once` reste un JSON lisible par un script).
+if options.once || options.watch {
+    for warning in configWarnings {
+        FileHandle.standardError.write(Data("macstatusd: config: \(warning)\n".utf8))
+    }
+}
+
 let actions = PowerActions(config: config)
 let engine = EngineRunner(config: config, actions: actions)
 
@@ -114,6 +153,7 @@ if options.once {
     output["reason"] = snapshot.reason
     output["session_context"] = CGSessionAvailable() ? "aqua" : "headless"
     output["version"] = macstatusdVersion
+    if let configError { output["config_error"] = configError }
     let data = (try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     print(String(data: data, encoding: .utf8) ?? "{}")
     exit(0)
@@ -151,7 +191,12 @@ if options.watch {
 
 logInfo("macstatusd \(macstatusdVersion) démarrage — uid=\(getuid()) session=\(CGSessionAvailable() ? "aqua" : "headless") config=\(options.configPath)")
 for warning in configWarnings { logWarn("config: \(warning)") }
-let listenDescription = (ListenAddress(bindAddress: config.bindAddress) ?? .dualStack).description(port: config.port)
+if let configError {
+    logError("mode dégradé : config \(options.configPath) invalide (\(configError)). Écoute sur 127.0.0.1 "
+             + "seulement, commandes et /health → 503, aucun webhook ni battement de cœur. "
+             + "Corriger le fichier, puis redémarrer macstatusd.")
+}
+let listenDescription = (ListenAddress(bindAddress: config.bindAddress) ?? .ipv4("127.0.0.1")).description(port: config.port)
 logInfo("configuration: port=\(config.port) écoute=\(listenDescription) "
         + "off_action=\(config.offAction.rawValue) webhook=\(config.enabled ? redactURL(config.webhookBaseURL) : "désactivé") "
         + "poll=\(config.pollIntervalMS)ms settle_on=\(config.settleOnMS)ms settle_off=\(config.settleOffMS)ms "
@@ -184,7 +229,7 @@ if config.authToken.isEmpty {
     }
 }
 
-let router = Router(config: config, engine: engine, localNames: localNames)
+let router = Router(config: config, engine: engine, localNames: localNames, origin: configOrigin)
 let server = HTTPServer(port: config.port, bindAddress: config.bindAddress, router: router)
 server.start()
 

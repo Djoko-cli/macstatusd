@@ -15,6 +15,10 @@ public protocol EngineFacade: AnyObject {
 /// 1. 400 pour toute requête refusée par l'analyseur ;
 /// 2. 404 pour un chemin inconnu, quelle que soit la méthode, sans autre contrôle : la même
 ///    réponse sort pour tout le monde ;
+/// 2 bis. en mode dégradé (config `.invalid`), 503 `config invalide` pour les commandes et
+///    `/health`, pour tout le monde et avant tout autre contrôle : aucune commande n'atteint le
+///    moteur, et la supervision voit la panne. Les lectures continuent ci-dessous, soumises à la
+///    politique d'accès, et `/status` y ajoute `config_error` ;
 /// 3. 429 pour un pair interdit par le traqueur des échecs (`/health` compris) ; le pair y est
 ///    compté par `peerIdentity` (une IPv6 par son /64, Ruling R29) ;
 /// 4. `AccessPolicy.decide` : un refus donne 401, 403 ou 405 (avec `Allow`) ; un 401 ou un 403
@@ -49,6 +53,8 @@ public final class Router {
 
     private let engine: EngineFacade
     private let policy: AccessPolicy
+    /// Raison de l'invalidité de la config (mode dégradé), ou `nil`.
+    private let configError: String?
     private let clock: Clock
     private let commandBucket: TokenBucket
     private let failures: AuthFailureTracker
@@ -62,8 +68,11 @@ public final class Router {
 
     /// `localNames` : noms du Mac acceptés dans l'en-tête `Host` (par exemple son nom `.local`),
     /// lus une fois au démarrage par l'exécutable. `clock` : horloge du seau et du traqueur.
-    public init(config: Config, engine: EngineFacade, localNames: [String] = [], clock: Clock = SystemClock()) {
+    /// `origin` : `.invalid` met le routeur en mode dégradé (voir l'étape 2 bis).
+    public init(config: Config, engine: EngineFacade, localNames: [String] = [], clock: Clock = SystemClock(),
+                origin: ConfigOrigin = .file) {
         self.engine = engine
+        if case .invalid(let reason) = origin { configError = reason } else { configError = nil }
         self.policy = AccessPolicy(authToken: config.authToken, allowQueryToken: config.allowQueryToken,
                                    allowedHosts: config.allowedHosts, localNames: localNames)
         self.clock = clock
@@ -84,6 +93,9 @@ public final class Router {
     public func handle(_ request: HTTPRequest) -> HTTPResponse {
         guard let route = Route(rawValue: request.path) else { return .text("not found", status: 404) }
         let routeClass = route.routeClass
+        if configError != nil, routeClass == .command || routeClass == .health {
+            return Self.configInvalid
+        }
         let peer = peerIdentity(request.peer)
 
         if failures.isBanned(peer: peer) { return Self.tooManyRequests }
@@ -109,7 +121,9 @@ public final class Router {
             return .text(engine.currentState ? "1" : "0")
 
         case .status:
-            return .json(engine.statusSnapshot())
+            var snapshot = engine.statusSnapshot()
+            if let configError { snapshot["config_error"] = configError }
+            return .json(snapshot)
 
         case .health:
             return .text("OK")
@@ -129,6 +143,7 @@ public final class Router {
     }
 
     private static var tooManyRequests: HTTPResponse { .text("too many requests", status: 429) }
+    private static var configInvalid: HTTPResponse { .text("config invalide", status: 503) }
 
     // MARK: - Journal borné
 

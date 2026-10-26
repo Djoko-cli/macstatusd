@@ -135,16 +135,16 @@ final class ConnectionLimiterTests: XCTestCase {
         XCTAssertTrue(lire("::").1.isEmpty)
         XCTAssertTrue(lire("").1.isEmpty)
 
-        // Valeur invalide : défaut actuel (""), avec un avertissement qui la cite.
+        // Valeur invalide : repli fermé sur la boucle locale (Ruling R32, tâche 12), avec un
+        // avertissement qui la cite.
         let (adresse, avertissements) = lire("Mac-Essai.local")
-        XCTAssertEqual(adresse, Config().bindAddress)
-        XCTAssertEqual(adresse, "")
+        XCTAssertEqual(adresse, "127.0.0.1")
         XCTAssertTrue(avertissements.contains { $0.contains("bind_address") && $0.contains("Mac-Essai.local") },
                       "\(avertissements)")
 
-        // Pas une chaîne : défaut, avec avertissement.
+        // Pas une chaîne : même repli fermé, avec avertissement.
         let r = Config.parse(data: Data(#"{"bind_address": 127}"#.utf8))
-        XCTAssertEqual(r.config.bindAddress, "")
+        XCTAssertEqual(r.config.bindAddress, "127.0.0.1")
         XCTAssertTrue(r.warnings.contains { $0.contains("bind_address") }, "\(r.warnings)")
     }
 }
