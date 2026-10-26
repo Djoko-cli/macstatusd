@@ -11,6 +11,8 @@
 #   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
 #     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
 #     /off ne touche jamais l'écran du Mac ;
+#   - les cas « journal-supprime », « journal-rotation » et « stdout-ferme » (section 9) n'écrivent
+#     que dans le dossier temporaire du script : jamais dans ~/Library/Logs/macstatusd ;
 #   - seule exception, l'instance D du cas « message-ecoute » écoute sur « :: »
 #     (toutes interfaces) le temps de lire son message d'écoute, avec un jeton et les
 #     mêmes commandes inertes ; le script ne lui parle que par la boucle locale.
@@ -49,6 +51,9 @@ PORT_A=19090
 PORT_B=19091
 PORT_C=$((PORT_B + 5))
 PORT_D=19097
+PORT_E=19098   # journal : sortie standard fermée
+PORT_F=19092   # journal : fichier supprimé
+PORT_G=19093   # journal : rotation
 PORT_HB=19099
 # Jeton de l'instance B, valeur d'essai inventée. Passé en en-tête : depuis la tâche 8,
 # le jeton dans l'URL (?token=) est refusé par défaut.
@@ -176,7 +181,7 @@ echo "==> Compilation du binaire"
 swift build --scratch-path "$SCRATCH" >/dev/null 2>"$WORK/build.err" || { cat "$WORK/build.err"; echo "build échouée"; exit 1; }
 BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/macstatusd"
 
-for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_HB; do
+for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_HB; do
   port_libre "$port" || { echo "le port $port est déjà occupé : arrêt avant tout lancement"; exit 1; }
 done
 
@@ -268,10 +273,16 @@ sed "s/\"port\": $PORT_B/\"port\": $PORT_C/; s|$WORK/b.log|$WORK/c.log|" "$WORK/
 sed "s/\"port\": $PORT_B/\"port\": $PORT_D/; s|$WORK/b.log|$WORK/d.log|; s/\"bind_address\": \"127.0.0.1\"/\"bind_address\": \"::\"/" \
   "$WORK/b.json" > "$WORK/d.json"
 
+# Instances E, F et G : copies de B (jeton d'essai, commandes inertes, webhook désactivé) pour les cas
+# « stdout-ferme », « journal-supprime » et « journal-rotation ».
+for suite in "e:$PORT_E" "f:$PORT_F" "g:$PORT_G"; do
+  sed "s/\"port\": $PORT_B/\"port\": ${suite#*:}/; s|$WORK/b.log|$WORK/${suite%%:*}.log|" "$WORK/b.json" > "$WORK/${suite%%:*}.json"
+done
+
 # Garde : aucune instance ne démarre si sa configuration sort du cadre hermétique.
 # Seule D peut écouter sur « :: », et seulement avec le jeton d'essai.
 conformes=1
-for nom in a b c d; do
+for nom in a b c d e f g; do
   attendu="127.0.0.1"
   [[ "$nom" == "d" ]] && attendu="::"
   python3 - "$WORK/$nom.json" "$attendu" "$JETON_B" <<'PY' || conformes=0
@@ -569,6 +580,74 @@ if grep -qF "serveur HTTP à l'écoute sur 127.0.0.1:$PORT_A" "$WORK/a.log"; the
 else
   bad "message-ecoute : message d'écoute de A inexact"
 fi
+
+echo
+echo "== 9. Journal : fichier supprimé, rotation, sortie standard fermée"
+# Aucun journal réel : f.log, g.log et e.log vivent dans $WORK. Chaque instance est arrêtée par son PID.
+mode_octal() { stat -f '%Lp' "$1" 2>/dev/null || echo "absent"; }
+
+# journal-supprime : le fichier disparaît pendant que l'instance tourne ; l'inode est comparé toutes
+# les 100 écritures, puis le fichier est recréé (mode 600).
+"$BIN" --config "$WORK/f.json" > "$WORK/f.out" 2>&1 &
+PID_F=$!
+PIDS+=($PID_F)
+if await_http $PORT_F 10; then ok "journal-supprime : instance démarrée"; else bad "journal-supprime : instance injoignable"; fi
+rm -f "$WORK/f.log"
+for _ in $(seq 160); do state $PORT_F >/dev/null; done
+for _ in $(seq 20); do [[ -s "$WORK/f.log" ]] && break; sleep 0.25; done
+if [[ -s "$WORK/f.log" ]]; then ok "journal-supprime : journal recréé après suppression"; else bad "journal-supprime : journal non recréé"; fi
+check "journal-supprime : droits du nouveau journal" "600" "$(mode_octal "$WORK/f.log")"
+check "journal-supprime : instance toujours vivante" "OK" "$(curl -fsS --max-time 2 http://127.0.0.1:$PORT_F/health)"
+arreter_pid "$PID_F"
+
+# journal-rotation : taille de rotation réduite (variable d'essai) ; au plus 5 générations.
+MAX_ROTATION=20000
+MACSTATUSD_LOG_MAX_BYTES=$MAX_ROTATION "$BIN" --config "$WORK/g.json" > "$WORK/g.out" 2>&1 &
+PID_G=$!
+PIDS+=($PID_G)
+if await_http $PORT_G 10; then ok "journal-rotation : instance démarrée"; else bad "journal-rotation : instance injoignable"; fi
+python3 - "$PORT_G" <<'PY'
+import http.client, sys
+for _ in range(3000):
+    c = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=3)
+    c.request("GET", "/state"); c.getresponse().read(); c.close()
+PY
+sleep 1
+GENERATIONS=0
+for n in 1 2 3 4 5 6 7; do [[ -e "$WORK/g.log.$n" ]] && GENERATIONS=$n; done
+check "journal-rotation : 5 générations au plus (.1 à .5, pas de .6)" "5" "$GENERATIONS"
+TROP_GROS=0
+for fichier in "$WORK"/g.log "$WORK"/g.log.[1-5]; do
+  [[ "$(stat -f '%z' "$fichier" 2>/dev/null || echo 0)" -le $((MAX_ROTATION + 1024)) ]] || TROP_GROS=1
+done
+check "journal-rotation : chaque fichier reste près de la taille de rotation" "0" "$TROP_GROS"
+DROITS_LARGES=0
+for fichier in "$WORK"/g.log "$WORK"/g.log.[1-5]; do
+  [[ "$(mode_octal "$fichier")" == "600" ]] || DROITS_LARGES=1
+done
+check "journal-rotation : toutes les générations en mode 600" "0" "$DROITS_LARGES"
+check "journal-rotation : instance toujours vivante" "OK" "$(curl -fsS --max-time 2 http://127.0.0.1:$PORT_G/health)"
+arreter_pid "$PID_G"
+
+# stdout-ferme : premier plan (-f) dont la sortie est un tube que `head -1` ferme aussitôt. Un tube
+# nommé donne le PID du daemon (dans `daemon | head`, $! serait celui de head).
+mkfifo "$WORK/e.fifo"
+head -1 < "$WORK/e.fifo" > "$WORK/e.head" &
+PID_HEAD=$!
+PIDS+=($PID_HEAD)
+"$BIN" --config "$WORK/e.json" -f > "$WORK/e.fifo" 2>&1 &
+PID_E=$!
+PIDS+=($PID_E)
+sleep 3
+if kill -0 "$PID_E" 2>/dev/null; then ok "stdout-ferme : daemon vivant 3 s après la fermeture du tube"; else bad "stdout-ferme : daemon mort après la fermeture du tube"; fi
+check "stdout-ferme : head a lu une ligne" "1" "$(wc -l < "$WORK/e.head" | tr -d ' ')"
+check "stdout-ferme : /health répond" "OK" "$(curl -fsS --max-time 2 http://127.0.0.1:$PORT_E/health)"
+AVANT="$(wc -l < "$WORK/e.log" | tr -d ' ')"
+for _ in $(seq 5); do state $PORT_E >/dev/null; done
+sleep 0.5
+APRES="$(wc -l < "$WORK/e.log" | tr -d ' ')"
+if [[ "$APRES" -gt "$AVANT" ]]; then ok "stdout-ferme : le journal fichier continue ($AVANT → $APRES lignes)"; else bad "stdout-ferme : le journal fichier n'avance plus ($AVANT → $APRES lignes)"; fi
+arreter_pid "$PID_E"
 
 echo
 echo "==================================="

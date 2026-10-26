@@ -61,6 +61,32 @@ final class WebhookClientTests: XCTestCase {
                        "http://192.0.2.10:51828/?accessoryId=Mac%20de%20Pi%C3%A8ce%201&state=true")
     }
 
+    func test_urlInvalide_estMasqueeAuJournalEtDansLeStatut() {
+        var config = Config()
+        config.enabled = true
+        config.webhookBaseURL = "http://u:secret@192.0.2.10 :8123/api/webhook/abc123"
+        let client = WebhookClient(config: config, transport: transport, scheduler: planificateur, clock: horloge)
+        client.publish(true, force: false)
+        XCTAssertTrue(transport.requetes.isEmpty)
+        let textes = journal.lines.map { $0.1 } + [(client.statusDictionary["detail"] as? String) ?? ""]
+        XCTAssertTrue(textes.contains { $0.contains("<url invalide>") })
+        XCTAssertFalse(textes.contains { $0.contains("secret") || $0.contains("abc123") })
+    }
+
+    func test_echecDuTransport_nExposePasLUrlConfiguree() {
+        var config = Config()
+        config.enabled = true
+        config.webhookBaseURL = "http://u:secret@192.0.2.10:8123/api/webhook/abc123"
+        config.accessoryID = "mac"
+        config.webhookRetries = 0
+        let client = WebhookClient(config: config, transport: transport, scheduler: planificateur, clock: horloge)
+        transport.reponseParDefaut = .failed(detail: "échec sur http://u:secret@192.0.2.10:8123/api/webhook/abc123?accessoryId=mac&state=true")
+        client.publish(true, force: false)
+        let textes = journal.lines.map { $0.1 } + [(client.statusDictionary["detail"] as? String) ?? ""]
+        XCTAssertTrue(textes.contains { $0.contains("<masqué>") })
+        XCTAssertFalse(textes.contains { $0.contains("secret") || $0.contains("abc123") || $0.contains("accessoryId") })
+    }
+
     func test_desactive_nEnvoieRien() {
         let client = creerClient(actif: false)
         client.publish(true, force: true)

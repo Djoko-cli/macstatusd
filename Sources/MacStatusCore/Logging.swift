@@ -79,6 +79,46 @@ public func escapeForLog(_ s: String, limit: Int = 200) -> String {
     return String(out)
 }
 
+// MARK: - URL configurées
+
+/// Rend une URL configurée (ou lue d'un message d'erreur) sûre pour le journal et pour `/status`.
+///
+/// - le mot de passe d'URL devient `***` ; un identifiant seul (`https://<jeton>@hôte`) devient `***` ;
+/// - toute la partie requête devient `<masqué>` (`?accessoryId=…&state=…` donne `?<masqué>`), comme
+///   le fragment ;
+/// - le segment qui suit `/api/webhook/` devient `<masqué>` : c'est l'identifiant secret du webhook
+///   de Home Assistant ;
+/// - le schéma, l'hôte, le port et le reste du chemin restent visibles, pour le diagnostic ;
+/// - une chaîne qui ne se lit pas comme une URL (sans schéma ni hôte, avec des espaces…) donne
+///   `<url invalide>` : on ne sait pas ce qu'elle contient, rien n'en est gardé.
+public func redactURL(_ s: String) -> String {
+    guard let parts = URLComponents(string: s),
+          let scheme = parts.scheme, !scheme.isEmpty,
+          let host = parts.host, !host.isEmpty else {
+        return "<url invalide>"
+    }
+    var out = scheme + "://"
+    if let user = parts.user, !user.isEmpty {
+        out += parts.password == nil ? "***@" : "\(user):***@"
+    } else if parts.password != nil {
+        out += ":***@"
+    }
+    out += host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+    if let port = parts.port { out += ":\(port)" }
+
+    // On cherche « api », « webhook », puis l'identifiant, sans tenir compte de la casse des deux premiers.
+    var segments = parts.percentEncodedPath.components(separatedBy: "/")
+    if let k = segments.indices.first(where: { k in
+        k + 2 < segments.count && segments[k].lowercased() == "api" && segments[k + 1].lowercased() == "webhook"
+    }) {
+        segments[k + 2] = "<masqué>"
+    }
+    out += segments.joined(separator: "/")
+    if parts.percentEncodedQuery != nil { out += "?<masqué>" }
+    if parts.percentEncodedFragment != nil { out += "#<masqué>" }
+    return out
+}
+
 // MARK: - Requêtes reçues
 
 /// Coupe un texte à la première marque de requête et remplace la suite par `?…` : la requête

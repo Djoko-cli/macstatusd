@@ -2,6 +2,10 @@ import Foundation
 import CoreGraphics
 import MacStatusCore
 
+// SIGPIPE tuerait le process lors d'une écriture sur un tube ou un socket fermé (écho du journal
+// vers `| head`, réponse réseau interrompue) : ignoré dès le départ, les écritures rendent EPIPE.
+signal(SIGPIPE, SIG_IGN)
+
 // Les messages de la bibliothèque passent par ce journal : à brancher avant tout le reste.
 CoreLog.sink = Log.shared
 
@@ -149,7 +153,7 @@ logInfo("macstatusd \(macstatusdVersion) démarrage — uid=\(getuid()) session=
 for warning in configWarnings { logWarn("config: \(warning)") }
 let listenDescription = (ListenAddress(bindAddress: config.bindAddress) ?? .dualStack).description(port: config.port)
 logInfo("configuration: port=\(config.port) écoute=\(listenDescription) "
-        + "off_action=\(config.offAction.rawValue) webhook=\(config.enabled ? config.webhookBaseURL : "désactivé") "
+        + "off_action=\(config.offAction.rawValue) webhook=\(config.enabled ? redactURL(config.webhookBaseURL) : "désactivé") "
         + "poll=\(config.pollIntervalMS)ms settle_on=\(config.settleOnMS)ms settle_off=\(config.settleOffMS)ms "
         + "heartbeat=\(config.heartbeatSeconds)s")
 if !CGSessionAvailable() {
@@ -157,9 +161,6 @@ if !CGSessionAvailable() {
             + "peuvent être indétectables. Installer macstatusd comme LaunchAgent (session Aqua).")
 }
 if let path = Log.shared.currentLogPath { logInfo("journal: \(path)") }
-
-// SIGPIPE tuerait le process lors d'une écriture réseau interrompue.
-signal(SIGPIPE, SIG_IGN)
 
 let powerWatcher = PowerWatcher(queue: engine.queue)
 engine.attach(to: powerWatcher)

@@ -58,6 +58,7 @@ public final class WebhookClient: StatePublisher {
     private var lastAttemptAt: Date?
     private var lastSuccessAt: Date?
     private var lastDetail = "aucun envoi"
+    private var lastRequestURL: String?
     private var failureCount = 0
     private var waiters: [DeliveryWaiter] = []
 
@@ -130,7 +131,7 @@ public final class WebhookClient: StatePublisher {
     private func sendIfIdle() {
         guard !inFlight, let state = desired else { return }
         guard let url = makeURL(state: state) else {
-            lastDetail = "URL invalide: \(baseURL)"
+            lastDetail = "URL invalide: \(redactURL(baseURL))"
             logError("webhook: \(lastDetail)")
             return
         }
@@ -142,6 +143,7 @@ public final class WebhookClient: StatePublisher {
         inFlight = true
         lastAttemptAt = clock.wall()
         let attemptNumber = attempt
+        lastRequestURL = url.absoluteString
 
         let request = WebhookRequest(url: url, method: "GET",
                                      headers: ["User-Agent": "macstatusd/\(macstatusdVersion)"])
@@ -163,7 +165,7 @@ public final class WebhookClient: StatePublisher {
         case .delivered(let status):
             failure = "HTTP \(status)"
         case .failed(let detail):
-            failure = "erreur \(detail)"
+            failure = "erreur \(hidingConfiguredURL(in: detail))"
         }
 
         guard let failure else {
@@ -198,6 +200,20 @@ public final class WebhookClient: StatePublisher {
         logError("webhook abandonné après \(attempt + 1) essais — reprise au prochain battement de cœur")
         attempt = 0
         resolveWaiters(delivered: false)
+    }
+
+    /// Un message d'erreur du transport peut citer l'URL demandée : la requête complète, puis l'URL de
+    /// base, sont remplacées par leur version masquée (`redactURL`) avant d'entrer au journal ou
+    /// dans `/status`.
+    private func hidingConfiguredURL(in detail: String) -> String {
+        var text = detail
+        if let lastRequestURL, !lastRequestURL.isEmpty {
+            text = text.replacingOccurrences(of: lastRequestURL, with: redactURL(lastRequestURL))
+        }
+        if !baseURL.isEmpty {
+            text = text.replacingOccurrences(of: baseURL, with: redactURL(baseURL))
+        }
+        return text
     }
 
     private func resolveWaiters(delivered: Bool) {

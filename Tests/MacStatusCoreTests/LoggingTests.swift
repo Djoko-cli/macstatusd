@@ -102,4 +102,46 @@ final class LoggingTests: XCTestCase {
         XCTAssertTrue(LogLevel.error < LogLevel.debug)
         XCTAssertEqual(LogLevel.warn.tag, "WARN ")
     }
+
+    // MARK: - redactURL
+
+    func test_redactURL_motDePasseEtIdentifiantDeWebhook() {
+        XCTAssertEqual(redactURL("http://u:secret@192.0.2.10:8123/api/webhook/abc123"),
+                       "http://u:***@192.0.2.10:8123/api/webhook/<masqué>")
+    }
+
+    func test_redactURL_requeteMasqueeEnEntier() {
+        XCTAssertEqual(redactURL("http://192.0.2.10:51828/?accessoryId=mac&state=true"),
+                       "http://192.0.2.10:51828/?<masqué>")
+        XCTAssertEqual(redactURL("http://192.0.2.10/hook?token=jeton-essai-0123456789abcdef"),
+                       "http://192.0.2.10/hook?<masqué>")
+        // La partie requête vide compte aussi : elle peut être suivie d'un fragment secret.
+        XCTAssertEqual(redactURL("http://192.0.2.10/hook#jeton"), "http://192.0.2.10/hook#<masqué>")
+    }
+
+    func test_redactURL_hoteEtPortRestentVisibles_cheminOrdinaireGarde() {
+        XCTAssertEqual(redactURL("https://ha.exemple.test:8123/hook"), "https://ha.exemple.test:8123/hook")
+        XCTAssertEqual(redactURL("http://192.0.2.10:51828/"), "http://192.0.2.10:51828/")
+        XCTAssertEqual(redactURL("http://[fd00::1]:8123/api/webhook/abc"), "http://[fd00::1]:8123/api/webhook/<masqué>")
+    }
+
+    func test_redactURL_identifiantSeulEstMasque() {
+        // Un « utilisateur » seul est souvent le jeton lui-même (https://<jeton>@hôte).
+        XCTAssertEqual(redactURL("https://jeton-essai-0123456789abcdef@192.0.2.10/hook"), "https://***@192.0.2.10/hook")
+    }
+
+    func test_redactURL_segmentApresWebhookSeulementMasque() {
+        XCTAssertEqual(redactURL("http://192.0.2.10/api/webhook/abc/suite"), "http://192.0.2.10/api/webhook/<masqué>/suite")
+        XCTAssertEqual(redactURL("http://192.0.2.10/api/webhook"), "http://192.0.2.10/api/webhook")
+        XCTAssertEqual(redactURL("http://192.0.2.10/api/autre/abc"), "http://192.0.2.10/api/autre/abc")
+    }
+
+    func test_redactURL_invalide() {
+        XCTAssertEqual(redactURL("pas une url du tout"), "<url invalide>")
+        XCTAssertEqual(redactURL(""), "<url invalide>")
+        XCTAssertEqual(redactURL("jeton-essai-0123456789abcdef"), "<url invalide>")
+        XCTAssertEqual(redactURL("http://"), "<url invalide>")
+        XCTAssertEqual(redactURL("/api/webhook/abc123"), "<url invalide>")
+        XCTAssertEqual(redactURL("http://u:secret@ho st/x"), "<url invalide>")
+    }
 }
