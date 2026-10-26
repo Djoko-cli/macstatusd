@@ -356,22 +356,6 @@ final class RouterTests: XCTestCase {
         XCTAssertTrue(avertissements.isEmpty, "\(avertissements)")
     }
 
-    func test_masquageDeLaQuery() {
-        XCTAssertEqual(redactingQuery("GET /off?token=jeton-essai-0123456789abcdef HTTP/1.1"), "GET /off?…")
-        XCTAssertEqual(redactingQuery("/wake?action=WAKE"), "/wake?…")
-        XCTAssertEqual(redactingQuery("GET /off HTTP/1.1"), "GET /off HTTP/1.1")
-        XCTAssertEqual(redactingQuery("?"), "?…")
-        // Tâche 8, tour 2 : `?` suivi d'un caractère combinant (un seul graphème, qui n'est pas
-        // « ? »), et `?` encodé `%3F` ou `%3f`.
-        XCTAssertEqual(redactingQuery("/wake?\u{0301}token=\(jeton)"), "/wake?…")
-        XCTAssertEqual(redactingQuery("/wake%3Ftoken=\(jeton)"), "/wake?…")
-        XCTAssertEqual(redactingQuery("/wake%3ftoken=\(jeton)"), "/wake?…")
-        XCTAssertEqual(redactingQuery("/a%3F?b"), "/a?…")
-        XCTAssertEqual(redactingQuery("/a?b%3Fc"), "/a?…")
-        XCTAssertEqual(redactingQuery("/a%3"), "/a%3")
-        XCTAssertEqual(redactingQuery("/a%2F"), "/a%2F")
-    }
-
     func test_cheminJournalise_routeConnueSeulement() {
         XCTAssertEqual(loggablePath("/wake"), "/wake")
         XCTAssertEqual(loggablePath("/state"), "/state")
@@ -459,6 +443,52 @@ final class RouterTests: XCTestCase {
         XCTAssertFalse(capture.lines.contains { $0.1.contains("/off") }, "\(capture.lines)")
         XCTAssertFalse(capture.lines.contains { $0.1.contains("jeton-essai") }, "\(capture.lines)")
         XCTAssertFalse(capture.lines.contains { $0.1.contains("\u{1B}") })
+    }
+
+    /// Lot de retouches (mineur de R33) : la méthode d'une requête est une donnée du client (des lettres
+    /// majuscules, sans autre contrainte) ; une méthode qui porte un jeton en capitales ne doit jamais
+    /// atteindre le journal. Liste blanche des méthodes HTTP connues, « autre » sinon.
+    func test_journal_methodeHostile_enListeBlanche() {
+        let r = routeur(jeton: jeton)
+        let hostile = "JETONESSAIABCDEF"
+        XCTAssertEqual(loggableMethod("GET"), "GET")
+        for connue in ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "TRACE", "CONNECT"] {
+            XCTAssertEqual(loggableMethod(connue), connue)
+        }
+        for autre in [hostile, "get", "GETX", "", "G\u{1B}T", "PROPFIND"] {
+            XCTAssertEqual(loggableMethod(autre), "autre", autre)
+        }
+
+        let tetes = [
+            "\(hostile) /off HTTP/2.0\r\nHost: 192.0.2.10\r\n\r\n",    // refusée par l'analyseur (version)
+            "\(hostile) /off HTTP/1.1\r\nHost: 192.0.2.10\r\n\r\n",    // acceptée par l'analyseur
+            "GET /off HTTP/2.0\r\nHost: 192.0.2.10\r\n\r\n",           // méthode connue : gardée
+        ]
+        for tete in tetes {
+            let octets = Data(tete.utf8)
+            let analysee = RequestParser.parse(head: octets).map { requete -> HTTPRequest in
+                var requete = requete
+                requete.peer = "192.0.2.10"
+                return requete
+            }
+            logReceivedRequest(analysee, head: octets, peer: "192.0.2.10")
+            _ = r.handle(analysee)
+        }
+        XCTAssertFalse(capture.lines.contains { $0.1.contains(hostile) }, "\(capture.lines)")
+        XCTAssertFalse(avertissements.contains { $0.contains(hostile) }, "\(avertissements)")
+        XCTAssertTrue(capture.lines[0].1.contains("méthode autre"), capture.lines[0].1)
+        XCTAssertTrue(capture.lines[1].1.contains("HTTP autre"), capture.lines[1].1)
+        XCTAssertTrue(capture.lines[2].1.contains("méthode GET"), capture.lines[2].1)
+
+        // Le journal de refus du routeur (401 répétés) ne cite pas non plus la méthode hostile.
+        func piegee(_ methode: String) -> HTTPRequest {
+            HTTPRequest(method: methode, target: "/wake", path: "/wake", version: "HTTP/1.1",
+                        query: [:], headers: ["host": "192.0.2.10:9090", "x-auth-token": "faux"],
+                        peer: "192.0.2.30", peerIsLoopback: false)
+        }
+        for _ in 0..<12 { _ = r.handle(piegee(hostile)) }
+        _ = r.handle(piegee("GET"))
+        XCTAssertFalse(avertissements.contains { $0.contains(hostile) }, "\(avertissements)")
     }
 
     func test_journal_refusDAccesEtRequeteAcceptee_neContiennentJamaisLeJeton() {

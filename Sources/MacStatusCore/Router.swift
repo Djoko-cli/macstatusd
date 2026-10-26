@@ -180,7 +180,7 @@ public final class Router {
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s, dernier refus \(status) "
                     + "(\(escapeForLog(reason))) sur \(route.rawValue)\(suffix)")
         } else {
-            logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(escapeForLog(request.method, limit: 16)) "
+            logWarn("HTTP refusée \(status) (\(escapeForLog(reason))) : \(loggableMethod(request.method)) "
                     + "\(route.rawValue) depuis \(escapeForLog(request.peer)) — "
                     + "\(Self.failureCount(result.count)) en \(Int(Self.failureWindow)) s\(suffix)")
         }
