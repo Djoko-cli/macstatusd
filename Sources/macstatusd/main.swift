@@ -235,16 +235,35 @@ server.start()
 
 // MARK: - Arrêt propre
 
+/// Termine le processus : le journal est vidé d'abord. Appelé une seule fois par `ShutdownGuard`.
+func quitDaemon() {
+    Log.shared.flush()
+    exit(0)
+}
+
 let signalQueue = DispatchQueue(label: "macstatusd.signals")
+// Le filet (3 s) tourne sur la file des signaux, pas sur celle du moteur : il doit jouer
+// aussi quand la file du moteur ne répond plus. Sous l'ExitTimeOut de 5 s du plist.
+let shutdownGuard = ShutdownGuard(scheduler: DispatchScheduler(queue: signalQueue), terminate: quitDaemon)
 var signalSources: [DispatchSourceSignal] = []
 for number in [SIGTERM, SIGINT, SIGHUP] {
     signal(number, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: number, queue: signalQueue)
     source.setEventHandler {
         logInfo("signal \(number) reçu → arrêt")
-        server.stop()
-        Log.shared.flush()
-        exit(0)
+        shutdownGuard.begin { finished in
+            // Le marqueur est consommé même en mode dégradé : un marqueur resté en place
+            // ne doit pas survivre à cet arrêt.
+            let marker = RestartMarker.consume(in: RestartMarker.supportDirectory())
+            let decision = ShutdownPolicy.decide(degraded: configError != nil,
+                                                 publishOffOnExit: config.publishOffOnExit,
+                                                 marker: marker)
+            logInfo("arrêt : \(decision.publishOff ? "OFF sera publié" : "rien ne sera publié") (\(decision.reason))")
+            engine.shutdown(publishOff: decision.publishOff) {
+                logInfo("arrêt terminé")
+                finished()
+            }
+        }
     }
     source.resume()
     signalSources.append(source)

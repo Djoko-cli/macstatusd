@@ -22,6 +22,11 @@ final class EngineRunner: EngineFacade {
     private var pollTimer: DispatchSourceTimer?
     private var heartbeatTimer: DispatchSourceTimer?
 
+    /// Levé dès que l'arrêt commence, depuis n'importe quelle file : le serveur HTTP répond alors 503
+    /// aux commandes sans attendre la file du moteur (peut-être occupée ou bloquée).
+    private let shuttingDownLock = NSLock()
+    private var shuttingDown = false
+
     init(config: Config, actions: PowerActions) {
         self.config = config
         // Le client webhook vit sur la file du moteur : transport et délais y rappellent.
@@ -69,6 +74,29 @@ final class EngineRunner: EngineFacade {
         timer.setEventHandler { [weak self] in self?.core.heartbeat() }
         timer.resume()
         heartbeatTimer = timer
+    }
+
+    // MARK: - Arrêt
+
+    var isShuttingDown: Bool {
+        shuttingDownLock.lock(); defer { shuttingDownLock.unlock() }
+        return shuttingDown
+    }
+
+    /// Arrête les minuteries et verrouille le moteur (voir `EngineCore.shutdown`). Rend la main
+    /// aussitôt ; `done` est appelé sur la file du moteur. À partir de cet appel, les commandes
+    /// HTTP reçoivent 503 et ne parviennent plus au moteur.
+    func shutdown(publishOff: Bool, _ done: @escaping () -> Void) {
+        shuttingDownLock.lock()
+        shuttingDown = true
+        shuttingDownLock.unlock()
+        queue.async { [self] in
+            pollTimer?.cancel()
+            pollTimer = nil
+            heartbeatTimer?.cancel()
+            heartbeatTimer = nil
+            core.shutdown(publishOff: publishOff, done)
+        }
     }
 
     // MARK: - Événements système

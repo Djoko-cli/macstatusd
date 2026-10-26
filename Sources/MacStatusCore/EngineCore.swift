@@ -35,6 +35,11 @@ public final class EngineCore {
     static let sleepDeliveryTimeout: Double = 1.5
     /// En deçà de cette durée de veille, le réveil ne force pas la republication.
     static let longSleepThreshold: Double = 30
+    /// Délai maximal d'attente de la livraison OFF à l'arrêt (sous le filet de 3 s et l'`ExitTimeOut` de 5 s).
+    static let shutdownDeliveryTimeout: Double = 2
+
+    /// Vrai une fois `shutdown` appelé : le moteur ne publie ni n'agit plus, jamais.
+    private var isShutDown = false
 
     private var published: Bool?
     private var publishedReason = "startup"
@@ -89,6 +94,7 @@ public final class EngineCore {
 
     /// Un cycle de scrutation : relit les faits et réévalue l'état.
     public func tick() {
+        guard !isShutDown else { return }
         let now = clock.monotonic()
         let gap = now - lastTickAt
         lastTickAt = now
@@ -108,7 +114,7 @@ public final class EngineCore {
 
     /// Battement de cœur : republie l'état courant, même déjà confirmé.
     public func heartbeat() {
-        guard let state = published else { return }
+        guard !isShutDown, let state = published else { return }
         logDebug("battement de cœur → republication de l'état \(state ? "1" : "0")")
         publisher.publish(state, force: true)
     }
@@ -172,6 +178,7 @@ public final class EngineCore {
     /// Vrai si l'évaluation a appelé le publieur.
     @discardableResult
     private func evaluate(immediate: Bool, force: Bool = false) -> Bool {
+        guard !isShutDown else { return false }
         let now = clock.monotonic()
         let factual = factsVerdict()
         var resolved = factual
@@ -233,7 +240,7 @@ public final class EngineCore {
     /// Redemande l'état publié, sans `force` : le publieur n'envoie que si l'état confirmé
     /// diffère (envoi perdu, abandonné ou encore en vol), et ne fait rien sinon.
     private func ensurePublished() {
-        guard let state = published else { return }
+        guard !isShutDown, let state = published else { return }
         publisher.publish(state, force: false)
     }
 
@@ -269,6 +276,11 @@ public final class EngineCore {
     /// La commande en cours est oubliée : la veille l'emporte sur elle, et un ON en attente ne
     /// doit pas être publié au moment où le Mac s'endort.
     public func willSleep(_ allow: @escaping () -> Void) {
+        guard !isShutDown else {
+            logInfo("veille imminente pendant l'arrêt → autorisée sans attente")
+            allow()
+            return
+        }
         logInfo("veille imminente → publication OFF avant gel du daemon")
         systemAsleep = true
         sleepStartedAt = clock.monotonic()
@@ -289,6 +301,7 @@ public final class EngineCore {
     }
 
     public func handle(_ event: SystemEvent) {
+        guard !isShutDown else { return }
         switch event {
         case .systemDidWake:
             // La commande en cours est gardée : un /wake réveille le Mac, et ce réveil ne doit
@@ -332,6 +345,44 @@ public final class EngineCore {
         }
     }
 
+    // MARK: - Arrêt
+
+    /// Arrêt du daemon (SIGTERM, SIGINT, SIGHUP). Verrouille le moteur : plus aucune publication,
+    /// aucune action (réveil, OFF, économiseur), aucun battement de cœur ni nouvelle évaluation ;
+    /// les lectures (`currentState`, `statusSnapshot`, `inspect`) restent possibles.
+    ///
+    /// Avec `publishOff`, OFF est publié en `force`, ce qui remplace l'état voulu même si une
+    /// requête est en vol (le client l'envoie dès que celle-ci rend la main), puis `done` part à la
+    /// livraison, ou après `shutdownDeliveryTimeout` (2 s) au plus. Sans `publishOff` (redémarrage
+    /// prévu, mode dégradé, option désactivée), `done` part tout de suite. `done` est appelé
+    /// exactement une fois par appel, sur la file du moteur. Un second appel ne publie rien.
+    public func shutdown(publishOff: Bool, _ done: @escaping () -> Void) {
+        guard !isShutDown else {
+            logInfo("arrêt déjà en cours")
+            done()
+            return
+        }
+        isShutDown = true
+        intent = nil
+        guard publishOff else {
+            logInfo("arrêt : aucune publication OFF")
+            done()
+            return
+        }
+        logInfo("arrêt : publication OFF avant de partir")
+        published = false
+        publishedReason = "shutdown"
+        publisher.publish(false, force: true)
+        publisher.notifyWhenDelivered(timeout: Self.shutdownDeliveryTimeout) { delivered in
+            if delivered {
+                logInfo("arrêt : OFF confirmé")
+            } else {
+                logWarn("arrêt : OFF non confirmé en \(Self.shutdownDeliveryTimeout) s → départ quand même")
+            }
+            done()
+        }
+    }
+
     // MARK: - Commandes
 
     /// État publié, identique à ce qui a été poussé vers Homebridge.
@@ -342,6 +393,10 @@ public final class EngineCore {
     /// Commande OFF. Idempotente : un doublon reçu pendant une intention OFF en cours ne fait
     /// rien (ni action, ni nouvelle échéance) ; une intention ON en cours est remplacée.
     public func requestOff(source: String) {
+        guard !isShutDown else {
+            logInfo("commande OFF (\(source)) ignorée : arrêt en cours")
+            return
+        }
         if isPending(target: false) {
             logInfo("commande OFF (\(source)) → commande OFF déjà en cours, ignorée")
             return
@@ -378,6 +433,10 @@ public final class EngineCore {
     /// après une frappe, alors que macOS a pu revenir à l'économiseur. Dans ce cas, un réveil
     /// est envoyé, sans intention (rien à confirmer : les faits disent déjà ON).
     public func requestOn(source: String) {
+        guard !isShutDown else {
+            logInfo("commande ON (\(source)) ignorée : arrêt en cours")
+            return
+        }
         if isPending(target: true) {
             logInfo("commande ON (\(source)) → commande ON déjà en cours, ignorée")
             return
@@ -410,6 +469,7 @@ public final class EngineCore {
     }
 
     public func resync() {
+        guard !isShutDown else { return }
         systemAsleep = false
         saver.noteNotification(active: false)
         refreshFacts()
@@ -447,6 +507,7 @@ public final class EngineCore {
             "webhook": publisher.statusDictionary,
             "session_context": signals.hasAquaSession() ? "aqua" : "headless",
         ]
+        if isShutDown { dict["shutting_down"] = true }
         if let lastTransitionAt {
             dict["last_transition"] = ISO8601DateFormatter().string(from: lastTransitionAt)
         }

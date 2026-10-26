@@ -9,6 +9,13 @@ public protocol EngineFacade: AnyObject {
     func requestOff(source: String)
     func requestOn(source: String)
     func resync()
+    /// Vrai une fois l'arrêt commencé : le moteur n'agit plus, le routeur répond 503 aux commandes.
+    /// Lecture sans verrou de file ; `false` par défaut (faux moteurs des tests).
+    var isShuttingDown: Bool { get }
+}
+
+extension EngineFacade {
+    public var isShuttingDown: Bool { false }
 }
 
 /// Routage des requêtes HTTP, dans cet ordre :
@@ -24,6 +31,8 @@ public protocol EngineFacade: AnyObject {
 /// 4. `AccessPolicy.decide` : un refus donne 401, 403 ou 405 (avec `Allow`) ; un 401 ou un 403
 ///    compte comme un échec du pair (10 en 60 s : interdit pendant 60 s) ;
 /// 5. 405 avec `Allow` pour `/health` demandé autrement qu'en GET ou HEAD ;
+/// 5 bis. 503 `arrêt en cours` pour une commande autorisée reçue pendant l'arrêt du daemon (le moteur
+///    est verrouillé : elle n'aurait aucun effet) ; les lectures et `/health` restent servies ;
 /// 6. 429 pour une commande autorisée quand le seau global des commandes est vide
 ///    (5 par seconde, rafale de 10) ; les lectures et `/health` n'y passent pas ;
 /// 7. la route.
@@ -111,6 +120,10 @@ public final class Router {
             return .methodNotAllowed(allow: Self.allow(for: routeClass))
         }
 
+        if routeClass == .command, engine.isShuttingDown {
+            return Self.shuttingDown
+        }
+
         if routeClass == .command, !commandBucket.take() {
             noteBucketRefusal(request, route: route)
             return Self.tooManyRequests
@@ -143,6 +156,7 @@ public final class Router {
     }
 
     private static var tooManyRequests: HTTPResponse { .text("too many requests", status: 429) }
+    private static var shuttingDown: HTTPResponse { .text("arrêt en cours", status: 503) }
     private static var configInvalid: HTTPResponse { .text("config invalide", status: 503) }
 
     // MARK: - Journal borné

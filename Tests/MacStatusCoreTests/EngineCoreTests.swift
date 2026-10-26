@@ -763,6 +763,140 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(accord.hasRun)
     }
 
+    // MARK: - Arrêt
+
+    /// Tâche 14 : l'arrêt publie OFF en `force`, attend 2 s au plus, puis le moteur ne fait plus rien.
+    func test_arret_publieOff_puisPlusRien() {
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        publieur.livrer()
+        XCTAssertEqual(publieur.envois, [Publication(etat: true, force: false)])
+
+        var termines = 0
+        core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertEqual(publieur.envois.last, Publication(etat: false, force: true))
+        XCTAssertEqual(publieur.delaisDemandes, [2.0])
+        XCTAssertEqual(termines, 0, "done attend la livraison")
+        publieur.livrer()
+        XCTAssertEqual(termines, 1)
+
+        // Plus rien après l'arrêt : une évaluation (scrutation, battement, événement, commande,
+        // resynchronisation, veille) ne publie ni n'agit.
+        let publicationsApresArret = publieur.publications
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5); scruter(core, 0.5); scruter(core, 30)
+        core.heartbeat()
+        core.handle(.screensDidSleep)
+        core.handle(.systemDidWake)
+        core.handle(.screenSaverDidStart)
+        core.requestOff(source: "http")
+        core.requestOn(source: "http")
+        core.resync()
+        var autorisations = 0
+        core.willSleep { autorisations += 1 }
+        XCTAssertEqual(autorisations, 1, "la veille n'attend plus rien pendant l'arrêt")
+
+        XCTAssertEqual(publieur.publications, publicationsApresArret)
+        XCTAssertEqual(actions.appels, [])
+        XCTAssertEqual(publieur.delaisDemandes, [2.0], "aucune nouvelle attente")
+        XCTAssertEqual(core.statusSnapshot()["shutting_down"] as? Bool, true)
+        XCTAssertEqual(core.currentState, false)
+        XCTAssertTrue(journalContient("ignorée : arrêt en cours"))
+    }
+
+    /// Tâche 14 : une requête ON en vol est remplacée par l'état voulu OFF ; OFF part dès que le
+    /// transport est libre, et `done` n'est appelé qu'à sa confirmation.
+    func test_arret_requeteEnVol_estRemplacee() {
+        // Faux publieur : l'ON initial est en vol quand l'arrêt arrive.
+        publieur.livraisonManuelle = true
+        let core = moteur()
+        core.start()
+        var termines = 0
+        core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertEqual(publieur.envois, [Publication(etat: true, force: false),
+                                         Publication(etat: false, force: true)])
+        publieur.livrer()
+        XCTAssertEqual(termines, 1)
+
+        // Client réel : l'ON est en vol (réponse différée) ; OFF part à sa réponse, puis `done`.
+        let planificateur = TestScheduler(clock: horloge)
+        let transport = FakeTransport(clock: horloge)
+        transport.differe = true
+        let client = clientWebhook(transport, planificateur)
+        let reel = moteur(publieur: client)
+        reel.start()
+        XCTAssertEqual(transport.requetes.count, 1)
+        XCTAssertTrue(transport.requetes[0].url.absoluteString.hasSuffix("state=true"))
+
+        var termine = 0
+        reel.shutdown(publishOff: true) { termine += 1 }
+        XCTAssertEqual(termine, 0)
+        transport.terminerEnAttente()   // l'ON en vol aboutit
+        XCTAssertEqual(transport.requetes.count, 2, "OFF part dès que l'ON en vol est rendu")
+        XCTAssertTrue(transport.requetes[1].url.absoluteString.hasSuffix("state=false"))
+        XCTAssertEqual(termine, 0)
+        transport.terminerEnAttente()   // l'OFF aboutit
+        XCTAssertEqual(termine, 1)
+        XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "0")
+    }
+
+    /// Tâche 14 : si OFF ne peut pas être livré, `done` part au délai de 2 s, une seule fois.
+    func test_arret_delaiDe2s_doneSansLivraison() {
+        let planificateur = TestScheduler(clock: horloge)
+        let transport = FakeTransport(clock: horloge)
+        transport.differe = true
+        let client = clientWebhook(transport, planificateur)
+        let core = moteur(publieur: client)
+        core.start()
+        transport.terminerEnAttente()
+
+        var termine = 0
+        let debut = horloge.t
+        core.shutdown(publishOff: true) { termine += 1 }
+        planificateur.runDue(at: debut + 1.9)
+        XCTAssertEqual(termine, 0)
+        planificateur.runDue(at: debut + 2)
+        XCTAssertEqual(termine, 1)
+        transport.terminerEnAttente()
+        planificateur.runDue(at: debut + 10)
+        XCTAssertEqual(termine, 1)
+        XCTAssertTrue(journalContient("OFF non confirmé en 2.0 s"))
+    }
+
+    /// Tâche 14 : sans `publishOff` (redémarrage prévu, mode dégradé), rien n'est publié et `done`
+    /// part tout de suite ; le moteur est verrouillé quand même.
+    func test_arret_sansPublication_doneAussitot_moteurVerrouille() {
+        let core = moteur()
+        core.start()
+        let avant = publieur.publications
+        var termine = 0
+        core.shutdown(publishOff: false) { termine += 1 }
+        XCTAssertEqual(termine, 1)
+        XCTAssertEqual(publieur.publications, avant)
+        XCTAssertEqual(publieur.delaisDemandes, [])
+
+        core.requestOff(source: "http")
+        core.heartbeat()
+        XCTAssertEqual(publieur.publications, avant)
+        XCTAssertEqual(actions.appels, [])
+    }
+
+    /// Tâche 14 : une commande en cours est oubliée par l'arrêt ; un second appel ne republie rien.
+    func test_arret_commandeEnCoursOubliee_etSecondAppelSansEffet() {
+        let core = moteur()
+        core.start()
+        core.requestOff(source: "http")
+        XCTAssertNotNil(commandeEnAttente(core))
+        var termines = 0
+        core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertNil(commandeEnAttente(core))
+        let publications = publieur.publications
+        core.shutdown(publishOff: true) { termines += 1 }
+        XCTAssertEqual(termines, 2, "le second appel rend la main tout de suite")
+        XCTAssertEqual(publieur.publications, publications)
+    }
+
     // MARK: - Diagnostic
 
     /// Ruling R6 : le contexte de session vient des signaux, pas de CoreGraphics.

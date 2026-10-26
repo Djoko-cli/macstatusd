@@ -139,6 +139,18 @@ final class ConfigOriginTests: XCTestCase {
                     peer: local ? "127.0.0.1" : "192.0.2.10", peerIsLoopback: local)
     }
 
+    /// Tâche 14 : `publish_off_on_exit` vaut vrai par défaut, se règle, et un type inattendu garde le défaut.
+    func test_publishOffOnExit_defautVrai_etReglable() {
+        XCTAssertTrue(Config().publishOffOnExit)
+        XCTAssertTrue(Config.parse(data: Data("{}".utf8)).config.publishOffOnExit)
+        let faux = Config.parse(data: Data(#"{"publish_off_on_exit": false}"#.utf8))
+        XCTAssertFalse(faux.config.publishOffOnExit)
+        XCTAssertFalse(faux.warnings.contains { $0.contains("inconnues") }, "\(faux.warnings)")
+        let casse = Config.parse(data: Data(#"{"publish_off_on_exit": []}"#.utf8))
+        XCTAssertTrue(casse.config.publishOffOnExit)
+        XCTAssertTrue(casse.warnings.contains { $0.hasPrefix("publish_off_on_exit") }, "\(casse.warnings)")
+    }
+
     func test_jsonInvalide_donneModeDegrade() throws {
         // Config durcie (jeton, écoute ouverte, webhooks), puis tronquée par une faute de frappe.
         let tronque = #"{"auth_token": "jeton-essai-0123456789abcdef", "enabled": true, "bind_address": "0.0.0.0", "port":"#

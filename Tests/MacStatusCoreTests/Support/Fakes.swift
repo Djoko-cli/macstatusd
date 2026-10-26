@@ -265,8 +265,11 @@ final class FakeEngine: EngineFacade {
     }
 
     var etat = true
+    var arret = false
     var instantane: [String: Any] = ["faux": true, "etat": "1"]
     private(set) var appels: [Appel] = []
+
+    var isShuttingDown: Bool { arret }
 
     var currentState: Bool {
         appels.append(.etat)

@@ -192,6 +192,7 @@ absente ou invalide retombe sur son défaut sans empêcher le démarrage.
 | `poll_interval_ms` | `500` | cadence de relecture des faits |
 | `settle_on_ms` / `settle_off_ms` | `300` / `800` | stabilité exigée avant publication |
 | `heartbeat_seconds` | `60` | republication périodique (`0` = désactivé) |
+| `publish_off_on_exit` | `true` | publie OFF au SIGTERM/SIGINT avant de quitter, sauf redémarrage prévu (marqueur `restart-pending` du dossier de support, valable 10 min) ou mode dégradé |
 | `require_auth_ui_when_locked` | `false` | verrouillé sans champ visible → OFF |
 | `webhook_timeout_ms` / `webhook_retries` | `4000` / `3` | robustesse des envois |
 | `log_level` | `"info"` | `error`, `warn`, `info`, `debug` |

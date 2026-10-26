@@ -30,6 +30,11 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
 
+    <!-- Délai laissé à l'arrêt (SIGTERM) avant le SIGKILL de launchd : le daemon publie OFF,
+         au plus 2 s, et sort de lui-même à 3 s au plus. -->
+    <key>ExitTimeOut</key>
+    <integer>5</integer>
+
     <!-- Interactive : évite la coalescence des timers et l'App Nap, qui
          retarderaient la détection d'état. -->
     <key>ProcessType</key>

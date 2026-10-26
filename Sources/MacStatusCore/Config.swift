@@ -154,6 +154,9 @@ public struct Config {
     /// Re‑publication périodique de l'état courant : protège contre un webhook
     /// perdu ou un Homebridge redémarré (0 = désactivé).
     public var heartbeatSeconds = 60
+    /// Publie OFF avant de quitter (SIGTERM, SIGINT, SIGHUP), sauf redémarrage prévu (marqueur
+    /// `restart-pending`) ou mode dégradé. À `false`, l'arrêt ne publie rien.
+    public var publishOffOnExit = true
 
     // --- Serveur HTTP ---
     public var port: UInt16 = 9090
@@ -216,7 +219,7 @@ public struct Config {
 
     static let knownKeys: Set<String> = [
         "enabled", "webhook_base_url", "accessory_id", "webhook_timeout_ms", "webhook_retries",
-        "heartbeat_seconds", "port", "bind_address", "auth_token", "allow_query_token", "allowed_hosts",
+        "heartbeat_seconds", "publish_off_on_exit", "port", "bind_address", "auth_token", "allow_query_token", "allowed_hosts",
         "poll_interval_ms",
         "settle_on_ms", "settle_off_ms", "require_auth_ui_when_locked", "off_action",
         "off_escalate_to_display_sleep", "command_confirm_timeout_ms", "command_escalate_after_ms",
@@ -354,6 +357,7 @@ public struct Config {
         cfg.webhookTimeoutMS = bag.int("webhook_timeout_ms", cfg.webhookTimeoutMS, min: 500, max: 60_000)
         cfg.webhookRetries = bag.int("webhook_retries", cfg.webhookRetries, min: 0, max: 10)
         cfg.heartbeatSeconds = bag.int("heartbeat_seconds", cfg.heartbeatSeconds, min: 0, max: 3600)
+        cfg.publishOffOnExit = bag.bool("publish_off_on_exit", cfg.publishOffOnExit)
 
         cfg.port = UInt16(bag.int("port", Int(cfg.port), min: 1, max: 65_535, outOfRange: .fallback))
         if let value = bag.raw["bind_address"] {

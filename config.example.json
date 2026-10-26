@@ -21,6 +21,7 @@
   "settle_on_ms": 300,
   "settle_off_ms": 800,
   "heartbeat_seconds": 60,
+  "publish_off_on_exit": true,
   "require_auth_ui_when_locked": false,
 
   "webhook_timeout_ms": 4000,

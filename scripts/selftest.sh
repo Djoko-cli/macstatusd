@@ -11,6 +11,10 @@
 #   - chaque instance de test écoute sur 127.0.0.1, sur un port de 19000 à 19999,
 #     avec des commandes inertes (/usr/bin/true) et sans escalade : un /on ou un
 #     /off ne touche jamais l'écran du Mac ;
+#   - MACSTATUSD_SUPPORT_DIR pointe vers un dossier temporaire pour tous les processus lancés : aucun
+#     ne lit ni ne consomme le vrai marqueur « restart-pending » de ~/Library/Application Support ;
+#   - les cas « sigterm-off » et « sigterm-marqueur » (section 10) arrêtent leurs propres instances (H
+#     et I, par leur PID) ; l'instance réelle (9090) n'est que lue (GET /status), avant et après ;
 #   - les cas « journal-supprime », « journal-rotation » et « stdout-ferme » (section 9) n'écrivent
 #     que dans le dossier temporaire du script : jamais dans ~/Library/Logs/macstatusd ;
 #   - seule exception, l'instance D du cas « message-ecoute » écoute sur « :: »
@@ -54,6 +58,8 @@ PORT_D=19097
 PORT_E=19098   # journal : sortie standard fermée
 PORT_F=19092   # journal : fichier supprimé
 PORT_G=19093   # journal : rotation
+PORT_H=19094   # arrêt : SIGTERM, OFF publié
+PORT_I=19095   # arrêt : SIGTERM, marqueur de redémarrage
 PORT_HB=19099
 # Jeton de l'instance B, valeur d'essai inventée. Passé en en-tête : depuis la tâche 8,
 # le jeton dans l'URL (?token=) est refusé par défaut.
@@ -89,6 +95,10 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
+# Dossier de support d'essai pour tous les processus lancés (jamais le vrai) ; le cas
+# « sigterm-marqueur » en prend un autre, à lui.
+export MACSTATUSD_SUPPORT_DIR="$WORK/support"
+mkdir -p "$MACSTATUSD_SUPPORT_DIR"
 trap 'exit 130' INT TERM HUP
 
 ok()   { PASS=$((PASS+1)); printf '  \033[32mOK\033[0m    %s\n' "$1"; }
@@ -181,7 +191,7 @@ echo "==> Compilation du binaire"
 swift build --scratch-path "$SCRATCH" >/dev/null 2>"$WORK/build.err" || { cat "$WORK/build.err"; echo "build échouée"; exit 1; }
 BIN="$(swift build --scratch-path "$SCRATCH" --show-bin-path)/macstatusd"
 
-for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_HB; do
+for port in $PORT_A $PORT_B $PORT_C $PORT_D $PORT_E $PORT_F $PORT_G $PORT_H $PORT_I $PORT_HB; do
   port_libre "$port" || { echo "le port $port est déjà occupé : arrêt avant tout lancement"; exit 1; }
 done
 
@@ -279,10 +289,18 @@ for suite in "e:$PORT_E" "f:$PORT_F" "g:$PORT_G"; do
   sed "s/\"port\": $PORT_B/\"port\": ${suite#*:}/; s|$WORK/b.log|$WORK/${suite%%:*}.log|" "$WORK/b.json" > "$WORK/${suite%%:*}.json"
 done
 
+# Instances H et I : copies de A (webhook vers le faux récepteur, pas de battement de cœur) pour les cas
+# « sigterm-off » et « sigterm-marqueur ». Chacune a son accessoire, pour que le journal du faux
+# Homebridge dise sans ambiguïté qui a poussé quoi (sans tiret : le client encode tout sauf les alphanumériques).
+sed "s/\"port\": $PORT_A/\"port\": $PORT_H/; s|$WORK/a.log|$WORK/h.log|; s/\"accessory_id\": \"selftest\"/\"accessory_id\": \"selftestarret\"/; s/\"heartbeat_seconds\": 4/\"heartbeat_seconds\": 0/" \
+  "$WORK/a.json" > "$WORK/h.json"
+sed "s/\"port\": $PORT_A/\"port\": $PORT_I/; s|$WORK/a.log|$WORK/i.log|; s/\"accessory_id\": \"selftest\"/\"accessory_id\": \"selftestmarqueur\"/; s/\"heartbeat_seconds\": 4/\"heartbeat_seconds\": 0/" \
+  "$WORK/a.json" > "$WORK/i.json"
+
 # Garde : aucune instance ne démarre si sa configuration sort du cadre hermétique.
 # Seule D peut écouter sur « :: », et seulement avec le jeton d'essai.
 conformes=1
-for nom in a b c d e f g; do
+for nom in a b c d e f g h i; do
   attendu="127.0.0.1"
   [[ "$nom" == "d" ]] && attendu="::"
   python3 - "$WORK/$nom.json" "$attendu" "$JETON_B" <<'PY' || conformes=0
@@ -304,6 +322,18 @@ if erreurs:
 PY
 done
 [[ $conformes -eq 1 ]] || { echo "configurations d'essai non conformes : arrêt"; exit 1; }
+
+# Instance réelle (9090) : lue seulement (GET /status), avant et après, pour prouver que ce script n'y
+# touche pas (ni redémarrage, ni changement d'état).
+reel_instantane() { # « état uptime », ou rien si personne ne répond
+  curl -fsS --max-time 2 "http://127.0.0.1:9090/status" 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["state"], d["uptime_seconds"])' 2>/dev/null
+}
+# L'état de l'instance réelle peut changer seul (activité réelle) ; seul un redémarrage remet sa durée de
+# fonctionnement à zéro : c'est elle que le contrôle final compare.
+REEL_AVANT="$(reel_instantane)"
 
 python3 "$WORK/hbmock.py" $PORT_HB > "$WORK/hook.log" 2>&1 &
 PIDS+=($!)
@@ -648,6 +678,78 @@ sleep 0.5
 APRES="$(wc -l < "$WORK/e.log" | tr -d ' ')"
 if [[ "$APRES" -gt "$AVANT" ]]; then ok "stdout-ferme : le journal fichier continue ($AVANT → $APRES lignes)"; else bad "stdout-ferme : le journal fichier n'avance plus ($AVANT → $APRES lignes)"; fi
 arreter_pid "$PID_E"
+
+echo
+echo "== 10. Arrêt propre : OFF publié au SIGTERM, sauf redémarrage prévu"
+nb_pushs() { # nb_pushs <accessoire> <état> : lignes du faux Homebridge pour cet accessoire et cet état
+  grep -c "accessoryId=$1&state=$2" "$WORK/hook.log" 2>/dev/null || true
+}
+await_push() { # await_push <accessoire> <secondes> : attend la publication initiale de l'instance
+  local deadline=$((SECONDS + $2))
+  while [[ $SECONDS -lt $deadline ]]; do
+    grep -q "accessoryId=$1&state=" "$WORK/hook.log" 2>/dev/null && return 0
+    sleep 0.25
+  done
+  return 1
+}
+attendre_sortie() { # attendre_sortie <pid> <secondes> : vrai si le processus s'arrête à temps
+  local deadline=$((SECONDS + $2))
+  while [[ $SECONDS -lt $deadline ]]; do
+    kill -0 "$1" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# sigterm-off : SIGTERM, le faux Homebridge reçoit state=false (même si l'état était déjà OFF : l'arrêt
+# publie en force), et le daemon sort de lui-même, bien avant l'ExitTimeOut de 5 s.
+"$BIN" --config "$WORK/h.json" > "$WORK/h.out" 2>&1 &
+PID_H=$!
+PIDS+=($PID_H)
+if await_http $PORT_H 10 && await_push selftestarret 10; then ok "sigterm-off : instance démarrée, état initial publié"; else bad "sigterm-off : instance injoignable ou sans publication initiale"; fi
+AVANT_H="$(nb_pushs selftestarret false)"
+DEBUT_H=$SECONDS
+kill -TERM "$PID_H"
+if attendre_sortie "$PID_H" 5; then ok "sigterm-off : le daemon sort de lui-même ($((SECONDS - DEBUT_H)) s, ExitTimeOut 5 s)"; else bad "sigterm-off : le daemon n'est pas sorti en 5 s"; fi
+wait "$PID_H" 2>/dev/null; check "sigterm-off : code de sortie" "0" "$?"
+APRES_H="$(nb_pushs selftestarret false)"
+if [[ "$APRES_H" -gt "$AVANT_H" ]]; then ok "sigterm-off : state=false reçu par le faux Homebridge ($AVANT_H → $APRES_H)"; else bad "sigterm-off : aucun state=false reçu après le SIGTERM ($AVANT_H → $APRES_H)"; fi
+if grep -q "arrêt terminé" "$WORK/h.log"; then ok "sigterm-off : « arrêt terminé » au journal"; else bad "sigterm-off : « arrêt terminé » absent du journal"; fi
+
+# sigterm-marqueur : un marqueur restart-pending récent (dossier d'essai, jamais le vrai) : rien n'est
+# publié, et le marqueur est supprimé.
+SUPPORT_I="$WORK/support-i"
+mkdir -p "$SUPPORT_I"
+: > "$SUPPORT_I/restart-pending"
+MACSTATUSD_SUPPORT_DIR="$SUPPORT_I" "$BIN" --config "$WORK/i.json" > "$WORK/i.out" 2>&1 &
+PID_I=$!
+PIDS+=($PID_I)
+if await_http $PORT_I 10 && await_push selftestmarqueur 10; then ok "sigterm-marqueur : instance démarrée, état initial publié"; else bad "sigterm-marqueur : instance injoignable ou sans publication initiale"; fi
+sleep 1
+AVANT_I="$(nb_pushs selftestmarqueur false)"
+TOTAL_I="$(grep -c "accessoryId=selftestmarqueur" "$WORK/hook.log" 2>/dev/null || true)"
+kill -TERM "$PID_I"
+if attendre_sortie "$PID_I" 5; then ok "sigterm-marqueur : le daemon sort de lui-même"; else bad "sigterm-marqueur : le daemon n'est pas sorti en 5 s"; fi
+wait "$PID_I" 2>/dev/null; check "sigterm-marqueur : code de sortie" "0" "$?"
+check "sigterm-marqueur : rien reçu par le faux Homebridge" "$TOTAL_I" "$(grep -c "accessoryId=selftestmarqueur" "$WORK/hook.log" 2>/dev/null || true)"
+check "sigterm-marqueur : aucun state=false de plus" "$AVANT_I" "$(nb_pushs selftestmarqueur false)"
+if [[ -e "$SUPPORT_I/restart-pending" ]]; then bad "sigterm-marqueur : le marqueur n'a pas été supprimé"; else ok "sigterm-marqueur : marqueur supprimé"; fi
+if grep -q "redémarrage prévu" "$WORK/i.log"; then ok "sigterm-marqueur : « redémarrage prévu » au journal"; else bad "sigterm-marqueur : « redémarrage prévu » absent du journal"; fi
+
+# Instance réelle : inchangée (lue seulement).
+REEL_APRES="$(reel_instantane)"
+if [[ -z "$REEL_AVANT" ]]; then
+  saute "instance réelle non redémarrée" "aucune instance réelle ne répondait sur 9090 au départ"
+elif [[ -z "$REEL_APRES" ]]; then
+  bad "instance réelle : ne répond plus sur 9090 après le script (avant : $REEL_AVANT)"
+else
+  python3 -c '
+import sys
+(e1, u1), (e2, u2) = (x.split() for x in sys.argv[1:3])
+sys.exit(0 if int(u2) >= int(u1) else 1)' "$REEL_AVANT" "$REEL_APRES" \
+    && ok "instance réelle non redémarrée (état et durée de fonctionnement : $REEL_AVANT → $REEL_APRES)" \
+    || bad "instance réelle redémarrée ($REEL_AVANT → $REEL_APRES)"
+fi
 
 echo
 echo "==================================="

@@ -47,6 +47,25 @@ final class RouterTests: XCTestCase {
         String(decoding: reponse.body, as: UTF8.self)
     }
 
+    /// Tâche 14 : pendant l'arrêt, une commande autorisée reçoit 503 et n'atteint pas le moteur ;
+    /// l'accès reste contrôlé d'abord (401 sans jeton) et les lectures et /health restent servis.
+    func test_arret_commandes503_lecturesServies() {
+        moteur.arret = true
+        let r = routeur(jeton: jeton)
+        for chemin in ["/sleep", "/off", "/wake", "/on", "/resync"] {
+            let reponse = r.handle(requete(chemin, headers: ["x-auth-token": jeton]))
+            XCTAssertEqual(reponse.status, 503, chemin)
+            XCTAssertEqual(String(decoding: reponse.body, as: UTF8.self), "arrêt en cours", chemin)
+            XCTAssertEqual(r.handle(requete(chemin)).status, 401, "le jeton reste exigé : \(chemin)")
+        }
+        XCTAssertTrue(moteur.appels.isEmpty, "\(moteur.appels)")
+        XCTAssertEqual(r.handle(requete("/state", local: true)).status, 200)
+        XCTAssertEqual(r.handle(requete("/health", headers: ["x-auth-token": jeton])).status, 200)
+
+        moteur.arret = false
+        XCTAssertEqual(r.handle(requete("/wake", headers: ["x-auth-token": jeton])).status, 200)
+    }
+
     // MARK: - Lectures
 
     func test_routes_stateStatusHealth() throws {

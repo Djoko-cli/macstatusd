@@ -599,7 +599,7 @@ F04 ; décision C16.
 - `main.swift` : au signal, `EngineRunner.shutdown`, puis vidage du journal et `exit(0)`. L'appel
   asynchrone `server.stop()` est supprimé.
 
-- [ ] **Étape 1 : tests** :
+- [x] **Étape 1 : tests** :
   - `test_arret_publieOff_puisPlusRien` (une évaluation après l'arrêt ne publie rien) ;
   - `test_arret_requeteEnVol_estRemplacee`.
 
@@ -607,10 +607,10 @@ F04 ; décision C16.
   - `sigterm-off` : SIGTERM à l'instance A, et le faux Homebridge reçoit `state=false` ;
   - `sigterm-marqueur` : marqueur posé dans un dossier d'essai (le chemin est configurable par la
     variable `MACSTATUSD_SUPPORT_DIR` pour les tests), et rien n'est reçu.
-- [ ] **Étape 2 : lancer les tests** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Arrêt : OFF publié avant de partir, sauf redémarrage prévu ».
+- [x] **Étape 2 : lancer les tests** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test && bash scripts/selftest.sh`** — attendu : OK.
+- [x] **Étape 5 : commit** « Arrêt : OFF publié avant de partir, sauf redémarrage prévu ».
 
 ### Tâche 15 : webhook à plusieurs cibles et résilient
 

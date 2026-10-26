@@ -193,6 +193,7 @@ falls back to its default without preventing startup.
 | `poll_interval_ms` | `500` | how often facts are re-read |
 | `settle_on_ms` / `settle_off_ms` | `300` / `800` | stability required before publishing |
 | `heartbeat_seconds` | `60` | periodic republication (`0` = disabled) |
+| `publish_off_on_exit` | `true` | publish OFF on SIGTERM/SIGINT before exiting, unless a planned restart (`restart-pending` marker in the support directory, valid 10 min) or degraded mode |
 | `require_auth_ui_when_locked` | `false` | locked with no field visible → OFF |
 | `webhook_timeout_ms` / `webhook_retries` | `4000` / `3` | delivery robustness |
 | `log_level` | `"info"` | `error`, `warn`, `info`, `debug` |
