@@ -55,10 +55,13 @@ public protocol StatePublisher: AnyObject {
     /// vol n'est pas annulée, mais sa réponse ne relance plus rien. La levée ne renvoie rien d'elle-même :
     /// le moteur publie ensuite l'état courant en `force`.
     func setSendingSuspended(_ suspended: Bool)
+    /// Le chemin réseau est redevenu utilisable : renvoi immédiat aux destinations non confirmées.
+    func networkBecameAvailable()
 }
 
 public extension StatePublisher {
     func setSendingSuspended(_ suspended: Bool) {}
+    func networkBecameAvailable() {}
     var hasUsableTarget: Bool { true }
     var deliveryCounts: (confirmed: Int, total: Int) { (0, hasUsableTarget ? 1 : 0) }
 }

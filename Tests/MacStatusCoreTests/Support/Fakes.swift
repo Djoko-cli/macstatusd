@@ -249,6 +249,11 @@ final class FakePublisher: StatePublisher {
 
     var statusDictionary: [String: Any] { ["faux": true] }
 
+    /// Nombre d'avis de retour du réseau transmis par le moteur.
+    private(set) var avisReseau = 0
+
+    func networkBecameAvailable() { avisReseau += 1 }
+
     /// Chaque appel à `setSendingSuspended`, dans l'ordre.
     private(set) var suspensions: [Bool] = []
 

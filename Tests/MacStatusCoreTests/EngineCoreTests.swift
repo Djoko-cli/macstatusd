@@ -365,30 +365,97 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
                                                Publication(etat: false, force: false),
                                                Publication(etat: true, force: false)])
-        // Les faits disent ON : confirmée au cycle suivant, et jamais d'escalade OFF.
+        // Les faits disent ON, mais l'économiseur lancé par l'OFF peut encore démarrer : pas de
+        // confirmation avant le délai d'escalade (2,5 s), puis confirmée sans escalade.
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertNotNil(commandeEnAttente(core), "2,0 s : l'ON attend encore")
         scruter(core, 0.5)
         XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("commande on confirmée par les faits en 2.5 s"))
         for _ in 0..<30 { scruter(core, 0.5) }
         XCTAssertTrue(core.currentState)
         XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
     }
 
-    func test_onQuandDejaOn_aucuneAction() {
+    /// C8/F13 : OFF puis ON rapides, l'économiseur lancé par `open -a` démarre 1 s après l'OFF, donc
+    /// après l'ON. L'ON n'est pas confirmé avant le délai d'escalade : l'escalade arrête l'économiseur
+    /// et l'état final est ON. Sans cela, l'ON confirmé aussitôt laissait l'économiseur gagner.
+    func test_offPuisOn_economiseurQuiDemarreApres_etatFinalOn() {
+        let core = moteur()
+        core.start()
+        core.requestOff(source: "essai")
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
+        XCTAssertNotNil(commandeEnAttente(core), "l'ON n'est pas confirmé dans l'évaluation du réveil")
+        XCTAssertEqual(actions.appelsReveil, [], "R47 : rien n'est relâché dans l'évaluation du réveil")
+        XCTAssertTrue(journalContient("remplace l'OFF en cours"))
+
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [])
+        // 1 s après l'OFF, l'économiseur démarre enfin.
+        signaux.pidEconomiseur = 4242
+        for _ in 0..<3 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState, "l'intention ON tient l'état")
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
+
+        // 2,5 s : escalade, l'économiseur est arrêté.
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake, .stopScreenSaver])
+        signaux.pidEconomiseur = 0
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+
+        for _ in 0..<30 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: false))
+        XCTAssertFalse(publieur.publications.dropFirst(2).contains { !$0.etat }, "aucun OFF après l'ON")
+    }
+
+    /// R49 : déjà ON selon les faits (qui ne voient ni l'économiseur d'inactivité de macOS 27 ni
+    /// l'écran assombri), /wake envoie quand même un réveil léger : sans intention, sans attente, et
+    /// relâché à l'évaluation suivante, jamais dans la même.
+    func test_onQuandDejaOn_reveilLeger_relacheALEvaluationSuivante() {
         let core = moteur()
         core.start()
         let avant = publieur.publications
         core.requestOn(source: "essai")
-        XCTAssertEqual(actions.appels, [])
-        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(actions.appels, [.wake], "un seul réveil")
+        XCTAssertNil(commandeEnAttente(core), "aucune intention")
+        XCTAssertEqual(actions.appelsReveil, [], "rien n'est relâché dans la même évaluation")
+        XCTAssertEqual(publieur.publications, avant, "aucune publication")
+        XCTAssertEqual(publieur.delaisDemandes, [], "chemin sans attente")
+        XCTAssertTrue(journalContient("commande ON (essai) → déjà ON (desktop-ui) : réveil léger"))
+
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake], "relâché à l'évaluation suivante")
+        XCTAssertTrue(journalContient("assertion de réveil relâchée (réveil léger"))
+        for _ in 0..<10 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake], "une seule fois")
+        XCTAssertEqual(actions.appels, [.wake])
         XCTAssertEqual(publieur.publications, avant)
-        XCTAssertTrue(journalContient("commande ON (essai) → déjà ON (desktop-ui), aucune action"))
 
         // Les faits sont relus avant de décider : un écran éteint depuis le dernier cycle
-        // n'est pas « déjà ON ».
+        // n'est pas « déjà ON » : la commande a son intention.
         signaux.etatEcran.asleep = true
         core.requestOn(source: "essai")
-        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appels, [.wake, .wake])
         XCTAssertNotNil(commandeEnAttente(core))
+    }
+
+    /// R49 : deux /wake de suite sur un Mac déjà ON : deux réveils légers, chacun relâché.
+    func test_reveilsLegersRepetes_chacunRelache() {
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake, .wake])
+        XCTAssertEqual(actions.appelsReveil, [])
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        core.requestOn(source: "essai")
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .releaseWake])
     }
 
     func test_onSousUnEconomiseurEcarte_reveilSansIntention() {
@@ -418,11 +485,12 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(core.currentState)
         XCTAssertTrue(journalContient("économiseur en marche"), "\(journal.lines.map { $0.1 })")
 
-        // Sans économiseur, le court-circuit « déjà ON » reste sans action.
+        // Sans économiseur, « déjà ON » donne un réveil léger (R49), toujours sans intention.
         signaux.pidEconomiseur = 0
         scruter(core, 0.5)
         core.requestOn(source: "essai")
-        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appels, [.wake, .wake])
+        XCTAssertNil(commandeEnAttente(core))
     }
 
     // MARK: - Réveil maîtrisé (tâche 17)
@@ -607,15 +675,16 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
     }
 
-    /// Un ON déjà vrai (aucune commande) ne pose aucune retenue.
+    /// Un ON déjà vrai (aucune commande) ne pose aucune retenue : le réveil léger (R49) est
+    /// seulement relâché à l'évaluation suivante.
     func test_wakeHold60_onDejaOn_aucuneRetenue() {
         signaux.etatSession.locked = true
         let core = moteur(configRetenue(60))
         core.start()
         core.requestOn(source: "essai")
         scruter(core, 0.5)
-        XCTAssertEqual(actions.appels, [])
-        XCTAssertEqual(actions.appelsReveil, [])
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
     }
 
     /// La retenue est levée au déverrouillage.
@@ -1856,6 +1925,67 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(client.statusDictionary["confirmed"] as? String, "1")
         planificateur.runDue(at: horloge.t + 600)
         XCTAssertEqual(transport.requetes.count, avant + 1)
+    }
+
+    // MARK: - Relecture finale : resynchronisation pendant la veille, réseau pendant l'arrêt
+
+    /// `resync()` pendant une veille annoncée (sans réveil) ne remet pas `system_asleep` à faux :
+    /// l'état reste OFF, republié en force.
+    func test_resyncPendantUneVeille_gardeLaVeille() {
+        let core = moteur()
+        core.start()
+        core.willSleep {}
+        XCTAssertFalse(core.currentState)
+        core.resync()
+        let faits = core.statusSnapshot()["facts"] as? [String: Any]
+        XCTAssertEqual(faits?["system_asleep"] as? Bool, true)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: true))
+
+        // Après le réveil, la resynchronisation reprend son cours ordinaire.
+        core.handle(.systemDidWake)
+        core.resync()
+        XCTAssertTrue(core.currentState)
+    }
+
+    /// Veille annulée : `resync()` remet bien `system_asleep` à faux (aucune veille en cours).
+    func test_resyncApresVeilleAnnulee_veilleOubliee() {
+        let core = moteur()
+        core.start()
+        core.willSleep {}
+        core.handle(.systemWillNotSleep)
+        core.resync()
+        let faits = core.statusSnapshot()["facts"] as? [String: Any]
+        XCTAssertEqual(faits?["system_asleep"] as? Bool, false)
+        XCTAssertTrue(core.currentState)
+    }
+
+    /// Le retour du réseau est transmis au publieur, sauf pendant l'arrêt.
+    func test_retourDuReseau_transmisSaufPendantLArret() {
+        let core = moteur()
+        core.start()
+        core.networkBecameAvailable()
+        XCTAssertEqual(publieur.avisReseau, 1)
+        core.shutdown(publishOff: true) {}
+        core.networkBecameAvailable()
+        XCTAssertEqual(publieur.avisReseau, 1, "avis ignoré pendant l'arrêt")
+    }
+
+    /// De bout en bout avec le vrai client : OFF d'arrêt en échec, le réseau revient pendant l'arrêt
+    /// → aucune requête de plus.
+    func test_clientReel_retourDuReseauPendantLArret_rienNePart() {
+        let transport = FakeTransport(clock: horloge)
+        let planificateur = TestScheduler(clock: horloge)
+        let client = clientWebhook(transport, planificateur)
+        let core = moteur(publieur: client)
+        core.start()
+        transport.reponseParDefaut = .failed(detail: "hors ligne")
+        core.shutdown(publishOff: true) {}
+        let avant = transport.requetes.count
+        XCTAssertGreaterThan(avant, 1, "l'OFF d'arrêt est parti")
+        horloge.advance(5)
+        core.networkBecameAvailable()
+        XCTAssertEqual(transport.requetes.count, avant, "le retour du réseau ne relance rien pendant l'arrêt")
     }
 
     // MARK: - Diagnostic

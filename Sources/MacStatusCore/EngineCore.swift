@@ -75,6 +75,14 @@ public final class EngineCore {
     private var wakeSaverWaitUntil: Double?
     /// Retenue d'écran en cours (`actions.holdDisplay`) : instant monotone d'échéance. `nil` : aucune.
     private var displayHoldUntil: Double?
+    /// Réveil léger (R49) : /wake sur un Mac déjà ON selon les faits, sans intention ni attente.
+    /// L'assertion est relâchée à l'évaluation suivante.
+    private var lightWake = false
+    /// `wakeNow()` a eu lieu pendant l'évaluation en cours (ou juste avant elle) : rien n'est relâché
+    /// avant l'évaluation suivante (R47). Remis à faux à la fin de chaque évaluation.
+    private var wakeJustIssued = false
+    /// Raison d'un relâchement remis à l'évaluation suivante par `wakeJustIssued`.
+    private var deferredReleaseReason: String?
 
     // MARK: Autorisation de publier (tâche 16)
 
@@ -118,6 +126,9 @@ public final class EngineCore {
         let deadline: Double
         let source: String
         var escalated = false
+        /// Pas de confirmation par les faits avant cet instant monotone. Sert à l'ON qui remplace un
+        /// OFF dont l'action est partie : l'économiseur lancé par `open -a` peut démarrer après coup.
+        var confirmNotBefore: Double = 0
     }
 
     public init(config: Config,
@@ -361,6 +372,8 @@ public final class EngineCore {
     /// Vrai si l'évaluation a appelé le publieur.
     @discardableResult
     private func evaluate(immediate: Bool, force: Bool = false) -> Bool {
+        // R47 : un réveil n'est jamais relâché dans l'évaluation qui l'a lancé.
+        defer { wakeJustIssued = false }
         guard !isShutDown else { return false }
         // Retour d'autorisation non servi par cette évaluation : l'état courant part en force.
         defer { resumeIfNeeded() }
@@ -370,7 +383,7 @@ public final class EngineCore {
         var bypassSettle = immediate
 
         if var current = intent {
-            if factual.state == current.target {
+            if factual.state == current.target, now >= current.confirmNotBefore {
                 logInfo("commande \(current.source) confirmée par les faits en "
                         + "\(String(format: "%.1f", now - current.issuedAt)) s (\(factual.reason))")
                 intent = nil
@@ -459,6 +472,9 @@ public final class EngineCore {
     private func wakeNow() {
         wakeAssertionHeld = true
         wakeSaverWaitUntil = nil
+        lightWake = false
+        wakeJustIssued = true
+        deferredReleaseReason = nil
         actions.wake()
     }
 
@@ -467,6 +483,8 @@ public final class EngineCore {
         guard wakeAssertionHeld else { return }
         wakeAssertionHeld = false
         wakeSaverWaitUntil = nil
+        lightWake = false
+        deferredReleaseReason = nil
         actions.releaseWake()
         logInfo("assertion de réveil relâchée (\(why))")
     }
@@ -484,7 +502,12 @@ public final class EngineCore {
     /// est retenu : macOS le rendort vite sur l'écran de verrouillage. La retenue vient toujours
     /// après la confirmation, jamais dans `requestOn` : le chemin /wake n'attend rien.
     private func onWakeConfirmed(now: Double) {
-        releaseWakeAssertion("ON confirmé par les faits")
+        if wakeJustIssued {
+            // R47 : confirmé dans l'évaluation même du réveil, il est relâché à la suivante.
+            deferredReleaseReason = "ON confirmé par les faits"
+        } else {
+            releaseWakeAssertion("ON confirmé par les faits")
+        }
         guard config.wakeHoldSeconds > 0, facts.sessionLocked else { return }
         // Une nouvelle retenue remplace l'ancienne (c'est `holdDisplay` qui le garantit).
         displayHoldUntil = now + Double(config.wakeHoldSeconds)
@@ -496,13 +519,15 @@ public final class EngineCore {
     /// terminée sans confirmation (échéance, veille, remplacée) ou d'un réveil sans intention dont
     /// l'économiseur est parti, et lève la retenue d'écran à l'échéance, au déverrouillage ou à un OFF.
     private func maintainWake(factual: (state: Bool, reason: String), now: Double) {
-        if wakeAssertionHeld, intent == nil {
-            if let until = wakeSaverWaitUntil {
+        if wakeAssertionHeld, intent == nil, !wakeJustIssued {
+            if lightWake {
+                releaseWakeAssertion("réveil léger : évaluation suivante")
+            } else if let until = wakeSaverWaitUntil {
                 if !(now < until && facts.screenSaverRunning) {
                     releaseWakeAssertion("réveil sans intention : économiseur parti ou délai écoulé")
                 }
             } else {
-                releaseWakeAssertion("commande terminée sans confirmation")
+                releaseWakeAssertion(deferredReleaseReason ?? "commande terminée sans confirmation")
             }
         }
         guard let until = displayHoldUntil else { return }
@@ -741,11 +766,19 @@ public final class EngineCore {
     }
 
     /// Commande ON. Idempotente : un doublon reçu pendant une intention ON en cours ne fait
-    /// rien ; une intention OFF en cours est remplacée. Les faits sont relus d'abord : déjà ON et
-    /// sans intention OFF en cours, rien n'est lancé (ni réveil, ni arrêt de l'économiseur), sauf
-    /// si l'économiseur tourne encore (Ruling R30) : l'oracle le dit « écarté » jusqu'à 90 s
-    /// après une frappe, alors que macOS a pu revenir à l'économiseur. Dans ce cas, un réveil
-    /// est envoyé, sans intention (rien à confirmer : les faits disent déjà ON).
+    /// rien ; une intention OFF en cours est remplacée. Les faits sont relus d'abord. Déjà ON et
+    /// sans intention OFF en cours, aucune intention n'est créée et rien n'est attendu, mais un
+    /// réveil part quand même :
+    /// - économiseur encore en marche (Ruling R30) : l'oracle le dit « écarté » jusqu'à 90 s après
+    ///   une frappe, alors que macOS a pu revenir à l'économiseur. L'assertion tient tant qu'il
+    ///   tourne, au plus un délai de commande ;
+    /// - sinon, réveil léger (Ruling R49) : les faits ne voient ni l'économiseur lancé par
+    ///   l'inactivité sous macOS 27, ni l'écran assombri. L'assertion est relâchée à l'évaluation
+    ///   suivante.
+    ///
+    /// Un ON qui remplace un OFF dont l'action est partie n'est pas confirmé avant
+    /// `command_escalate_after_ms` : l'économiseur lancé par `open -a` peut démarrer après coup, et
+    /// l'escalade s'en charge alors.
     public func requestOn(source: String) {
         guard !isShutDown else {
             logInfo("commande ON (\(source)) ignorée : arrêt en cours")
@@ -766,14 +799,26 @@ public final class EngineCore {
                 // Rien à confirmer : l'assertion tient tant que l'économiseur tourne, au plus un délai de commande.
                 wakeSaverWaitUntil = clock.monotonic() + Double(config.commandConfirmTimeoutMS) / 1000
             } else {
-                logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)), aucune action")
+                logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)) : réveil léger, sans intention")
+                wakeNow()
+                lightWake = true
             }
             evaluate(immediate: true)
             return
         }
 
-        logInfo("commande ON (\(source))")
-        intent = makeIntent(target: true, source: "on")
+        let replacesOff = isPending(target: false)
+        var next = makeIntent(target: true, source: "on")
+        if replacesOff {
+            // L'action OFF est partie : l'économiseur peut encore démarrer. Pas de confirmation avant
+            // le délai d'escalade, qui arrête l'économiseur s'il est apparu entre-temps.
+            next.confirmNotBefore = next.issuedAt + Double(config.commandEscalateAfterMS) / 1000
+            logInfo("commande ON (\(source)) → remplace l'OFF en cours : confirmation au plus tôt dans "
+                    + "\(String(format: "%.1f", Double(config.commandEscalateAfterMS) / 1000)) s")
+        } else {
+            logInfo("commande ON (\(source))")
+        }
+        intent = next
         wakeNow()
         // Un économiseur actif ne s'arrête pas toujours sur simple activité
         // déclarée : on le termine dans le même geste, comme le ferait une
@@ -786,10 +831,31 @@ public final class EngineCore {
 
     public func resync() {
         guard !isShutDown else { return }
-        systemAsleep = false
-        saver.noteNotification(active: false)
+        if sleepInProgress {
+            // Une veille annoncée sans réveil : le Mac s'endort, `system_asleep` reste vrai.
+            logDebug("resynchronisation pendant une veille annoncée : veille gardée")
+        } else {
+            systemAsleep = false
+            saver.noteNotification(active: false)
+        }
         refreshFacts()
         evaluate(immediate: true, force: true)
+    }
+
+    /// Une veille annoncée par `willSleep` n'a été suivie ni d'un réveil, ni d'une annulation.
+    private var sleepInProgress: Bool {
+        guard systemAsleep, let lastSleep else { return false }
+        return lastSleep.end == nil
+    }
+
+    /// Le réseau est redevenu utilisable : le publieur renvoie l'état aux cibles non confirmées.
+    /// Ignoré pendant l'arrêt : l'envoi d'arrêt a ses propres réessais, bornés.
+    public func networkBecameAvailable() {
+        guard !isShutDown else {
+            logDebug("réseau de nouveau utilisable pendant l'arrêt : avis ignoré")
+            return
+        }
+        publisher.networkBecameAvailable()
     }
 
     /// Vrai si une intention de ce sens attend encore sa confirmation (échéance non atteinte).

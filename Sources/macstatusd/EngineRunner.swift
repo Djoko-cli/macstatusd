@@ -104,8 +104,10 @@ final class EngineRunner: EngineFacade {
 
     /// Le chemin réseau est redevenu utilisable (`NetworkWatcher`) : le client webhook renvoie
     /// l'état aux cibles non confirmées, sur la file du moteur. N'attend rien et ne bloque rien.
+    /// Ignoré dès que l'arrêt a commencé (le moteur le vérifie aussi, sur sa file).
     func networkBecameAvailable() {
-        queue.async { [self] in webhook.networkBecameAvailable() }
+        guard !isShuttingDown else { return }
+        queue.async { [self] in core.networkBecameAvailable() }
     }
 
     // MARK: - Détention du port
