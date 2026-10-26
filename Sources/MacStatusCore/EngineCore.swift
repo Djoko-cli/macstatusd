@@ -66,6 +66,16 @@ public final class EngineCore {
     /// Vrai une fois `shutdown` appelé : le moteur ne publie ni n'agit plus, jamais.
     private var isShutDown = false
 
+    // MARK: Réveil maîtrisé (tâche 17)
+
+    /// `actions.wake()` a posé une assertion que `actions.releaseWake()` n'a pas encore relâchée.
+    private var wakeAssertionHeld = false
+    /// Réveil sans intention (économiseur « écarté » : R30) : l'assertion tient jusqu'à cet instant
+    /// monotone, ou jusqu'à ce que l'économiseur ait disparu. `nil` : le réveil a une intention.
+    private var wakeSaverWaitUntil: Double?
+    /// Retenue d'écran en cours (`actions.holdDisplay`) : instant monotone d'échéance. `nil` : aucune.
+    private var displayHoldUntil: Double?
+
     // MARK: Autorisation de publier (tâche 16)
 
     /// Ce que le serveur HTTP a annoncé de son écoute : `true` à `.ready`, `false` en attente,
@@ -345,6 +355,7 @@ public final class EngineCore {
                 logInfo("commande \(current.source) confirmée par les faits en "
                         + "\(String(format: "%.1f", now - current.issuedAt)) s (\(factual.reason))")
                 intent = nil
+                if current.target { onWakeConfirmed(now: now) }
             } else if now >= current.deadline {
                 logWarn("commande \(current.source) non confirmée après "
                         + "\(String(format: "%.1f", now - current.issuedAt)) s → retour aux faits (\(factual.reason))")
@@ -360,6 +371,8 @@ public final class EngineCore {
                 bypassSettle = true
             }
         }
+
+        maintainWake(factual: factual, now: now)
 
         if candidate != resolved.state {
             candidate = resolved.state
@@ -418,7 +431,71 @@ public final class EngineCore {
             return
         }
         logWarn("commande \(intent.source) sans effet observé → escalade: nouvelle tentative de réveil")
+        wakeNow()
+    }
+
+    // MARK: - Réveil maîtrisé
+
+    /// Seul point d'appel de `actions.wake()` : note que l'assertion qu'il pose est à relâcher.
+    private func wakeNow() {
+        wakeAssertionHeld = true
+        wakeSaverWaitUntil = nil
         actions.wake()
+    }
+
+    /// Relâche l'assertion posée par `wake()`, une seule fois. Sans effet si rien n'est posé.
+    private func releaseWakeAssertion(_ why: String) {
+        guard wakeAssertionHeld else { return }
+        wakeAssertionHeld = false
+        wakeSaverWaitUntil = nil
+        actions.releaseWake()
+        logInfo("assertion de réveil relâchée (\(why))")
+    }
+
+    /// Levée de la retenue d'écran en cours, s'il y en a une.
+    private func releaseDisplayHold(_ why: String) {
+        guard displayHoldUntil != nil else { return }
+        displayHoldUntil = nil
+        actions.holdDisplay(seconds: 0)
+        logInfo("retenue d'écran levée (\(why))")
+    }
+
+    /// Un ON vient d'être confirmé par les faits : l'assertion de réveil a fini son travail et est
+    /// relâchée. Puis, en option (`wake_hold_seconds > 0`) et sur une session verrouillée, l'écran
+    /// est retenu : macOS le rendort vite sur l'écran de verrouillage. La retenue vient toujours
+    /// après la confirmation, jamais dans `requestOn` : le chemin /wake n'attend rien.
+    private func onWakeConfirmed(now: Double) {
+        releaseWakeAssertion("ON confirmé par les faits")
+        guard config.wakeHoldSeconds > 0, facts.sessionLocked else { return }
+        // Une nouvelle retenue remplace l'ancienne (c'est `holdDisplay` qui le garantit).
+        displayHoldUntil = now + Double(config.wakeHoldSeconds)
+        actions.holdDisplay(seconds: Double(config.wakeHoldSeconds))
+        logInfo("retenue d'écran posée pour \(config.wakeHoldSeconds) s (session verrouillée)")
+    }
+
+    /// Appelé à chaque évaluation, une fois l'intention tranchée : relâche l'assertion d'une commande
+    /// terminée sans confirmation (échéance, veille, remplacée) ou d'un réveil sans intention dont
+    /// l'économiseur est parti, et lève la retenue d'écran à l'échéance, au déverrouillage ou à un OFF.
+    private func maintainWake(factual: (state: Bool, reason: String), now: Double) {
+        if wakeAssertionHeld, intent == nil {
+            if let until = wakeSaverWaitUntil {
+                if !(now < until && facts.screenSaverRunning) {
+                    releaseWakeAssertion("réveil sans intention : économiseur parti ou délai écoulé")
+                }
+            } else {
+                releaseWakeAssertion("commande terminée sans confirmation")
+            }
+        }
+        guard let until = displayHoldUntil else { return }
+        if now >= until {
+            // L'assertion s'éteint d'elle-même à son échéance : rien à relâcher.
+            displayHoldUntil = nil
+            logInfo("retenue d'écran échue")
+        } else if !facts.sessionLocked {
+            releaseDisplayHold("session déverrouillée")
+        } else if !factual.state {
+            releaseDisplayHold("OFF")
+        }
     }
 
     // MARK: - Événements système
@@ -549,6 +626,12 @@ public final class EngineCore {
         }
         isShutDown = true
         intent = nil
+        // Rien ne doit survivre au daemon : l'assertion de réveil (relâchée même si le moteur la croit
+        // déjà relâchée, la demande est sans effet sinon) et la retenue d'écran.
+        wakeAssertionHeld = false
+        wakeSaverWaitUntil = nil
+        actions.releaseWake()
+        releaseDisplayHold("arrêt")
         guard publishOff else {
             logInfo("arrêt : aucune publication OFF")
             done()
@@ -610,6 +693,9 @@ public final class EngineCore {
             logInfo("commande OFF (\(source)) → commande OFF déjà en cours, ignorée")
             return
         }
+        // Un OFF remplace tout ON en attente et met fin à la retenue d'écran.
+        releaseWakeAssertion("commande OFF")
+        releaseDisplayHold("commande OFF")
         refreshFacts()
         let factual = factsVerdict()
         if factual.state == false {
@@ -657,7 +743,9 @@ public final class EngineCore {
             if facts.screenSaverRunning {
                 logInfo("commande ON (\(source)) → ON selon les faits (\(factual.reason)), mais économiseur "
                         + "en marche (\(facts.screenSaverEvidence)) → réveil, sans intention")
-                actions.wake()
+                wakeNow()
+                // Rien à confirmer : l'assertion tient tant que l'économiseur tourne, au plus un délai de commande.
+                wakeSaverWaitUntil = clock.monotonic() + Double(config.commandConfirmTimeoutMS) / 1000
             } else {
                 logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)), aucune action")
             }
@@ -667,7 +755,7 @@ public final class EngineCore {
 
         logInfo("commande ON (\(source))")
         intent = makeIntent(target: true, source: "on")
-        actions.wake()
+        wakeNow()
         // Un économiseur actif ne s'arrête pas toujours sur simple activité
         // déclarée : on le termine dans le même geste, comme le ferait une
         // frappe clavier.

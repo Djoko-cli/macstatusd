@@ -11,6 +11,15 @@ public protocol CommandActions: AnyObject {
     func runOff(_ action: OffAction)
     func displaySleep()
     func wake()
+    /// Relâche ce que `wake()` a posé : l'assertion « utilisateur actif » et, s'il tourne encore, le
+    /// `caffeinate` lancé. Appelé dès que le ON est confirmé par les faits (ou abandonné), et à l'arrêt.
+    /// Sans effet quand rien n'est posé, et avec une surcharge `wake_command` (aucune assertion alors).
+    /// Ne bloque jamais : l'appelant est la file du moteur.
+    func releaseWake()
+    /// Retient l'écran allumé `seconds` secondes (assertion « pas de veille d'écran par inactivité »,
+    /// avec son propre délai). Une nouvelle retenue remplace l'ancienne : jamais deux à la fois.
+    /// `seconds <= 0` relâche la retenue en cours. Ne bloque jamais.
+    func holdDisplay(seconds: Double)
     func stopScreenSaver()
 }
 

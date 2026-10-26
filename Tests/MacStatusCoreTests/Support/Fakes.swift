@@ -154,6 +154,17 @@ final class FakeActions: CommandActions {
     func displaySleep() { appels.append(.displaySleep) }
     func wake() { appels.append(.wake) }
     func stopScreenSaver() { appels.append(.stopScreenSaver) }
+
+    /// Appels de la tâche 17, tenus à part de `appels` pour ne pas toucher aux assertions
+    /// existantes : relâchement du réveil, pose (`seconds > 0`) ou levée (`seconds <= 0`) de la retenue.
+    enum AppelReveil: Equatable {
+        case releaseWake
+        case holdDisplay(Double)
+    }
+    private(set) var appelsReveil: [AppelReveil] = []
+
+    func releaseWake() { appelsReveil.append(.releaseWake) }
+    func holdDisplay(seconds: Double) { appelsReveil.append(.holdDisplay(seconds)) }
 }
 
 /// Publieur simulé : garde chaque état publié, avec son drapeau `force`, et simule la

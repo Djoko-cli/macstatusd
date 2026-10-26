@@ -239,6 +239,9 @@ public struct Config {
     /// Délai avant d'escalader une commande dont les faits ne montrent aucun effet.
     public var commandEscalateAfterMS = 2500
     public var stopScreensaverOnWake = true
+    /// Retenue d'écran après un ON confirmé sur une session verrouillée : secondes pendant lesquelles
+    /// l'écran ne s'éteint pas par inactivité. 0 (défaut) : aucune retenue. Bornes 0…600.
+    public var wakeHoldSeconds = 0
     /// Surcharges facultatives : tableau argv, ou chaîne passée à /bin/sh -c.
     public var offCommand: [String] = []
     public var wakeCommand: [String] = []
@@ -256,7 +259,7 @@ public struct Config {
         "poll_interval_ms",
         "settle_on_ms", "settle_off_ms", "require_auth_ui_when_locked", "off_action",
         "off_escalate_to_display_sleep", "command_confirm_timeout_ms", "command_escalate_after_ms",
-        "stop_screensaver_on_wake", "off_command", "wake_command", "log_level", "log_file",
+        "stop_screensaver_on_wake", "wake_hold_seconds", "off_command", "wake_command", "log_level", "log_file",
         "saver_dismiss_on_input", "saver_dismiss_grace_ms", "saver_redisplay_idle_seconds",
         "webhook_targets",
     ]
@@ -478,6 +481,7 @@ public struct Config {
             cfg.commandEscalateAfterMS = corrected
         }
         cfg.stopScreensaverOnWake = bag.bool("stop_screensaver_on_wake", cfg.stopScreensaverOnWake)
+        cfg.wakeHoldSeconds = bag.int("wake_hold_seconds", cfg.wakeHoldSeconds, min: 0, max: 600)
         cfg.offCommand = bag.command("off_command", cfg.offCommand)
         cfg.wakeCommand = bag.command("wake_command", cfg.wakeCommand)
 

@@ -425,6 +425,300 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(actions.appels, [.wake])
     }
 
+    // MARK: - Réveil maîtrisé (tâche 17)
+
+    private typealias AppelReveil = FakeActions.AppelReveil
+
+    /// Configuration avec retenue d'écran de `secondes` secondes.
+    private func configRetenue(_ secondes: Int) -> Config {
+        var config = Config()
+        config.wakeHoldSeconds = secondes
+        return config
+    }
+
+    /// Session verrouillée, écran éteint : un /wake doit rallumer l'écran sur l'écran de verrouillage.
+    private func sessionVerrouilleeEcranEteint() {
+        signaux.etatSession.locked = true
+        signaux.etatEcran.asleep = true
+    }
+
+    /// L'assertion posée par /wake est relâchée dès que les faits confirment le ON, une seule fois.
+    func test_onConfirme_libereLAssertion() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appelsReveil, [], "tant que les faits ne confirment pas, l'assertion reste posée")
+
+        // Les faits restent OFF : toujours rien.
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [])
+
+        // L'écran se rallume : ON confirmé, assertion relâchée aussitôt.
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("assertion de réveil relâchée (ON confirmé par les faits)"))
+
+        // Une seule fois, et aucune retenue (wake_hold_seconds = 0 par défaut).
+        for _ in 0..<10 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// Commande jamais confirmée : l'assertion ne survit pas à l'échéance (12 s), malgré l'escalade
+    /// qui a re-déclaré l'activité entre-temps.
+    func test_onNonConfirme_libereALEcheance() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        for _ in 0..<23 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appels, [.wake, .wake], "escalade à 2,5 s : nouvelle tentative de réveil")
+        XCTAssertEqual(actions.appelsReveil, [], "11,5 s : la commande tient encore")
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        XCTAssertTrue(journalContient("assertion de réveil relâchée (commande terminée sans confirmation)"))
+    }
+
+    /// Un OFF qui remplace un ON en attente relâche aussi l'assertion, ON déjà ou non refusé par les faits.
+    func test_offRemplaceOn_libereLAssertion() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        core.requestOff(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        // Un second OFF ne relâche rien de plus.
+        core.requestOff(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// La veille emporte sur la commande ON en attente : l'assertion est relâchée.
+    func test_veille_pendantUnOnEnAttente_libereLAssertion() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        core.willSleep {}
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// Arrêt : l'assertion posée est relâchée, même sans confirmation, et même sans publication OFF.
+    func test_arret_libereLAssertion() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        var termines = 0
+        core.shutdown(publishOff: false) { termines += 1 }
+        XCTAssertEqual(termines, 1)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        // Le moteur arrêté ne relâche ni ne retient plus rien.
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// R30 : /wake sous un économiseur « écarté » réveille sans intention. L'assertion tient tant que
+    /// l'économiseur tourne, puis est relâchée dès qu'il est parti (ou à l'échéance de la commande).
+    func test_reveilSansIntention_libereQuandLEconomiseurPart() {
+        let core = moteur()
+        core.start()
+        signaux.pidEconomiseur = 4242
+        for _ in 0..<4 { scruter(core, 0.5) }
+        signaux.inactiviteHID = 0
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(actions.appelsReveil, [], "l'économiseur tourne encore : l'assertion reste posée")
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [])
+
+        signaux.pidEconomiseur = 0
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// Sans économiseur qui part, l'assertion d'un réveil sans intention est quand même relâchée à
+    /// l'échéance habituelle d'une commande (12 s).
+    func test_reveilSansIntention_libereALEcheanceSiLEconomiseurRestePose() {
+        let core = moteur()
+        core.start()
+        signaux.pidEconomiseur = 4242
+        for _ in 0..<4 { scruter(core, 0.5) }
+        signaux.inactiviteHID = 0
+        for _ in 0..<4 { scruter(core, 0.5) }
+        core.requestOn(source: "essai")
+        for _ in 0..<23 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil, [])
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// `wake_hold_seconds = 0` (défaut) : aucune retenue, même sur une session verrouillée.
+    func test_wakeHold0_aucuneRetenue() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(0))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        XCTAssertFalse(journalContient("retenue d'écran"))
+    }
+
+    /// `wake_hold_seconds = 60`, session verrouillée : après le ON confirmé, l'assertion de réveil est
+    /// relâchée puis l'écran est retenu 60 s. Rien n'est posé pendant `requestOn` : le chemin /wake
+    /// n'attend rien.
+    func test_wakeHold60_retenueSurSessionVerrouillee() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [], "la retenue vient après la confirmation, jamais dans /wake")
+
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+        XCTAssertTrue(journalContient("retenue d'écran posée pour 60 s (session verrouillée)"))
+
+        // Tant que la session reste verrouillée et allumée : aucun nouvel appel.
+        for _ in 0..<20 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+    }
+
+    /// Session déverrouillée (bureau) : la retenue ne sert à rien, même avec `wake_hold_seconds > 0`.
+    func test_wakeHold60_sessionDeverrouillee_aucuneRetenue() {
+        signaux.etatEcran.asleep = true
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// Un ON déjà vrai (aucune commande) ne pose aucune retenue.
+    func test_wakeHold60_onDejaOn_aucuneRetenue() {
+        signaux.etatSession.locked = true
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appels, [])
+        XCTAssertEqual(actions.appelsReveil, [])
+    }
+
+    /// La retenue est levée au déverrouillage.
+    func test_retenue_relacheeAuDeverrouillage() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil.last, .holdDisplay(60))
+
+        signaux.etatSession.locked = false
+        core.handle(.screenUnlocked)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
+        XCTAssertTrue(journalContient("retenue d'écran levée (session déverrouillée)"))
+        for _ in 0..<10 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil.count, 3, "une seule levée")
+    }
+
+    /// La retenue est levée dès que les faits passent à OFF (écran éteint à la main, économiseur…).
+    func test_retenue_relacheeAUnOff() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
+        XCTAssertTrue(journalContient("retenue d'écran levée (OFF)"))
+    }
+
+    /// Une commande OFF lève la retenue avant d'agir.
+    func test_retenue_relacheeParUneCommandeOff() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        core.requestOff(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
+        XCTAssertEqual(actions.appels.last, .runOff(.displaySleep))
+    }
+
+    /// À l'échéance, l'assertion s'éteint d'elle-même : le moteur oublie la retenue et ne la lève plus.
+    func test_retenue_echue_neSeLevePlus() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        for _ in 0..<12 { scruter(core, 5) }
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+        XCTAssertTrue(journalContient("retenue d'écran échue"))
+
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5)
+        var termines = 0
+        core.shutdown(publishOff: false) { termines += 1 }
+        XCTAssertEqual(actions.appelsReveil.filter { $0 == .holdDisplay(0) }.count, 0)
+    }
+
+    /// Un nouveau ON confirmé pendant une retenue la remplace (un seul appel de plus, jamais deux
+    /// retenues côté actions : c'est `holdDisplay` qui remplace).
+    func test_retenue_nouveauOnLaRenouvelle() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+
+        // Écran éteint (retenue levée), puis un second /wake.
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5)
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0),
+                                              .releaseWake, .holdDisplay(60)])
+    }
+
+    /// Arrêt : la retenue en cours est levée.
+    func test_arret_leveLaRetenue() {
+        sessionVerrouilleeEcranEteint()
+        let core = moteur(configRetenue(60))
+        core.start()
+        core.requestOn(source: "essai")
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        var termines = 0
+        core.shutdown(publishOff: false) { termines += 1 }
+        XCTAssertEqual(termines, 1)
+        XCTAssertEqual(actions.appelsReveil.last, .holdDisplay(0))
+        XCTAssertEqual(actions.appelsReveil.filter { $0 == .holdDisplay(0) }.count, 1)
+    }
+
     // MARK: - Resynchronisation et battement de cœur
 
     func test_trouDeScrutation_au_dela_de_10s_resynchronise() {

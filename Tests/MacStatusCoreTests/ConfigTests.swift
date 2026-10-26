@@ -279,6 +279,35 @@ final class ConfigOriginTests: XCTestCase {
         XCTAssertTrue(e.warnings.contains { $0.contains("command_escalate_after_ms") }, "\(e.warnings)")
     }
 
+    /// Tâche 17 : `wake_hold_seconds`, défaut 0, bornes 0…600, avertissement nommé hors bornes.
+    func test_wakeHoldSeconds_defautBornesEtType() {
+        let defaut = Config.parse(data: Data("{}".utf8))
+        XCTAssertEqual(defaut.config.wakeHoldSeconds, 0)
+        XCTAssertEqual(defaut.warnings, [])
+
+        XCTAssertEqual(Config.parse(data: Data(#"{"wake_hold_seconds": 60}"#.utf8)).config.wakeHoldSeconds, 60)
+        let bornes = Config.parse(data: Data(#"{"wake_hold_seconds": 600}"#.utf8))
+        XCTAssertEqual(bornes.config.wakeHoldSeconds, 600)
+        XCTAssertEqual(bornes.warnings, [])
+
+        let haut = Config.parse(data: Data(#"{"wake_hold_seconds": 601}"#.utf8))
+        XCTAssertEqual(haut.config.wakeHoldSeconds, 600)
+        XCTAssertTrue(haut.warnings.contains { $0.contains("wake_hold_seconds") && $0.contains("hors bornes") }, "\(haut.warnings)")
+
+        let bas = Config.parse(data: Data(#"{"wake_hold_seconds": -5}"#.utf8))
+        XCTAssertEqual(bas.config.wakeHoldSeconds, 0)
+        XCTAssertTrue(bas.warnings.contains { $0.contains("wake_hold_seconds") && $0.contains("hors bornes") }, "\(bas.warnings)")
+
+        // Type inattendu : défaut, avertissement nommé (la clé est connue, pas « inconnue »).
+        for json in [#"{"wake_hold_seconds": true}"#, #"{"wake_hold_seconds": "longtemps"}"#,
+                     #"{"wake_hold_seconds": 1.5}"#, #"{"wake_hold_seconds": [1]}"#] {
+            let r = Config.parse(data: Data(json.utf8))
+            XCTAssertEqual(r.config.wakeHoldSeconds, 0, json)
+            XCTAssertTrue(r.warnings.contains { $0.hasPrefix("wake_hold_seconds") }, "\(json) : \(r.warnings)")
+            XCTAssertFalse(r.warnings.contains { $0.contains("inconnue") }, "\(json) : \(r.warnings)")
+        }
+    }
+
     func test_typeInattendu_avertitEtGardeLeDefaut() {
         let json = #"{"settle_on_ms": true, "settle_off_ms": "lent", "heartbeat_seconds": 1.5, "accessory_id": 12, "#
             + #""log_file": ["a"], "enabled": [1], "off_command": 3}"#
