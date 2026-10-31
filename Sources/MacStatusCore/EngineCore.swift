@@ -237,26 +237,26 @@ public final class EngineCore {
         if recovering {
             let shown = String(format: "%.1f", gap)
             let margin = sleepCoverMargin
-            if var sleep = lastSleep, previous >= sleep.start - margin, now <= (sleep.end ?? now) + margin {
+            if let sleep = lastSleep, previous >= sleep.start - margin, now <= (sleep.end ?? now) + margin {
                 covered = true
-                if sleep.end != nil {
-                    force = false
-                    logInfo("interruption de \(shown) s couverte par la veille (réveil déjà traité) "
-                            + "→ resynchronisation sans republication forcée")
-                } else {
-                    let slept = now - sleep.start
+                // Un trou couvert par la veille est un réveil : même tenue de compte que pour l'avis d'IOKit. Elle
+                // rend la durée de la veille seulement si l'avis n'est pas encore arrivé.
+                if let slept = noteWake(now: now) {
                     force = slept >= Self.longSleepThreshold
-                    sleep.end = now
-                    lastSleep = sleep
                     logWarn("interruption de \(shown) s couverte par la veille, réveil non encore notifié "
                             + "(\(String(format: "%.1f", slept)) s de veille) → resynchronisation"
                             + (force ? ", republication forcée" : " sans republication forcée"))
+                } else {
+                    force = false
+                    logInfo("interruption de \(shown) s couverte par la veille (réveil déjà traité) "
+                            + "→ resynchronisation sans republication forcée")
                 }
             } else {
+                // Gel ou surcharge, sans veille qui l'explique : ce n'est pas un réveil, l'avis d'écrans éteints tient.
                 logWarn("interruption de \(shown) s détectée → resynchronisation")
+                systemAsleep = false
+                saver.noteSystemWake()
             }
-            systemAsleep = false
-            saver.noteSystemWake()
         }
 
         // Réveil perdu : une veille courte (moins que le seuil de trou) dont ni `HasPoweredOn` ni
@@ -264,12 +264,9 @@ public final class EngineCore {
         // tourne plus de `lostWakeDelay` après l'avis de veille, le Mac est éveillé : on le rattrape,
         // sans republication forcée.
         var lostWake = false
-        if !recovering, systemAsleep, var sleep = lastSleep, sleep.end == nil,
+        if !recovering, systemAsleep, let sleep = lastSleep, sleep.end == nil,
            now - sleep.start > Self.lostWakeDelay {
-            sleep.end = now
-            lastSleep = sleep
-            systemAsleep = false
-            saver.noteSystemWake()
+            noteWake(now: now)
             lostWake = true
             logWarn("réveil non signalé : rattrapé (veille annoncée il y a \(String(format: "%.1f", now - sleep.start)) s)")
         }
@@ -794,10 +791,12 @@ public final class EngineCore {
         evaluate(immediate: false)
     }
 
-    /// Tenue de compte d'un réveil du système, commune à l'avis IOKit (`.systemDidWake`) et à la fin d'une veille
-    /// sans avis (`endAbortedSleep`), pour que les deux ne divergent jamais : la fin de la veille annoncée est
-    /// notée, `system_asleep` retombe, l'avis d'écrans éteints et le `didstart` en attente de l'oracle sont
-    /// oubliés. Ni relecture des faits, ni évaluation, ni republication : c'est à l'appelant d'en décider.
+    /// Tenue de compte d'un réveil du système, commune à tous les chemins qui le constatent : l'avis IOKit
+    /// (`.systemDidWake`), la fin d'une veille sans avis (`endAbortedSleep`) et les deux rattrapages de `tick()`
+    /// (trou de scrutation couvert par la veille, réveil perdu), pour qu'ils ne divergent jamais : la fin de la
+    /// veille annoncée est notée, `system_asleep` retombe, l'avis d'écrans éteints et le `didstart` en attente de
+    /// l'oracle sont oubliés. Ni relecture des faits, ni évaluation, ni republication : c'est à l'appelant d'en
+    /// décider. Un trou de scrutation qu'aucune veille n'explique n'est pas un réveil : il n'en relève pas.
     /// Rend la durée de la veille annoncée si c'est la première prise en compte de son réveil, `nil` sinon (second
     /// avis de réveil, ou réveil déjà traité par un autre chemin : la fin est déjà posée).
     @discardableResult

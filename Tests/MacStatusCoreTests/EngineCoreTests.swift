@@ -2236,9 +2236,9 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(publieur.publications.dropFirst().contains { $0.etat }, "aucun ON après l'état initial")
     }
 
-    /// Au réveil (avis IOKit, trou de scrutation, fin de veille sans avis) et à la resynchronisation, le moteur
-    /// fait oublier à l'oracle le `didstart` en attente (repli sans SAC) : un hôte apparu ensuite n'ouvre pas de
-    /// session, et l'attente oubliée n'expire pas.
+    /// Au réveil (avis IOKit, fin de veille sans avis, rattrapages du trou couvert et du réveil perdu), au trou de
+    /// scrutation et à la resynchronisation, le moteur fait oublier à l'oracle le `didstart` en attente (repli sans
+    /// SAC) : un hôte apparu ensuite n'ouvre pas de session, et l'attente oubliée n'expire pas.
     func test_reveilEtResynchronisation_oublientLeDidstartEnAttente() {
         let declencheurs: [(String, (EngineCore) -> Void)] = [
             ("avis de réveil", { $0.handle(.systemDidWake) }),
@@ -2250,14 +2250,27 @@ final class EngineCoreTests: XCTestCase {
                 self.signaux.inactiviteHID = 0.3
                 core.tick()
             }),
+            // Les deux rattrapages de `tick()` : plus de 5 s ont passé depuis le `didstart`, l'attente non oubliée
+            // expirerait avec un avertissement.
+            ("trou de scrutation couvert par la veille", { core in
+                core.willSleep {}
+                self.horloge.advance(15)
+                core.tick()
+            }),
+            ("réveil perdu", { core in
+                core.willSleep {}
+                for _ in 0..<241 { self.scruterSansActivite(core, 0.5) }   // 120,5 s sans avis de réveil ni activité
+            }),
         ]
         for (nom, declencher) in declencheurs {
+            journal.lines = []
             signaux = Self.signauxDeBureau()
             signaux.drapeauSAC = nil
             let core = moteur()
             core.start()
             core.handle(.screenSaverDidStart)
             declencher(core)
+            XCTAssertFalse(journalContient("didstart non corroboré"), "\(nom) : l'attente oubliée n'expire pas")
             let lectures = signaux.lecturesHotes
             signaux.hotes = [SaverHost(pid: 4242, launchedSecondsAgo: 0.2)]
             for _ in 0..<4 { scruter(core, 0.5) }
@@ -2725,8 +2738,9 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(core.inspect().facts.displayEvidence, "awake")
     }
 
-    /// L'avis s'efface aussi sur le réveil des écrans, sur le réveil du système (avis IOKit, ou fin de veille sans
-    /// avis) et à la resynchronisation, même si un écran physique dort encore : l'avis dit alors une chose périmée.
+    /// L'avis s'efface aussi sur le réveil des écrans, sur le réveil du système (avis IOKit, fin de veille sans avis,
+    /// ou l'un des deux rattrapages de `tick()` : trou couvert par la veille, réveil perdu) et à la
+    /// resynchronisation, même si un écran physique dort encore : l'avis dit alors une chose périmée.
     func test_avisEcransEteints_effaceParLesReveilsEtLaResynchronisation() {
         let effaceurs: [(String, (EngineCore) -> Void)] = [
             ("réveil des écrans", { $0.handle(.screensDidWake) }),
@@ -2738,6 +2752,16 @@ final class EngineCoreTests: XCTestCase {
                 self.horloge.advance(3)
                 self.signaux.inactiviteHID = 0.3
                 core.tick()
+            }),
+            // Les deux rattrapages de `tick()` font la même tenue de compte que l'avis IOKit.
+            ("trou de scrutation couvert par la veille", { core in
+                core.willSleep {}
+                self.horloge.advance(15)
+                core.tick()
+            }),
+            ("réveil perdu", { core in
+                core.willSleep {}
+                for _ in 0..<241 { self.scruterSansActivite(core, 0.5) }   // 120,5 s sans avis de réveil ni activité
             }),
         ]
         for (nom, effacer) in effaceurs {
@@ -3177,5 +3201,23 @@ final class EngineCoreTests: XCTestCase {
         scruter(core, 0.5)
         scruter(core, 0.5)
         XCTAssertTrue(core.currentState)
+    }
+
+    /// Un trou de scrutation qu'aucune veille n'explique (gel, surcharge) n'est pas un réveil : l'avis d'écrans
+    /// éteints tient, contrairement à ce que font les trous couverts par une veille et le réveil perdu. Un virtuel
+    /// principal éveillé ne ramène donc pas l'ON tant que l'écran physique dort.
+    func test_trouNonCouvert_gardeLAvisDEcransEteints() {
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        let core = moteur()
+        core.start()
+        core.handle(.screensDidSleep)
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep")
+
+        scruter(core, 15)
+        XCTAssertTrue(journalContient("interruption de 15.0 s détectée → resynchronisation"), "\(journal.lines)")
+        XCTAssertFalse(journalContient("couverte par la veille"))
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep", "un gel n'est pas un réveil")
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "display-asleep")
     }
 }
