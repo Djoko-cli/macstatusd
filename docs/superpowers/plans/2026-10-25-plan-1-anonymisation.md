@@ -166,13 +166,13 @@ Remplacements, liste fermée, appliqués aux arbres et aux messages :
 **Interfaces :**
 - Consomme : `main` réécrite et vérifiée (tâche 2).
 
-- [ ] **Étape 1 : revérifier** (tâche 2, étape 7) et rapporter à Djoko : nombre de commits, identité,
+- [x] **Étape 1 : revérifier** (tâche 2, étape 7) et rapporter à Djoko : nombre de commits, identité,
   résultat de la garde.
-- [ ] **Étape 2 (Djoko) : supprimer l'ancien dépôt**, sur github.com (Settings > Danger Zone), ou par
+- [x] **Étape 2 (Djoko) : supprimer l'ancien dépôt**, sur github.com (Settings > Danger Zone), ou par
   `gh auth refresh -h github.com -s delete_repo` puis `gh repo delete Djoko-cli/macstatusd`.
   Uniquement sur son « go ».
-- [ ] **Étape 3 : recréer** `Djoko-cli/macstatusd`, public, avec la description anglaise retenue, puis
+- [x] **Étape 3 : recréer** `Djoko-cli/macstatusd`, public, avec la description anglaise retenue, puis
   `git push -u origin main`. La garde tourne à la poussée — attendu : acceptée.
-- [ ] **Étape 4 : vérifier en ligne :** `gh repo view Djoko-cli/macstatusd --json visibility,licenseInfo,description`
+- [x] **Étape 4 : vérifier en ligne :** `gh repo view Djoko-cli/macstatusd --json visibility,licenseInfo,description`
   → `PUBLIC`, `MIT License`, la description ; `gh api repos/Djoko-cli/macstatusd/commits --jq '.[].commit.author.email' | sort -u`
   → la seule adresse noreply.
