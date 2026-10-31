@@ -11,8 +11,8 @@ import MacStatusCore
 ///
 /// - verrouillage : IORegistry (`IOConsoleLocked` / `IOConsoleUsers`) — disponible
 ///   même hors session graphique — puis `CGSessionCopyCurrentDictionary`.
-/// - écran éteint : `CGDisplayIsAsleep` sur l'écran principal, avec repli sur
-///   « tous les écrans en ligne endormis ».
+/// - écrans : les écrans en ligne et leur veille (`CGGetOnlineDisplayList`, `CGDisplayIsAsleep`), avec leur
+///   fournisseur et leur modèle (lus une fois par identifiant) pour que le cœur reconnaisse l'écran fantôme.
 /// - champ d'authentification : `IsSecureEventInputEnabled`.
 /// - économiseur : `SACScreenSaverIsRunning` (login.framework, chargé une fois) ; `ScreenSaverEngine` et
 ///   ses hôtes se cherchent dans les process de l'utilisateur seulement, jamais ceux des autres comptes.
@@ -106,29 +106,36 @@ final class LiveSystemSignals: SystemSignals {
 
     // MARK: - Écrans
 
-    func display() -> DisplayState {
-        var state = DisplayState()
+    /// Fournisseur et modèle de chaque écran en ligne, lus une fois par identifiant plutôt qu'à chaque
+    /// scrutation. Un identifiant qui sort de la liste en ligne est oublié, pour que le système puisse le rendre
+    /// à un autre écran.
+    private var displayIdentities: [CGDirectDisplayID: (vendor: UInt32, model: UInt32)] = [:]
 
-        let main = CGMainDisplayID()
-        state.asleep = CGDisplayIsAsleep(main) != 0
-
+    /// Les écrans en ligne, chacun avec son état de veille, et le principal. Aucune interprétation ici : le
+    /// cœur (`DisplayTopology`) reconnaît l'écran fantôme et décide de l'extinction. Une énumération qui échoue
+    /// rend une liste vide et `enumerationOK` faux : rien n'est prouvé.
+    func displaySnapshot() -> DisplaySnapshot {
         var count: UInt32 = 0
-        guard CGGetOnlineDisplayList(0, nil, &count) == .success else { return state }
-        state.enumerationOK = true
-        state.onlineCount = Int(count)
-        guard count > 0 else { return state }
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success else {
+            return DisplaySnapshot(displays: [], enumerationOK: false)
+        }
+        guard count > 0 else { return DisplaySnapshot(displays: [], enumerationOK: true) }
 
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return state }
-        state.onlineCount = Int(count)
-
-        // Repli : si l'écran principal ne rapporte rien mais que tous les écrans
-        // en ligne dorment, l'affichage est bien éteint.
-        if !state.asleep, count > 0 {
-            let allAsleep = ids.prefix(Int(count)).allSatisfy { CGDisplayIsAsleep($0) != 0 }
-            if allAsleep { state.asleep = true }
+        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else {
+            return DisplaySnapshot(displays: [], enumerationOK: false)
         }
-        return state
+        let online = Array(ids.prefix(Int(count)))
+
+        let main = CGMainDisplayID()
+        let displays = online.map { id -> DisplayInfo in
+            let identity = displayIdentities[id] ?? (vendor: CGDisplayVendorNumber(id), model: CGDisplayModelNumber(id))
+            displayIdentities[id] = identity
+            return DisplayInfo(id: id, vendor: identity.vendor, model: identity.model,
+                               asleep: CGDisplayIsAsleep(id) != 0, isMain: id == main)
+        }
+        displayIdentities = displayIdentities.filter { online.contains($0.key) }
+        return DisplaySnapshot(displays: displays, enumerationOK: true)
     }
 
     // MARK: - Saisie sécurisée

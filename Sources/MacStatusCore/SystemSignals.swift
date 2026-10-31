@@ -18,17 +18,26 @@ public struct SessionState {
     }
 }
 
-/// État des écrans.
+/// État des écrans, tiré d'un instantané par `DisplayTopology.state`.
 public struct DisplayState {
+    /// L'affichage est éteint. Jamais vrai sans écran physique.
     public var asleep: Bool
+    /// Écrans physiques en ligne : l'écran fantôme du système ne compte pas.
     public var onlineCount: Int
     /// L'énumération des écrans en ligne a réussi : sinon `onlineCount` ne prouve rien.
     public var enumerationOK: Bool
+    /// Ce qui fonde `asleep` : `main`, `all`, `screensDidSleep`, `awake`, ou `none` (aucun écran physique).
+    public var evidence: String
+    /// Tous les écrans en ligne, fantôme compris.
+    public var displays: [DisplayInfo]
 
-    public init(asleep: Bool = false, onlineCount: Int = 0, enumerationOK: Bool = false) {
+    public init(asleep: Bool = false, onlineCount: Int = 0, enumerationOK: Bool = false,
+                evidence: String = "none", displays: [DisplayInfo] = []) {
         self.asleep = asleep
         self.onlineCount = onlineCount
         self.enumerationOK = enumerationOK
+        self.evidence = evidence
+        self.displays = displays
     }
 }
 
@@ -48,7 +57,8 @@ public struct SaverHost: Equatable {
 /// l'exécutable (IOKit, CoreGraphics, Carbon) ; les tests injectent un faux.
 public protocol SystemSignals: AnyObject {
     func session() -> SessionState
-    func display() -> DisplayState
+    /// Les écrans en ligne et leur veille, sans interprétation : `DisplayTopology` reconnaît le fantôme.
+    func displaySnapshot() -> DisplaySnapshot
     /// Secondes depuis la dernière activité clavier ou souris, -1 si indisponible.
     func hidIdleSeconds() -> Double
     func secureInputActive() -> Bool

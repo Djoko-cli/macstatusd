@@ -119,10 +119,38 @@ final class TestScheduler: Scheduler {
     }
 }
 
+/// Écrans d'essai (identifiants et valeurs inventés). Le fantôme porte le fournisseur et le modèle que le
+/// système donne à l'écran fantôme (`DisplayTopology`) ; l'écran physique, un fournisseur et un modèle quelconques.
+extension DisplayInfo {
+    static func physique(_ id: UInt32, asleep: Bool = false, main: Bool = false) -> DisplayInfo {
+        DisplayInfo(id: id, vendor: 0x1234, model: 0x5678, asleep: asleep, isMain: main)
+    }
+
+    static func fantome(_ id: UInt32, asleep: Bool = false, main: Bool = false) -> DisplayInfo {
+        DisplayInfo(id: id, vendor: DisplayTopology.placeholderVendor, model: DisplayTopology.placeholderModel,
+                    asleep: asleep, isMain: main)
+    }
+}
+
 /// Signaux système simulés : un champ modifiable par méthode du protocole.
 final class FakeSignals: SystemSignals {
     var etatSession = SessionState(locked: false, loggedIn: true, onConsole: true, evidence: "unlocked")
-    var etatEcran = DisplayState(asleep: false, onlineCount: 1, enumerationOK: true)
+    /// Écrans en ligne tels que le système les rapporte : par défaut, un écran physique principal éveillé.
+    var ecrans = DisplaySnapshot(displays: [.physique(1, main: true)], enumerationOK: true)
+    /// Raccourci des tests écrits avant la topologie : `DisplayState(asleep: a, onlineCount: n, enumerationOK: ok)`
+    /// donne n écrans physiques `0x1`…, le premier principal, tous endormis si `a`. La lecture rend l'état que la
+    /// topologie tire de `ecrans` (sans avis d'extinction). Zéro écran ne peut pas être endormi : `asleep` se
+    /// perd alors à l'écriture.
+    var etatEcran: DisplayState {
+        get { DisplayTopology.state(ecrans, screensAsleepNotified: false) }
+        set {
+            ecrans = DisplaySnapshot(
+                displays: (0..<max(0, newValue.onlineCount)).map { rang in
+                    .physique(UInt32(rang + 1), asleep: newValue.asleep, main: rang == 0)
+                },
+                enumerationOK: newValue.enumerationOK)
+        }
+    }
     var inactiviteHID: Double = 0
     var saisieSecurisee = false
     var pidEconomiseur: Int32 = 0
@@ -149,7 +177,7 @@ final class FakeSignals: SystemSignals {
         lecturesSession += 1
         return etatSession
     }
-    func display() -> DisplayState { etatEcran }
+    func displaySnapshot() -> DisplaySnapshot { ecrans }
     func hidIdleSeconds() -> Double { inactiviteHID }
     func secureInputActive() -> Bool { saisieSecurisee }
     func saverEnginePID() -> Int32 {

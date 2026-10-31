@@ -7,8 +7,13 @@ public struct Facts {
     public var systemAsleep = false
     /// Écran physiquement éteint (display sleep).
     public var displayAsleep = false
+    /// Écrans physiques en ligne : l'écran fantôme du système ne compte pas.
     public var onlineDisplays = 0
     public var displayEnumerationOK = false
+    /// Ce qui fonde `displayAsleep` : `main`, `all`, `screensDidSleep`, `awake`, ou `none` (aucun écran physique).
+    public var displayEvidence = "none"
+    /// Tous les écrans en ligne, fantôme compris (résumé dans `asDictionary`).
+    public var displays: [DisplayInfo] = []
     /// Économiseur seul à l'écran. Faux dès qu'une activité utilisateur l'a
     /// recouvert du panneau d'authentification (voir `ScreenSaverOracle`).
     public var screenSaverActive = false
@@ -38,6 +43,8 @@ public struct Facts {
             "display_asleep": displayAsleep,
             "online_displays": onlineDisplays,
             "display_enumeration_ok": displayEnumerationOK,
+            "display_evidence": displayEvidence,
+            "displays": DisplayTopology.summary(displays),
             "screensaver_active": screenSaverActive,
             "screensaver_evidence": screenSaverEvidence,
             "screensaver_running": screenSaverRunning,

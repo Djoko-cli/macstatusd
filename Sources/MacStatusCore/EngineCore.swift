@@ -6,9 +6,11 @@ import Foundation
 ///
 /// 1. commande HomeKit en cours et non encore confirmée → état demandé ;
 /// 2. veille système → OFF ;
-/// 3. écran éteint → OFF ;
+/// 3. écran éteint (un écran physique endormi, voir `DisplayTopology`) → OFF ;
 /// 4. économiseur d'écran actif → OFF ;
-/// 5. aucun écran connecté → OFF ;
+/// 5. aucun écran physique → OFF, mais seulement `noDisplayHoldSeconds` (5 s) après la première lecture sans
+///    écran : au réveil capot fermé ou dock débranché, macOS ne montre d'abord que l'écran fantôme, et l'état
+///    publié tient d'ici que les écrans physiques reviennent (`displays-reconfiguring`) ;
 /// 6. (option) session verrouillée sans champ d'authentification → OFF ;
 /// 7. sinon → ON (bureau, application, écran de verrouillage visible,
 ///    fenêtre de login : dans tous ces cas une UI est accessible).
@@ -62,6 +64,27 @@ public final class EngineCore {
     static let notificationRefreshMinInterval: Double = 0.25
     /// Instant monotone de la dernière relecture due à une de ces notifications ; `nil` : aucune encore.
     private var lastNotificationRefreshAt: Double?
+
+    // MARK: Écrans (plan 3, tâche 4)
+
+    /// Durée pendant laquelle l'état publié tient quand l'énumération réussit mais ne montre plus aucun écran
+    /// physique (seul le fantôme du système reste). Ensuite, `no-display`.
+    static let noDisplayHoldSeconds: Double = 5
+    /// Instant monotone de la première lecture réussie sans écran physique de la série en cours ; `nil` : des
+    /// écrans physiques sont là. Une énumération ratée ne le démarre pas et ne le remet pas à zéro.
+    private var noPhysicalDisplaySince: Double?
+    /// Le système a annoncé `screensDidSleep` et un écran physique dort encore. Effacé au réveil des écrans, au
+    /// réveil du système, à la resynchronisation, et dès qu'aucun écran physique n'est endormi.
+    private var screensAsleepNotified = false
+    /// Ce qui distingue deux topologies pour le journal : l'ensemble des écrans, le principal, la présence du
+    /// fantôme. L'état de veille n'en fait pas partie.
+    private struct DisplayLayout: Equatable {
+        let ids: [UInt32]
+        let mainID: UInt32?
+        let hasPlaceholder: Bool
+    }
+    /// Dernière topologie journalisée ; `nil` avant la première lecture réussie.
+    private var loggedDisplayLayout: DisplayLayout?
 
     /// Marge de couverture d'un trou de scrutation par une veille : deux périodes de scrutation,
     /// entre 1 et 3 s (bien moins que le seuil de trou, 10 s au moins).
@@ -342,10 +365,16 @@ public final class EngineCore {
         next.onConsole = session.onConsole
         next.lockEvidence = session.evidence
 
-        let display = signals.display()
+        let display = DisplayTopology.state(signals.displaySnapshot(), screensAsleepNotified: screensAsleepNotified)
+        if screensAsleepNotified, !display.displays.contains(where: { !$0.isPlaceholder && $0.asleep }) {
+            screensAsleepNotified = false
+        }
+        noteDisplays(display)
         next.displayAsleep = display.asleep
         next.onlineDisplays = display.onlineCount
         next.displayEnumerationOK = display.enumerationOK
+        next.displayEvidence = display.evidence
+        next.displays = display.displays
 
         next.hidIdleSeconds = signals.hidIdleSeconds()
 
@@ -373,13 +402,39 @@ public final class EngineCore {
         updateAuthorization()
     }
 
+    /// Suit les écrans d'une lecture à l'autre : le délai de `displays-reconfiguring`, et la ligne INFO
+    /// « écrans : <résumé> » quand l'ensemble des écrans, l'écran principal ou la présence du fantôme change (la
+    /// première lecture est journalisée aussi). Un écran qui s'endort ou se réveille ne change rien. Une
+    /// énumération ratée ne prouve rien : ni délai, ni journal.
+    private func noteDisplays(_ display: DisplayState) {
+        guard display.enumerationOK else { return }
+        if display.onlineCount == 0 {
+            if noPhysicalDisplaySince == nil { noPhysicalDisplaySince = clock.monotonic() }
+        } else {
+            noPhysicalDisplaySince = nil
+        }
+        let layout = DisplayLayout(ids: display.displays.map(\.id).sorted(),
+                                   mainID: display.displays.first(where: \.isMain)?.id,
+                                   hasPlaceholder: display.displays.contains(where: \.isPlaceholder))
+        guard layout != loggedDisplayLayout else { return }
+        loggedDisplayLayout = layout
+        logInfo("écrans : \(DisplayTopology.summary(display.displays))")
+    }
+
     // MARK: - Décision
 
     private func factsVerdict() -> (state: Bool, reason: String) {
         if facts.systemAsleep { return (false, "system-asleep") }
         if facts.displayAsleep { return (false, "display-asleep") }
         if facts.screenSaverActive { return (false, "screensaver:\(facts.screenSaverEvidence)") }
-        if facts.displayEnumerationOK && facts.onlineDisplays == 0 { return (false, "no-display") }
+        if facts.displayEnumerationOK && facts.onlineDisplays == 0 {
+            // Plus d'écran physique, mais le fantôme du système reste : les écrans reviennent d'eux-mêmes au
+            // réveil capot fermé ou dock débranché. L'état publié tient d'ici là.
+            if let since = noPhysicalDisplaySince, clock.monotonic() - since < Self.noDisplayHoldSeconds {
+                return (published ?? false, "displays-reconfiguring")
+            }
+            return (false, "no-display")
+        }
         if config.requireAuthUIWhenLocked && facts.sessionLocked && !facts.secureInputActive {
             return (false, "locked-without-auth-ui")
         }
@@ -655,6 +710,7 @@ public final class EngineCore {
                 lastSleep = sleep
             }
             systemAsleep = false
+            screensAsleepNotified = false
             saver.noteSystemWake()
             refreshFacts()
             // Après une veille longue, Homebridge a pu perdre l'état : on le force. Après une
@@ -694,7 +750,16 @@ public final class EngineCore {
             evaluate(immediate: false)
         case .screenLocked, .screenUnlocked:
             refreshAfterNotification(now: clock.monotonic())
-        case .screensDidSleep, .screensDidWake, .sessionActive, .sessionInactive:
+        case .screensDidSleep:
+            // Le système le dit : un écran physique au moins s'est endormi, même si un écran virtuel veille encore.
+            screensAsleepNotified = true
+            refreshFacts()
+            evaluate(immediate: false)
+        case .screensDidWake:
+            screensAsleepNotified = false
+            refreshFacts()
+            evaluate(immediate: false)
+        case .sessionActive, .sessionInactive:
             refreshFacts()
             evaluate(immediate: false)
         }
@@ -900,6 +965,7 @@ public final class EngineCore {
 
     public func resync() {
         guard !isShutDown else { return }
+        screensAsleepNotified = false
         if sleepInProgress {
             // Une veille annoncée sans réveil : le Mac s'endort, `system_asleep` reste vrai.
             logDebug("resynchronisation pendant une veille annoncée : veille gardée")
@@ -961,6 +1027,11 @@ public final class EngineCore {
             "publishing_reason": authorizationVerdict().reason,
             "saver_detection": saverDetection,
             "saver_dismissal": actions.screenSaverDismissal.rawValue,
+            "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
+            "display_list": facts.displays.map { display -> [String: Any] in
+                ["id": display.idText, "main": display.isMain, "asleep": display.asleep,
+                 "placeholder": display.isPlaceholder]
+            },
         ]
         if isShutDown { dict["shutting_down"] = true }
         if let lastTransitionAt {
@@ -993,7 +1064,7 @@ public final class EngineCore {
     private func factsSummary() -> String { summary(of: facts) }
 
     private func summary(of facts: Facts) -> String {
-        "sleep=\(facts.systemAsleep ? 1 : 0) display_off=\(facts.displayAsleep ? 1 : 0) "
+        "sleep=\(facts.systemAsleep ? 1 : 0) display_off=\(facts.displayAsleep ? 1 : 0)(\(facts.displayEvidence)) "
             + "saver=\(facts.screenSaverActive ? 1 : 0)(\(facts.screenSaverEvidence)) "
             + "saver_running=\(facts.screenSaverRunning ? 1 : 0) "
             + "hid_idle=\(String(format: "%.1f", facts.hidIdleSeconds)) "

@@ -98,13 +98,24 @@ final class EngineCoreTests: XCTestCase {
         let verrouille: (FakeSignals) -> Void = { sansSession($0); $0.etatSession.locked = true }
         let aucunEcran: (FakeSignals) -> Void = { verrouille($0); $0.etatEcran.onlineCount = 0 }
         let economiseur: (FakeSignals) -> Void = { aucunEcran($0); $0.pidEconomiseur = 4242 }
-        let ecranEteint: (FakeSignals) -> Void = { economiseur($0); $0.etatEcran.asleep = true }
+        // « Aucun écran physique » et « écran éteint » s'excluent : l'écran éteint est un écran physique endormi.
+        let ecranEteint: (FakeSignals) -> Void = {
+            economiseur($0)
+            $0.etatEcran = DisplayState(asleep: true, onlineCount: 1, enumerationOK: true)
+        }
 
-        func verdict(veille: Bool = false, _ preparer: (FakeSignals) -> Void) -> (etat: Bool, raison: String) {
+        /// `attente` : secondes entre deux lectures. « Aucun écran physique » ne vaut `no-display` qu'après 5 s
+        /// (`displays-reconfiguring` jusque-là) ; la première lecture démarre le délai.
+        func verdict(veille: Bool = false, attente: Double = 0,
+                     _ preparer: (FakeSignals) -> Void) -> (etat: Bool, raison: String) {
             signaux = Self.signauxDeBureau()
             preparer(signaux)
             let core = moteur()
             if veille { core.willSleep {} }
+            if attente > 0 {
+                _ = core.inspect()
+                horloge.advance(attente)
+            }
             let resultat = core.inspect()
             return (resultat.state, resultat.reason)
         }
@@ -118,7 +129,7 @@ final class EngineCoreTests: XCTestCase {
         let actif = verdict(economiseur)
         XCTAssertEqual(actif.etat, false); XCTAssertTrue(actif.raison.hasPrefix("screensaver:"), actif.raison)
 
-        let sansEcran = verdict(aucunEcran)
+        let sansEcran = verdict(attente: 5, aucunEcran)
         XCTAssertEqual(sansEcran.etat, false); XCTAssertEqual(sansEcran.raison, "no-display")
 
         // Sans énumération réussie, zéro écran ne prouve rien.
@@ -142,10 +153,17 @@ final class EngineCoreTests: XCTestCase {
         var config = Config()
         config.requireAuthUIWhenLocked = true
 
-        func verdict(_ config: Config, preparer: (FakeSignals) -> Void) -> (etat: Bool, raison: String) {
+        /// `attente` : secondes entre deux lectures (« aucun écran physique » ne vaut `no-display` qu'après 5 s).
+        func verdict(_ config: Config, attente: Double = 0,
+                     preparer: (FakeSignals) -> Void) -> (etat: Bool, raison: String) {
             signaux = Self.signauxDeBureau()
             preparer(signaux)
-            let resultat = moteur(config).inspect()
+            let core = moteur(config)
+            if attente > 0 {
+                _ = core.inspect()
+                horloge.advance(attente)
+            }
+            let resultat = core.inspect()
             return (resultat.state, resultat.reason)
         }
 
@@ -154,7 +172,7 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(sansChamp.etat, false); XCTAssertEqual(sansChamp.raison, "locked-without-auth-ui")
 
         // Priorité inférieure à « aucun écran » : celle-ci l'emporte.
-        let sansEcran = verdict(config) { $0.etatSession.locked = true; $0.etatEcran.onlineCount = 0 }
+        let sansEcran = verdict(config, attente: 5) { $0.etatSession.locked = true; $0.etatEcran.onlineCount = 0 }
         XCTAssertEqual(sansEcran.etat, false); XCTAssertEqual(sansEcran.raison, "no-display")
 
         // Priorité supérieure à « écran de verrouillage visible » : avec le champ
@@ -2538,5 +2556,321 @@ final class EngineCoreTests: XCTestCase {
         let repli = moteur()
         repli.start()
         XCTAssertEqual(repli.statusSnapshot()["saver_dismissal"] as? String, "killall ScreenSaverEngine")
+    }
+
+    // MARK: - Écrans : fantôme, extinction, topologie (plan 3, tâche 4)
+
+    /// Instantané d'une énumération réussie.
+    private func lister(_ ecrans: DisplayInfo...) -> DisplaySnapshot {
+        DisplaySnapshot(displays: ecrans, enumerationOK: true)
+    }
+
+    /// Lignes INFO de topologie du journal.
+    private func lignesEcrans() -> [String] {
+        journal.lines.filter { $0.0 == .info && $0.1.hasPrefix("écrans :") }.map { $0.1 }
+    }
+
+    /// Un virtuel principal (fournisseur `0x4321`, que rien ne distingue d'un écran physique) qui reste éveillé
+    /// quand l'écran physique s'endort.
+    private var virtuelPrincipal: DisplayInfo {
+        DisplayInfo(id: 1, vendor: 0x4321, model: 0x5678, asleep: false, isMain: true)
+    }
+
+    /// Point de vigilance 5 : au réveil capot fermé ou dock débranché, macOS ne montre plus que l'écran fantôme.
+    /// L'état publié tient 5 s (`displays-reconfiguring`) : les écrans physiques reviennent d'eux-mêmes. Passé ce
+    /// délai, plus aucun écran n'est là : `no-display`, publié après le lissage de 800 ms.
+    func test_ecranFantomeSeul_tient5sPuisNoDisplay() {
+        XCTAssertEqual(EngineCore.noDisplayHoldSeconds, 5)
+        let core = moteur()
+        core.start()
+        XCTAssertTrue(core.currentState)
+
+        signaux.ecrans = lister(.fantome(9, main: true))
+        scruter(core, 0.5)  // première lecture sans écran physique : le délai démarre
+        let premiere = core.inspect()
+        XCTAssertEqual(premiere.reason, "displays-reconfiguring")
+        XCTAssertEqual(premiere.facts.onlineDisplays, 0)
+        XCTAssertTrue(premiere.facts.displayEnumerationOK)
+        XCTAssertEqual(core.statusSnapshot()["facts_verdict"] as? String, "1", "le verdict des faits tient l'ON")
+
+        for _ in 0..<9 { scruter(core, 0.5) }  // 4,5 s après la première lecture
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "displays-reconfiguring")
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false)], "rien n'est publié")
+
+        scruter(core, 0.5)  // 5,0 s : le délai est écoulé, le lissage de l'OFF commence
+        XCTAssertEqual(core.inspect().reason, "no-display")
+        XCTAssertEqual(core.statusSnapshot()["facts_verdict"] as? String, "0")
+        XCTAssertTrue(core.currentState, "OFF attend le lissage de 800 ms")
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState)
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "no-display")
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
+                                               Publication(etat: false, force: false)])
+    }
+
+    /// Les écrans physiques reviennent avant la fin du délai : l'état publié n'a jamais bougé, aucun OFF.
+    func test_ecranFantomeSeul_ecransPhysiquesDeRetourAvant5s_aucunOFF() {
+        let core = moteur()
+        core.start()
+        signaux.ecrans = lister(.fantome(9, main: true))
+        for _ in 0..<8 { scruter(core, 0.5) }  // 3,5 s après la première lecture
+        XCTAssertEqual(core.inspect().reason, "displays-reconfiguring")
+
+        signaux.ecrans = lister(.physique(1, main: true), .fantome(9))
+        for _ in 0..<20 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "desktop-ui")
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false)])
+
+        // Le délai est remis à zéro : un nouveau fantôme seul repart de 5 s.
+        signaux.ecrans = lister(.fantome(9, main: true))
+        scruter(core, 0.5)
+        XCTAssertEqual(core.inspect().reason, "displays-reconfiguring")
+    }
+
+    /// Le Mac se réveille sur le fantôme seul : l'OFF de la veille tient (`displays-reconfiguring`) jusqu'au
+    /// retour des écrans physiques, qui ramènent l'ON. Jamais d'ON sur le fantôme.
+    func test_ecranFantomeAuReveil_resteOFFJusquAuxEcransPhysiques() {
+        let core = moteur()
+        core.start()
+        core.willSleep {}
+        XCTAssertFalse(core.currentState, "OFF de veille")
+
+        horloge.advance(1)
+        signaux.ecrans = lister(.fantome(9, main: true))
+        core.handle(.systemDidWake)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "displays-reconfiguring")
+        for _ in 0..<8 { scruter(core, 0.5) }  // 4 s sur le fantôme seul
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "displays-reconfiguring")
+        XCTAssertEqual(publieur.publications.filter(\.etat).count, 1, "aucun ON depuis l'état initial")
+
+        // Les écrans physiques reviennent : ON après le lissage de 300 ms.
+        signaux.ecrans = lister(.physique(1, main: true), .physique(2), .fantome(9))
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publieur.publications.last, Publication(etat: true, force: false))
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "desktop-ui")
+    }
+
+    /// Point de vigilance 5, second volet : le fantôme est l'écran principal et reste éveillé, mais les écrans
+    /// physiques s'éteignent : `display-asleep`.
+    func test_fantomePrincipal_ecransPhysiquesEteints_moteurDitDisplayAsleep() {
+        signaux.ecrans = lister(.fantome(9, main: true), .physique(1), .physique(2))
+        let core = moteur()
+        core.start()
+        XCTAssertTrue(core.currentState)
+
+        signaux.ecrans = lister(.fantome(9, main: true), .physique(1, asleep: true), .physique(2, asleep: true))
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "display-asleep")
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "all")
+        XCTAssertTrue(journalContient("display_off=1(all)"), "les faits journalisés donnent la preuve")
+    }
+
+    /// L'avis `screensDidSleep` départage un virtuel resté éveillé : tant qu'un écran physique dort, l'affichage
+    /// est éteint. Dès que plus aucun écran physique ne dort, l'avis est effacé : s'il se rendort sans nouvel
+    /// avis, rien ne le retient plus.
+    func test_avisEcransEteints_effaceQuandUnEcranSeReveille() {
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        let core = moteur()
+        core.start()
+        XCTAssertTrue(core.currentState)
+
+        // L'écran physique s'endort, sans avis : le virtuel principal éveillé garde l'état ON.
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "awake")
+
+        // L'avis du système départage : écran éteint, OFF après le lissage.
+        core.handle(.screensDidSleep)
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep")
+        XCTAssertTrue(core.inspect().facts.displayAsleep)
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "display-asleep")
+
+        // Plus aucun écran physique endormi : l'avis est effacé, l'ON revient.
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState)
+
+        // Il se rendort sans nouvel avis : l'ancien avis ne revient pas.
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "awake")
+    }
+
+    /// L'avis s'efface aussi sur le réveil des écrans, sur le réveil du système et à la resynchronisation, même
+    /// si un écran physique dort encore : l'avis dit alors une chose périmée.
+    func test_avisEcransEteints_effaceParLesReveilsEtLaResynchronisation() {
+        let effaceurs: [(String, (EngineCore) -> Void)] = [
+            ("réveil des écrans", { $0.handle(.screensDidWake) }),
+            ("réveil du système", { $0.handle(.systemDidWake) }),
+            ("resynchronisation", { $0.resync() }),
+        ]
+        for (nom, effacer) in effaceurs {
+            signaux = Self.signauxDeBureau()
+            signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+            let core = moteur()
+            core.start()
+            XCTAssertEqual(core.inspect().facts.displayEvidence, "awake", nom)
+            core.handle(.screensDidSleep)
+            XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep", nom)
+
+            effacer(core)
+            XCTAssertEqual(core.inspect().facts.displayEvidence, "awake", "\(nom) : l'avis est effacé")
+        }
+    }
+
+    /// Une ligne INFO « écrans : <résumé> » quand l'ensemble des écrans, l'écran principal ou la présence du
+    /// fantôme change ; la première lecture est journalisée une fois. Aucune quand un écran s'endort ou se réveille,
+    /// quand l'ordre de la liste change seul, ni pendant une énumération qui échoue.
+    func test_topologie_journaliseeAuChangement() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(lignesEcrans(), ["écrans : 0x1*"], "première lecture, une seule fois")
+        for _ in 0..<3 { scruter(core, 0.5) }
+        XCTAssertEqual(lignesEcrans().count, 1, "rien ne change : rien n'est journalisé")
+
+        // Un écran s'ajoute.
+        signaux.ecrans = lister(.physique(1, main: true), .physique(2))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans(), ["écrans : 0x1*", "écrans : 0x1*,0x2"])
+
+        // Un écran s'endort, puis tous, puis tous se réveillent : aucune ligne.
+        signaux.ecrans = lister(.physique(1, main: true), .physique(2, asleep: true))
+        scruter(core, 0.5)
+        signaux.ecrans = lister(.physique(1, asleep: true, main: true), .physique(2, asleep: true))
+        scruter(core, 0.5)
+        core.handle(.screensDidSleep)
+        signaux.ecrans = lister(.physique(1, main: true), .physique(2))
+        core.handle(.screensDidWake)
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().count, 2, "endormir et réveiller ne journalise rien")
+
+        // Le fantôme apparaît.
+        signaux.ecrans = lister(.physique(1, main: true), .physique(2), .fantome(9))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().last, "écrans : 0x1*,0x2,0x9v")
+
+        // L'écran principal change.
+        signaux.ecrans = lister(.physique(1), .physique(2, main: true), .fantome(9))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().last, "écrans : 0x1,0x2*,0x9v")
+        XCTAssertEqual(lignesEcrans().count, 4)
+
+        // Même ensemble dans un autre ordre : rien.
+        signaux.ecrans = lister(.fantome(9), .physique(2, main: true), .physique(1))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().count, 4, "l'ensemble des écrans est comparé, pas l'ordre de la liste")
+
+        // Mêmes identifiants, même principal, mais l'écran 9 n'est plus le fantôme : sa présence change. Puis il
+        // le redevient.
+        signaux.ecrans = lister(.physique(9), .physique(2, main: true), .physique(1))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().last, "écrans : 0x9,0x2*,0x1")
+        signaux.ecrans = lister(.fantome(9), .physique(2, main: true), .physique(1))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().last, "écrans : 0x9v,0x2*,0x1")
+        XCTAssertEqual(lignesEcrans().count, 6)
+
+        // Une énumération ratée ne prouve rien : ni ligne, ni topologie oubliée.
+        signaux.ecrans = DisplaySnapshot(displays: [], enumerationOK: false)
+        scruter(core, 0.5)
+        signaux.ecrans = lister(.fantome(9), .physique(2, main: true), .physique(1))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().count, 6)
+
+        // Le fantôme disparaît.
+        signaux.ecrans = lister(.physique(1), .physique(2, main: true))
+        scruter(core, 0.5)
+        XCTAssertEqual(lignesEcrans().last, "écrans : 0x1,0x2*")
+        XCTAssertEqual(lignesEcrans().count, 7)
+    }
+
+    /// Une énumération qui échoue ne prouve rien : elle ne démarre pas le délai de 5 s, et ne le remet pas à zéro.
+    func test_enumerationRatee_neDemarreNiNeRemetAZeroLeDelaiDesEcrans() {
+        let echec = DisplaySnapshot(displays: [], enumerationOK: false)
+
+        // Elle ne le démarre pas : l'état tient (ON, rien n'est prouvé), le délai ne court qu'à la première
+        // lecture réussie sans écran physique.
+        signaux.ecrans = echec
+        let core = moteur()
+        core.start()
+        for _ in 0..<8 { scruter(core, 0.5) }  // 4 s d'échecs
+        XCTAssertEqual(core.inspect().reason, "desktop-ui")
+        XCTAssertTrue(core.currentState)
+        signaux.ecrans = lister(.fantome(9, main: true))
+        scruter(core, 0.5)  // le délai démarre ici
+        for _ in 0..<8 { scruter(core, 0.5) }  // 4 s plus tard, 8,5 s après le premier échec
+        XCTAssertEqual(core.inspect().reason, "displays-reconfiguring")
+
+        // Elle ne le remet pas à zéro : 5 s après la première lecture sans écran physique, c'est fini.
+        signaux = Self.signauxDeBureau()
+        let autre = moteur()
+        autre.start()
+        signaux.ecrans = lister(.fantome(9, main: true))
+        scruter(autre, 0.5)  // le délai démarre ici
+        for _ in 0..<4 { scruter(autre, 0.5) }  // 2 s plus tard
+        signaux.ecrans = echec
+        for _ in 0..<3 { scruter(autre, 0.5) }  // 3,5 s plus tard : lectures qui échouent
+        XCTAssertEqual(autre.inspect().reason, "desktop-ui", "énumération ratée : rien n'est prouvé")
+        signaux.ecrans = lister(.fantome(9, main: true))
+        scruter(autre, 0.5)  // 4,0 s
+        XCTAssertEqual(autre.inspect().reason, "displays-reconfiguring")
+        scruter(autre, 0.5)  // 4,5 s
+        XCTAssertEqual(autre.inspect().reason, "displays-reconfiguring")
+        scruter(autre, 0.5)  // 5,0 s
+        XCTAssertEqual(autre.inspect().reason, "no-display", "le délai a couru pendant l'échec")
+    }
+
+    /// `/status` donne la topologie : l'écran principal, la liste des écrans (fantôme compris) et, dans les faits,
+    /// la preuve d'extinction, le résumé et le nombre d'écrans physiques.
+    func test_statusDonneLaTopologie() {
+        signaux.ecrans = lister(.physique(0x5, main: true), .physique(0x2, asleep: true), .fantome(0x9))
+        let core = moteur()
+        core.start()
+        let status = core.statusSnapshot()
+
+        XCTAssertEqual(status["main_display"] as? String, "0x5")
+        let liste = status["display_list"] as? [[String: Any]]
+        XCTAssertEqual(liste?.count, 3)
+        let attendue: [[String: Any]] = [
+            ["id": "0x5", "main": true, "asleep": false, "placeholder": false],
+            ["id": "0x2", "main": false, "asleep": true, "placeholder": false],
+            ["id": "0x9", "main": false, "asleep": false, "placeholder": true],
+        ]
+        XCTAssertEqual(liste.map { $0 as NSArray }, attendue as NSArray)
+
+        let faits = status["facts"] as? [String: Any]
+        XCTAssertEqual(faits?["displays"] as? String, "0x5*,0x2z,0x9v")
+        XCTAssertEqual(faits?["display_evidence"] as? String, "awake")
+        XCTAssertEqual(faits?["online_displays"] as? Int, 2, "le fantôme n'est pas compté")
+        XCTAssertEqual(faits?["display_asleep"] as? Bool, false)
+
+        // Aucun écran principal : « none », comme pour une liste vide.
+        signaux.ecrans = lister(.physique(0x2), .fantome(0x9))
+        _ = core.inspect()
+        XCTAssertEqual(core.statusSnapshot()["main_display"] as? String, "none")
+        signaux.ecrans = lister()
+        _ = core.inspect()
+        let vide = core.statusSnapshot()
+        XCTAssertEqual(vide["main_display"] as? String, "none")
+        XCTAssertEqual((vide["display_list"] as? [[String: Any]])?.count, 0)
+        XCTAssertEqual((vide["facts"] as? [String: Any])?["displays"] as? String, "none")
     }
 }
