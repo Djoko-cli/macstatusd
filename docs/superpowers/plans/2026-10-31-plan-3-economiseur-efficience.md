@@ -239,7 +239,7 @@ noteSystemWake : oublie l'attente de didstart ; une session établie reste, relu
 - `start()` : si `signals.saverSessionFlag() == nil`, WARN « économiseur : SACScreenSaverIsRunning
   indisponible → repli sur l'hôte apparu après didstart ; les paysages aériens ne seront pas détectés ».
 
-- [ ] **Étape 1 : tests de l'oracle** (`ScreenSaverOracleTests`, réécrit). Garder les cas de l'ancien
+- [x] **Étape 1 : tests de l'oracle** (`ScreenSaverOracleTests`, réécrit). Garder les cas de l'ancien
   scénario nominal encore valables avec la source `process` (PID 4242), en ajoutant une seconde lecture
   là où la fin de session est attendue. Retirer les deux cas de fenêtre. Ajouter :
   - `test_sacVrai_sansActivite_economiseurSeul` : preuve `sac`, `active` ;
@@ -272,7 +272,7 @@ noteSystemWake : oublie l'attente de didstart ; une session établie reste, relu
 
   Ces cas couvrent les scénarios 1 à 7 de F67. Le 8 (fenêtres) devient sans objet : il est remplacé par
   les fonctions pures des tâches 1 et 4.
-- [ ] **Étape 2 : tests du moteur et de la config.**
+- [x] **Étape 2 : tests du moteur et de la config.**
   - `test_economiseurDInactivite_publieOFF` (F03) : bureau, `didstart`, SAC vrai, inactivité de 30 s →
     OFF `screensaver:sac` après le lissage ;
   - `test_verrouillageSimple_sansSAC_resteSurLEcranDeVerrouillage` ;
@@ -282,12 +282,12 @@ noteSystemWake : oublie l'attente de didstart ; une session établie reste, relu
   - `test_sansSAC_avertissementAuDemarrage` ;
   - `test_statusDitLaSourceDeDetection` ;
   - `test_redisplayParDefaut30s` (`ConfigTests`).
-- [ ] **Étape 3 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
-- [ ] **Étape 4 : mettre en œuvre.**
-- [ ] **Étape 5 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`, puis le selftest des
+- [x] **Étape 3 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
+- [x] **Étape 4 : mettre en œuvre.**
+- [x] **Étape 5 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`, puis le selftest des
   contraintes globales** — attendu : OK. La section du faux économiseur est sautée, comme toujours.
   `--once` en lecture seule : `facts.screensaver_evidence` vaut `none`, et `saver_detection` `sac`.
-- [ ] **Étape 6 : commit** « Économiseur : session par SAC, notifications corroborées, panneau de 30 s ».
+- [x] **Étape 6 : commit** « Économiseur : session par SAC, notifications corroborées, panneau de 30 s ».
 
 ### Tâche 3 : écarter l'économiseur par la commande du système
 
