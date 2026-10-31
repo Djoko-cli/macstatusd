@@ -10,9 +10,11 @@ import MacStatusCore
 /// une source de repli indépendante :
 ///
 /// - verrouillage : IORegistry (`IOConsoleLocked` / `IOConsoleUsers`) — disponible
-///   même hors session graphique — puis `CGSessionCopyCurrentDictionary`.
+///   même hors session graphique. `CGSessionCopyCurrentDictionary` (un aller-retour avec le serveur de fenêtres)
+///   n'est lue que si le registre ne suffit pas, selon `ConsoleOwnership.cgSessionRole`.
 /// - écrans : les écrans en ligne et leur veille (`CGGetOnlineDisplayList`, `CGDisplayIsAsleep`), avec leur
 ///   fournisseur et leur modèle (lus une fois par identifiant) pour que le cœur reconnaisse l'écran fantôme.
+/// - inactivité : `HIDIdleTime` du service `IOHIDSystem`, résolu une fois et gardé.
 /// - champ d'authentification : `IsSecureEventInputEnabled`.
 /// - économiseur : `SACScreenSaverIsRunning` (login.framework, chargé une fois) ; `ScreenSaverEngine` et
 ///   ses hôtes se cherchent dans les process de l'utilisateur seulement, jamais ceux des autres comptes.
@@ -28,6 +30,7 @@ final class LiveSystemSignals: SystemSignals {
 
     deinit {
         if registryRoot != 0 { IOObjectRelease(registryRoot) }
+        if hidService != 0 { IOObjectRelease(hidService) }
     }
 
     // MARK: - Verrouillage / session
@@ -36,7 +39,6 @@ final class LiveSystemSignals: SystemSignals {
         var state = SessionState()
         var evidence: [String] = []
         var consoleUsers: [[String: Any]]?
-        let cgSession = CGSessionCopyCurrentDictionary() as? [String: Any]
 
         // 1. IORegistry : fonctionne aussi depuis un LaunchDaemon hors session.
         if registryRoot != 0 {
@@ -45,9 +47,7 @@ final class LiveSystemSignals: SystemSignals {
                 evidence.append("IOConsoleLocked")
             }
             consoleUsers = registryProperty("IOConsoleUsers") as? [[String: Any]]
-            if let console = consoleUsers?.first(where: {
-                ($0[ConsoleOwnership.onConsoleKey] as? NSNumber)?.boolValue == true
-            }) {
+            if let console = ConsoleOwnership.consoleEntry(in: consoleUsers) {
                 if (console["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
                     state.loggedIn = true
                 }
@@ -58,8 +58,19 @@ final class LiveSystemSignals: SystemSignals {
             }
         }
 
-        // 2. Session graphique courante : disponible quand on tourne dans Aqua.
-        if let dict = cgSession {
+        // 2. Session graphique courante, disponible quand on tourne dans Aqua. Un aller-retour avec le serveur de
+        //    fenêtres à chaque lecture : la règle pure du cœur dit si elle est lue, et pour quoi faire. Session à la
+        //    console (le cas courant) : jamais lue.
+        let role = ConsoleOwnership.cgSessionRole(consoleUsers: consoleUsers)
+        var cgSession: [String: Any]?
+        if role != .notRead {
+            cgSession = CGSessionCopyCurrentDictionary() as? [String: Any]
+        }
+        // Source complète (verrouillage, ouverture de session) seulement si le registre ne répond pas. Quand il répond
+        // sans entrée à la console (fenêtre de connexion d'un changement rapide d'utilisateur), cette session est celle de
+        // l'agent, passée en arrière-plan : elle ne sert qu'à la décision de console ci-dessous, et donnerait la session
+        // de la console pour ouverte à tort.
+        if role == .fullFallback, let dict = cgSession {
             if (dict["kCGSessionLoginDoneKey"] as? NSNumber)?.boolValue == true {
                 state.loggedIn = true
             }
@@ -146,26 +157,40 @@ final class LiveSystemSignals: SystemSignals {
 
     // MARK: - Activité matérielle
 
+    /// Le service `IOHIDSystem`, résolu une fois puis gardé (0 : à résoudre), libéré au `deinit` : c'est le même d'une
+    /// lecture à l'autre, inutile de le chercher dans le registre à chacune.
+    private var hidService: io_service_t = 0
+
     /// Secondes depuis la dernière activité clavier/souris, -1 si indisponible.
     ///
     /// Mesuré au niveau HID, donc lisible même session verrouillée : c'est le
     /// seul signal du système qui distingue « économiseur seul à l'écran » de
     /// « panneau d'authentification par‑dessus l'économiseur », les deux états
     /// étant identiques pour SAC, le process, les fenêtres et les notifications.
+    ///
+    /// Le service gardé qui ne répond plus est lâché et résolu de nouveau, une fois dans le même appel. Un service
+    /// tout juste résolu qui ne répond pas n'est pas gardé : l'appel suivant recommence.
     func hidIdleSeconds() -> Double {
-        var iterator: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(kIOMainPortDefault,
-                                           IOServiceMatching("IOHIDSystem"),
-                                           &iterator) == KERN_SUCCESS else { return -1 }
-        defer { IOObjectRelease(iterator) }
+        if hidService != 0 {
+            if let seconds = Self.hidIdleTime(of: hidService) { return seconds }
+            IOObjectRelease(hidService)
+            hidService = 0
+        }
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOHIDSystem"))
+        guard service != 0 else { return -1 }
+        guard let seconds = Self.hidIdleTime(of: service) else {
+            IOObjectRelease(service)
+            return -1
+        }
+        hidService = service
+        return seconds
+    }
 
-        let entry = IOIteratorNext(iterator)
-        guard entry != 0 else { return -1 }
-        defer { IOObjectRelease(entry) }
-
-        guard let value = IORegistryEntryCreateCFProperty(entry, "HIDIdleTime" as CFString,
+    /// `HIDIdleTime` (nanosecondes) du service, en secondes ; `nil` si la propriété ne se lit pas.
+    private static func hidIdleTime(of service: io_service_t) -> Double? {
+        guard let value = IORegistryEntryCreateCFProperty(service, "HIDIdleTime" as CFString,
                                                           kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? NSNumber else { return -1 }
+            .takeRetainedValue() as? NSNumber else { return nil }
         return Double(value.uint64Value) / 1_000_000_000
     }
 

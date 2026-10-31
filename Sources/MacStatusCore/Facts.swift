@@ -23,7 +23,8 @@ public struct Facts {
     /// L'économiseur tourne mais une activité utilisateur l'a écarté.
     public var screenSaverDismissed = false
     /// Secondes depuis la dernière activité clavier/souris matérielle
-    /// (`IOHIDSystem.HIDIdleTime`), -1 si indisponible.
+    /// (`IOHIDSystem.HIDIdleTime`), -1 si indisponible ou non lue : le moteur ne la lit que si l'économiseur est
+    /// évalué ou pendant une veille en cours. `/status` la relit à chaque appel.
     public var hidIdleSeconds: Double = -1
     public var sessionLocked = false
     public var lockEvidence = "none"

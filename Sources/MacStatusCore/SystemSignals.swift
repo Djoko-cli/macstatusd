@@ -59,7 +59,9 @@ public protocol SystemSignals: AnyObject {
     func session() -> SessionState
     /// Les écrans en ligne et leur veille, sans interprétation : `DisplayTopology` reconnaît le fantôme.
     func displaySnapshot() -> DisplaySnapshot
-    /// Secondes depuis la dernière activité clavier ou souris, -1 si indisponible.
+    /// Secondes depuis la dernière activité clavier ou souris, -1 si indisponible. Une lecture du registre à chaque
+    /// appel : le moteur ne la demande que si l'oracle de l'économiseur est évalué, pendant une veille en cours, et
+    /// pour `/status`.
     func hidIdleSeconds() -> Double
     func secureInputActive() -> Bool
     /// PID du process `ScreenSaverEngine` de l'utilisateur, 0 s'il n'existe pas ou n'est pas encore

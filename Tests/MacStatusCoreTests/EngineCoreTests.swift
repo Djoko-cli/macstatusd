@@ -3220,4 +3220,81 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(core.currentState)
         XCTAssertEqual(core.inspect().reason, "display-asleep")
     }
+
+    // MARK: - Coût de la scrutation (plan 3, tâche 6)
+
+    /// F78 : l'inactivité HID ne sert qu'à l'oracle de l'économiseur, que le moteur n'évalue ni pendant une veille ni
+    /// écran éteint. Écran éteint, hors veille : aucune lecture, à aucun chemin de relecture des faits, et les faits
+    /// gardés disent −1. Dès que l'écran se rallume, l'oracle revient et la lecture avec lui, une fois par relecture.
+    func test_ecranEteint_neLitPasLInactivite() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(signaux.lecturesHID, 0, "le démarrage, écran éteint, ne lit pas l'inactivité")
+
+        for _ in 0..<6 { scruterSansActivite(core, 0.5) }
+        core.handle(.sessionActive)
+        core.handle(.screensDidSleep)
+        core.resync()
+        XCTAssertEqual(signaux.lecturesHID, 0, "scrutations, notifications et resynchronisation, écran éteint")
+        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, -1, "non lue : −1, jamais une valeur périmée")
+        XCTAssertEqual(signaux.lecturesHID, 0, "`--once` et `--watch` ne la lisent pas non plus")
+        XCTAssertEqual(core.inspect().reason, "display-asleep")
+
+        signaux.etatEcran.asleep = false
+        core.handle(.screensDidWake)
+        XCTAssertEqual(signaux.lecturesHID, 1, "écran rallumé : l'oracle est évalué, l'inactivité est lue")
+        scruterSansActivite(core, 0.5)
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(signaux.lecturesHID, 3, "une lecture par scrutation")
+        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, signaux.inactiviteHID, accuracy: 0.001)
+        XCTAssertEqual(signaux.lecturesHID, 4)
+    }
+
+    /// Exception de la tâche 5 : pendant une veille en cours, l'inactivité est lue même si l'oracle ne l'est pas
+    /// (veille, écran éteint) : la fin d'une veille qui n'aboutit pas en dépend. Une frappe plus de 2 s après
+    /// l'annonce y met fin, écran éteint compris ; la veille finie, l'écran toujours éteint, la lecture s'arrête.
+    func test_veilleEnCours_litLInactivite() {
+        signaux.etatEcran.asleep = true      // l'écran éteint, seul, couperait la lecture
+        let (core, annonce) = moteurEnVeille()
+        let avant = signaux.lecturesHID
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(horloge.t - annonce, 2)
+        XCTAssertEqual(signaux.lecturesHID, avant + 4, "une lecture par scrutation pendant la veille en cours")
+        XCTAssertEqual(veilleSignalee(core), true)
+
+        signaux.inactiviteHID = 0.3          // une frappe 0,3 s avant la lecture de t + 2,5 s : à t + 2,2 s
+        scruter(core, 0.5)
+        XCTAssertEqual(veilleSignalee(core), false, "\(journal.lines)")
+        XCTAssertTrue(finDeVeilleJournalisee("activité 2.2 s après l'annonce"), "\(journal.lines)")
+
+        let apres = signaux.lecturesHID
+        scruterSansActivite(core, 0.5)
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(signaux.lecturesHID, apres, "veille finie, écran toujours éteint : plus de lecture")
+    }
+
+    /// `/status` relit l'inactivité à chaque appel : les faits gardés ne la portent plus hors de l'oracle (−1), et
+    /// `facts.hid_idle_seconds` ne montre ni le −1 des faits gardés, ni la valeur de la dernière scrutation.
+    func test_statusRelitLInactivite() {
+        signaux.etatEcran.asleep = true      // les faits gardés disent −1
+        let core = moteur()
+        core.start()
+        scruter(core, 0.5)
+        XCTAssertEqual(signaux.lecturesHID, 0)
+
+        signaux.inactiviteHID = 12.5
+        XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, 12.5)
+        signaux.inactiviteHID = 20
+        XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, 20)
+        XCTAssertEqual(signaux.lecturesHID, 2, "une lecture par appel")
+        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, -1, "/status ne réécrit pas les faits gardés")
+
+        signaux.etatEcran.asleep = false     // écran allumé : la valeur de la scrutation précédente est périmée aussi
+        scruter(core, 0.5)
+        signaux.inactiviteHID = 7
+        XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, 7)
+        signaux.inactiviteHID = -1           // illisible : −1, comme avant
+        XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, -1)
+    }
 }

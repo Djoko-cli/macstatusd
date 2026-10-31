@@ -108,4 +108,76 @@ final class ConsoleOwnershipTests: XCTestCase {
         let registre: [[String: Any]] = [[ConsoleOwnership.onConsoleKey: "oui"]]
         XCTAssertEqual(decider(registre: registre), .init(onConsole: true, source: .none))
     }
+
+    // MARK: - À quoi sert la session graphique (plan 3, tâche 6)
+
+    private func role(_ registre: [[String: Any]]?) -> ConsoleOwnership.CGSessionRole {
+        ConsoleOwnership.cgSessionRole(consoleUsers: registre)
+    }
+
+    /// Le cas courant : une entrée du registre est à la console, elle fait foi pour le verrouillage, l'ouverture de
+    /// session et la console. `CGSessionCopyCurrentDictionary` (un appel IPC au serveur de fenêtres) n'est pas lue,
+    /// que cette entrée soit celle de l'utilisateur ou celle d'un autre compte : dans ce cas le registre répond
+    /// aussi, et c'est un blocage.
+    func test_cgSession_pasLue_quandUneEntreeEstALaConsole() {
+        XCTAssertEqual(role([entree(console: true, owner: 501)]), .notRead)
+        XCTAssertEqual(role([entree(console: false, owner: 502), entree(console: true, owner: 501)]), .notRead)
+        XCTAssertEqual(role([entree(console: true, owner: 502)]), .notRead)
+        XCTAssertEqual(role([entree(console: true, owner: nil)]), .notRead)
+    }
+
+    /// Le registre ne répond pas (introuvable, `IOConsoleUsers` absent ou illisible) : CGSession est la seule autre
+    /// source, pour le verrouillage, l'ouverture de session et la console. Repli complet.
+    func test_cgSession_repliComplet_quandLeRegistreNeRepondPas() {
+        XCTAssertEqual(role(nil), .fullFallback)
+    }
+
+    /// Le registre répond mais aucune entrée n'est à la console (fenêtre de connexion d'un changement rapide
+    /// d'utilisateur, liste vide) : la session graphique est celle de l'agent, passée en arrière-plan. Elle ne sert
+    /// qu'à la décision de console, jamais au verrouillage ni à l'ouverture de session de la console.
+    func test_cgSession_pourLaDecisionSeulement_quandAucuneEntreeNEstALaConsole() {
+        XCTAssertEqual(role([entree(console: false, owner: 501)]), .verdictOnly)
+        XCTAssertEqual(role([entree(console: false, owner: 501), entree(console: false, owner: 502)]), .verdictOnly)
+        XCTAssertEqual(role([]), .verdictOnly)
+    }
+
+    /// Même lecture que `decide` : une clé « console » qui n'est pas un booléen ne désigne aucune entrée à la console.
+    func test_cgSession_valeurDeMauvaisType_neDesigneAucuneEntreeALaConsole() {
+        XCTAssertEqual(role([[ConsoleOwnership.onConsoleKey: "oui"]]), .verdictOnly)
+        XCTAssertEqual(role([[:]]), .verdictOnly)
+    }
+
+    /// Le piège de la fiche d'origine : sans entrée à la console, ne pas lire CGSession donnerait un laisser-passer à
+    /// `decide`, et une session passée en arrière-plan publierait. Lue, elle dit « pas à la console » et bloque.
+    func test_sansEntreeALaConsole_sessionEnArrierePlan_bloqueLaPublication() {
+        let registre = [entree(console: false, owner: 501)]
+        XCTAssertEqual(role(registre), .verdictOnly)
+        XCTAssertEqual(decider(registre: registre, cg: session(console: false)),
+                       .init(onConsole: false, source: .cgSession))
+        XCTAssertEqual(decider(registre: registre, cg: nil), .init(onConsole: true, source: .none),
+                       "sans la session graphique, rien ne bloque : c'est pourquoi elle est lue dans ce cas")
+    }
+
+    /// La règle et `decide` ne divergent pas : quand la règle dit de ne pas lire CGSession, aucune session graphique
+    /// ne peut changer le verdict. Pour chaque uid, y compris root.
+    func test_cgSessionPasLue_nePeutJamaisChangerLeVerdict() {
+        let registres: [[[String: Any]]] = [
+            [entree(console: true, owner: 501)],
+            [entree(console: true, owner: 502)],
+            [entree(console: true, owner: nil)],
+            [entree(console: false, owner: 501), entree(console: true, owner: 502)],
+        ]
+        let sessions: [[String: Any]?] = [nil, session(console: true), session(console: false),
+                                          session(console: true, owner: 502), [:]]
+        for registre in registres {
+            XCTAssertEqual(role(registre), .notRead, "\(registre)")
+            for uid: UInt32 in [0, 501, 502] {
+                let sansSession = decider(registre: registre, cg: nil, uid: uid)
+                for cg in sessions {
+                    XCTAssertEqual(decider(registre: registre, cg: cg, uid: uid), sansSession,
+                                   "uid \(uid), registre \(registre), session \(String(describing: cg))")
+                }
+            }
+        }
+    }
 }

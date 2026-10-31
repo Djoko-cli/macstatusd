@@ -11,6 +11,9 @@ import Foundation
 ///    session graphique courante dit elle-même si elle est à la console ;
 /// 3. sinon, rien ne répond : on laisse passer. Bloquer sur une lecture muette couperait la
 ///    publication sans raison, alors qu'un blocage vrai est déjà rapporté par les deux sources.
+///
+/// La session graphique coûte un aller-retour avec le serveur de fenêtres à chaque lecture : `cgSessionRole`
+/// dit quand elle sert (jamais quand une entrée du registre est à la console), et à quoi.
 public enum ConsoleOwnership {
     public static let onConsoleKey = "kCGSSessionOnConsoleKey"
     public static let userIDKey = "kCGSSessionUserIDKey"
@@ -36,8 +39,7 @@ public enum ConsoleOwnership {
     /// - `cgSession` : le dictionnaire de la session graphique courante, `nil` hors session.
     /// - `uid` : l'uid réel du processus (0 pour root, qui n'a pas de session à lui).
     public static func decide(consoleUsers: [[String: Any]]?, cgSession: [String: Any]?, uid: UInt32) -> Verdict {
-        if let consoleUsers,
-           let console = consoleUsers.first(where: { flag($0[onConsoleKey]) == true }) {
+        if let console = consoleEntry(in: consoleUsers) {
             return Verdict(onConsole: ownerAllows(console, uid: uid), source: .registry)
         }
         if let cgSession, let onConsole = flag(cgSession[onConsoleKey]) {
@@ -45,6 +47,35 @@ public enum ConsoleOwnership {
             return Verdict(onConsole: allowed, source: .cgSession)
         }
         return Verdict(onConsole: true, source: .none)
+    }
+
+    /// L'entrée d'`IOConsoleUsers` qui est à la console, `nil` s'il n'y en a aucune ou si la liste est illisible. Une
+    /// seule définition pour `decide`, `cgSessionRole` et la lecture du verrouillage : elles ne peuvent pas diverger.
+    public static func consoleEntry(in consoleUsers: [[String: Any]]?) -> [String: Any]? {
+        consoleUsers?.first(where: { flag($0[onConsoleKey]) == true })
+    }
+
+    /// À quoi sert la session graphique courante (`CGSessionCopyCurrentDictionary`) à une lecture de la session.
+    public enum CGSessionRole: Equatable {
+        /// Ne pas la lire. Une entrée d'`IOConsoleUsers` est à la console et fait foi, pour le verrouillage, l'ouverture
+        /// de session et la console : c'est le cas courant, et tout le gain.
+        case notRead
+        /// La lire pour `decide` seulement. Le registre répond, mais aucune de ses entrées n'est à la console (fenêtre
+        /// de connexion d'un changement rapide d'utilisateur, liste vide) : la session graphique est celle de ce
+        /// process, passée en arrière-plan, et elle seule bloque la publication (sans elle, `decide` laisse passer).
+        /// Elle ne dit rien de la console : jamais pour le verrouillage ni l'ouverture de session, qu'elle dirait
+        /// « ouverte » à tort.
+        case verdictOnly
+        /// La lire comme source complète (verrouillage, ouverture de session, console) : le registre ne répond pas
+        /// (introuvable, propriété `IOConsoleUsers` absente ou illisible).
+        case fullFallback
+    }
+
+    /// - `consoleUsers` : la propriété `IOConsoleUsers`, `nil` si le registre est introuvable ou si la propriété est
+    ///   absente ou illisible.
+    public static func cgSessionRole(consoleUsers: [[String: Any]]?) -> CGSessionRole {
+        guard let consoleUsers else { return .fullFallback }
+        return consoleEntry(in: consoleUsers) == nil ? .verdictOnly : .notRead
     }
 
     /// Root : toute console compte. Propriétaire illisible : on ne bloque pas par erreur.

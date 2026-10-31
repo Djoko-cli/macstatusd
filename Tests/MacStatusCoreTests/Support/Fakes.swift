@@ -172,13 +172,19 @@ final class FakeSignals: SystemSignals {
     private(set) var lecturesSession = 0
     /// Nombre d'appels de `saverHosts()` (balayage coûteux, réservé au repli sans SAC).
     private(set) var lecturesHotes = 0
+    /// Nombre d'appels de `hidIdleSeconds()` : une lecture du registre IOKit par appel. Les relectures des faits
+    /// et chaque `statusSnapshot()` y comptent.
+    private(set) var lecturesHID = 0
 
     func session() -> SessionState {
         lecturesSession += 1
         return etatSession
     }
     func displaySnapshot() -> DisplaySnapshot { ecrans }
-    func hidIdleSeconds() -> Double { inactiviteHID }
+    func hidIdleSeconds() -> Double {
+        lecturesHID += 1
+        return inactiviteHID
+    }
     func secureInputActive() -> Bool { saisieSecurisee }
     func saverEnginePID() -> Int32 {
         lecturesPID += 1

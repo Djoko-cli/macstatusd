@@ -392,14 +392,22 @@ public final class EngineCore {
         next.displayEvidence = display.evidence
         next.displays = display.displays
 
-        // À garder pendant une veille en cours, même si l'oracle n'est pas évalué : la fin de veille sur activité
-        // (`endAbortedSleep`) lit cette valeur.
-        next.hidIdleSeconds = signals.hidIdleSeconds()
-
         // Inutile de sonder l'économiseur quand une condition OFF plus
         // prioritaire est déjà vraie : c'est aussi le cas où le Mac est inactif
         // longtemps, autant ne pas le réveiller pour rien.
-        if next.systemAsleep || next.displayAsleep {
+        let oracleEvaluated = !next.systemAsleep && !next.displayAsleep
+
+        // L'inactivité HID n'a que deux lecteurs : l'oracle, évalué hors veille et écran allumé seulement, et la fin
+        // d'une veille qui n'aboutit pas (`endAbortedSleep`), qui la lit pendant une veille en cours même quand l'oracle
+        // ne l'est pas. Hors de ces cas, la lire coûte un appel au registre pour rien : −1, comme une valeur illisible
+        // (`/status` la relit à chaque appel).
+        if oracleEvaluated || sleepInProgress {
+            next.hidIdleSeconds = signals.hidIdleSeconds()
+        } else {
+            next.hidIdleSeconds = -1
+        }
+
+        if !oracleEvaluated {
             next.screenSaverActive = false
             next.screenSaverEvidence = "non-évalué"
         } else {
@@ -1081,11 +1089,15 @@ public final class EngineCore {
 
     public func statusSnapshot() -> [String: Any] {
         let now = clock.monotonic()
+        // Les faits gardés portent l'inactivité de la dernière relecture, ou −1 quand le moteur ne l'a pas lue
+        // (économiseur non évalué) : /status la relit à chaque appel, sur une copie des faits.
+        var shownFacts = facts
+        shownFacts.hidIdleSeconds = signals.hidIdleSeconds()
         var dict: [String: Any] = [
             "version": macstatusdVersion,
             "state": (published ?? factsVerdict().state) ? "1" : "0",
             "reason": publishedReason,
-            "facts": facts.asDictionary,
+            "facts": shownFacts.asDictionary,
             "facts_verdict": factsVerdict().state ? "1" : "0",
             "uptime_seconds": Int(now - startedAt),
             "transitions": transitions,
