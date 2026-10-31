@@ -49,6 +49,10 @@ public final class EngineCore {
         var end: Double?
     }
 
+    /// Une lecture faite pendant la veille en cours a vu la session verrouillée. Remis à faux à chaque annonce de
+    /// veille. Relue déverrouillée ensuite, la session met fin à la veille (`endAbortedSleep`).
+    private var sleepSawLocked = false
+
     /// Délai maximal d'attente de la livraison OFF avant d'autoriser la veille.
     static let sleepDeliveryTimeout: Double = 1.5
     /// En deçà de cette durée de veille, le réveil ne force pas la republication.
@@ -56,8 +60,15 @@ public final class EngineCore {
     /// Délai maximal d'attente de la livraison OFF à l'arrêt (sous le filet de 3 s et l'`ExitTimeOut` de 5 s).
     static let shutdownDeliveryTimeout: Double = 2
     /// Au-delà de cette durée sans avis de réveil, `tick()` conclut que l'avis est perdu : la veille
-    /// annoncée plus tôt ne peut pas durer (la scrutation tourne, donc le Mac est éveillé).
-    static let lostWakeDelay: Double = 35
+    /// annoncée plus tôt ne peut pas durer (la scrutation tourne, donc le Mac est éveillé). C'est un filet,
+    /// non un détecteur : des pilotes et des process lents peuvent retarder l'entrée en veille d'une trentaine
+    /// de secondes (29 s mesurées au banc du 31/10, où l'ancien seuil de 35 s s'est déclenché à tort). Une
+    /// frappe ou un déverrouillage met fin à la veille bien avant (`endAbortedSleep`).
+    static let lostWakeDelay: Double = 120
+    /// Une frappe ou un mouvement ne met fin à une veille annoncée que s'il suit l'annonce de plus de cette
+    /// marge (s) : le clic qui a demandé la veille (menu « Suspendre l'activité », touche de veille) précède
+    /// l'annonce, ou la suit de peu, et ne l'annule pas.
+    static let sleepAbortInputMargin: Double = 2
     /// Intervalle minimal entre deux relectures des faits dues à une notification (`didstart`, `didstop`,
     /// verrouillage, déverrouillage) : une rafale, forgée ou non, ne coûte qu'une relecture par 250 ms.
     /// La scrutation suivante rattrape le reste ; elle n'entre pas dans ce compte.
@@ -210,6 +221,9 @@ public final class EngineCore {
     ///   veille a duré 30 s ou plus) ; sinon une veille longue forcerait deux fois ;
     /// - réveil pas encore traité (avis en retard ou perdu) : `tick()` le traite, et ne force que
     ///   si la veille a duré 30 s ou plus ; l'avis qui arrive ensuite ne force plus.
+    ///
+    /// Après ce rattrapage, une veille annoncée mais pas finie peut encore prendre fin sans avis de réveil :
+    /// par une frappe ou un déverrouillage qui la dément (`endAbortedSleep`).
     public func tick() {
         guard !isShutDown else { return }
         let now = clock.monotonic()
@@ -261,6 +275,9 @@ public final class EngineCore {
         }
 
         refreshFacts()
+        // Quand un des rattrapages ci-dessus a joué, la veille est finie et ceci ne fait rien. Sinon, `recovering`
+        // et `lostWake` sont faux : la fin de veille sans avis est évaluée sans l'immédiat ni `force`, ci-dessous.
+        endAbortedSleep()
         if !evaluate(immediate: recovering || lostWake, force: force), covered || lostWake {
             // Pas de `force`, mais un état publié et non confirmé (envoi perdu avant le gel) repart.
             ensurePublished()
@@ -364,6 +381,8 @@ public final class EngineCore {
         next.consoleUserLoggedIn = session.loggedIn
         next.onConsole = session.onConsole
         next.lockEvidence = session.evidence
+        // Session vue verrouillée pendant la veille en cours : relue déverrouillée, elle y met fin.
+        if sleepInProgress, session.locked { sleepSawLocked = true }
 
         let display = DisplayTopology.state(signals.displaySnapshot(), screensAsleepNotified: screensAsleepNotified)
         if screensAsleepNotified, !display.displays.contains(where: { !$0.isPlaceholder && $0.asleep }) {
@@ -376,6 +395,8 @@ public final class EngineCore {
         next.displayEvidence = display.evidence
         next.displays = display.displays
 
+        // À garder pendant une veille en cours, même si l'oracle n'est pas évalué : la fin de veille sur activité
+        // (`endAbortedSleep`) lit cette valeur.
         next.hidIdleSeconds = signals.hidIdleSeconds()
 
         // Inutile de sonder l'économiseur quand une condition OFF plus
@@ -659,6 +680,8 @@ public final class EngineCore {
         if lastSleep == nil || lastSleep?.end != nil {
             lastSleep = SleepSpan(start: clock.monotonic())
         }
+        // Chaque annonce repart de zéro : la lecture ci-dessous dit si la session est verrouillée.
+        sleepSawLocked = false
         if let abandoned = intent {
             logInfo("intention \(abandoned.target ? "ON" : "OFF") abandonnée : veille")
             intent = nil
@@ -701,17 +724,8 @@ public final class EngineCore {
         case .systemDidWake:
             // La commande en cours est gardée : un /wake réveille le Mac, et ce réveil ne doit
             // pas effacer la commande qui l'a causé (elle s'escalade et attend les faits).
-            let now = clock.monotonic()
             // Durée connue seulement pour le premier traitement du réveil d'une veille annoncée.
-            var slept: Double?
-            if var sleep = lastSleep, sleep.end == nil {
-                slept = now - sleep.start
-                sleep.end = now
-                lastSleep = sleep
-            }
-            systemAsleep = false
-            screensAsleepNotified = false
-            saver.noteSystemWake()
+            let slept = noteWake(now: clock.monotonic())
             refreshFacts()
             // Après une veille longue, Homebridge a pu perdre l'état : on le force. Après une
             // veille courte (ou de durée inconnue : second avis de réveil, ou réveil déjà traité
@@ -748,8 +762,11 @@ public final class EngineCore {
             signals.saverProcessHint()
             refreshFacts()
             evaluate(immediate: false)
-        case .screenLocked, .screenUnlocked:
+        case .screenLocked:
             refreshAfterNotification(now: clock.monotonic())
+        case .screenUnlocked:
+            // Un déverrouillage peut dire qu'une veille annoncée n'a pas abouti.
+            refreshAfterNotification(now: clock.monotonic(), endingAbortedSleep: true)
         case .screensDidSleep:
             // Le système le dit : un écran physique au moins s'est endormi, même si un écran virtuel veille encore.
             screensAsleepNotified = true
@@ -766,12 +783,66 @@ public final class EngineCore {
     }
 
     /// Relecture des faits et évaluation après une notification de l'économiseur ou du verrouillage, au
-    /// plus une toutes les `notificationRefreshMinInterval` secondes.
-    private func refreshAfterNotification(now: Double) {
+    /// plus une toutes les `notificationRefreshMinInterval` secondes. Une notification écartée par ce délai
+    /// n'est pas perdue : la scrutation suivante relit les faits, `endAbortedSleep` compris.
+    /// `endingAbortedSleep` : la relecture peut mettre fin à une veille annoncée qui n'a pas abouti.
+    private func refreshAfterNotification(now: Double, endingAbortedSleep: Bool = false) {
         if let last = lastNotificationRefreshAt, now - last < Self.notificationRefreshMinInterval { return }
         lastNotificationRefreshAt = now
         refreshFacts()
+        if endingAbortedSleep { endAbortedSleep() }
         evaluate(immediate: false)
+    }
+
+    /// Tenue de compte d'un réveil du système, commune à l'avis IOKit (`.systemDidWake`) et à la fin d'une veille
+    /// sans avis (`endAbortedSleep`), pour que les deux ne divergent jamais : la fin de la veille annoncée est
+    /// notée, `system_asleep` retombe, l'avis d'écrans éteints et le `didstart` en attente de l'oracle sont
+    /// oubliés. Ni relecture des faits, ni évaluation, ni republication : c'est à l'appelant d'en décider.
+    /// Rend la durée de la veille annoncée si c'est la première prise en compte de son réveil, `nil` sinon (second
+    /// avis de réveil, ou réveil déjà traité par un autre chemin : la fin est déjà posée).
+    @discardableResult
+    private func noteWake(now: Double) -> Double? {
+        var slept: Double?
+        if var sleep = lastSleep, sleep.end == nil {
+            slept = now - sleep.start
+            sleep.end = now
+            lastSleep = sleep
+        }
+        systemAsleep = false
+        screensAsleepNotified = false
+        saver.noteSystemWake()
+        return slept
+    }
+
+    /// Fin d'une veille annoncée qui n'a pas abouti (C26). `willSleep` annonce une veille que des pilotes ou des
+    /// process lents peuvent retarder, ou qu'une frappe annule ; IOKit tarde alors à le dire, ou ne le dit pas, et
+    /// le daemon resterait OFF (`system-asleep`) alors que l'utilisateur est là. Deux faits y mettent fin sans
+    /// attendre son avis, pendant une veille en cours seulement :
+    /// - une frappe ou un mouvement qui suit l'annonce de plus de `sleepAbortInputMargin` s
+    ///   (`now − hidIdle > début + marge`) : le clic qui a demandé la veille, lui, ne compte pas. Une inactivité
+    ///   illisible (< 0) ne prouve rien ;
+    /// - la session, vue verrouillée depuis l'annonce (`sleepSawLocked`), relue déverrouillée.
+    ///
+    /// À appeler juste après un `refreshFacts()` : les deux règles lisent ses faits. La fin est tenue comme celle
+    /// d'un réveil traité (`noteWake`), sans republication forcée, puis les faits sont relus (ils disent le Mac
+    /// éveillé) ; l'appelant évalue ensuite sans l'immédiat, donc ON attend le lissage. L'avis IOKit qui arrive
+    /// après trouve la fin posée et ne force rien.
+    private func endAbortedSleep() {
+        guard sleepInProgress, let sleep = lastSleep else { return }
+        let now = clock.monotonic()
+        let cause: String
+        if facts.hidIdleSeconds >= 0,
+           now - facts.hidIdleSeconds > sleep.start + Self.sleepAbortInputMargin {
+            let after = now - facts.hidIdleSeconds - sleep.start
+            cause = "activité \(String(format: "%.1f", after)) s après l'annonce"
+        } else if sleepSawLocked, !facts.sessionLocked {
+            cause = "session déverrouillée"
+        } else {
+            return
+        }
+        noteWake(now: now)
+        logInfo("fin de la veille sans avis de réveil (\(cause))")
+        refreshFacts()
     }
 
     // MARK: - Arrêt

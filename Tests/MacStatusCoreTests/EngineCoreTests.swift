@@ -1324,8 +1324,11 @@ final class EngineCoreTests: XCTestCase {
 
     /// Veille courte (5 s, moins que le seuil de trou) dont ni `HasPoweredOn` ni `didWake` ne sont
     /// arrivés : sans rattrapage, `system_asleep` resterait vrai indéfiniment (OFF). Au-delà de
-    /// 35 s sans avis de réveil, la scrutation continue rattrape le réveil, sans republication forcée.
-    func test_reveilPerdu_scrutationContinue_rattrapeAvant36s() {
+    /// 120 s sans avis de réveil, la scrutation continue rattrape le réveil, sans republication forcée.
+    /// Sans aucune activité (`scruterSansActivite`) : une frappe postérieure à l'annonce mettrait fin à la
+    /// veille bien avant le filet (tâche 5).
+    func test_reveilPerdu_scrutationContinue_rattrapeAvant121s() {
+        XCTAssertEqual(EngineCore.lostWakeDelay, 120)
         let core = moteur()
         core.start()
         publieur.livrer()
@@ -1337,10 +1340,11 @@ final class EngineCoreTests: XCTestCase {
 
         // 5 s de veille réelle : le Mac dort, aucun tick ; puis scrutation continue, pas d'avis.
         horloge.advance(5)
-        for _ in 0..<60 { scruter(core, 0.5) }   // 35 s depuis la veille
-        XCTAssertFalse(core.currentState, "pas avant le délai de 35 s")
+        signaux.inactiviteHID += 5
+        for _ in 0..<230 { scruterSansActivite(core, 0.5) }   // 120 s depuis la veille
+        XCTAssertFalse(core.currentState, "pas avant le délai de 120 s")
         XCTAssertFalse(journalContient("réveil non signalé"))
-        scruter(core, 0.5)                        // 35,5 s
+        scruterSansActivite(core, 0.5)                         // 120,5 s
         XCTAssertTrue(core.currentState, "réveil rattrapé : ON")
         XCTAssertTrue(journalContient("réveil non signalé : rattrapé"), "\(journal.lines)")
         XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "desktop-ui")
@@ -1365,7 +1369,7 @@ final class EngineCoreTests: XCTestCase {
         horloge.advance(8)
         core.handle(.systemDidWake)
         XCTAssertTrue(core.currentState)
-        for _ in 0..<100 { scruter(core, 0.5) }
+        for _ in 0..<250 { scruter(core, 0.5) }   // 125 s : au-delà du délai de 120 s
         XCTAssertFalse(journalContient("réveil non signalé"), "\(journal.lines)")
 
         // Veille longue : le trou de scrutation la traite, pas le rattrapage.
@@ -2232,13 +2236,20 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(publieur.publications.dropFirst().contains { $0.etat }, "aucun ON après l'état initial")
     }
 
-    /// Au réveil (avis IOKit, trou de scrutation) et à la resynchronisation, le moteur fait oublier à
-    /// l'oracle le `didstart` en attente (repli sans SAC) : un hôte apparu ensuite n'ouvre pas de session,
-    /// et l'attente oubliée n'expire pas.
+    /// Au réveil (avis IOKit, trou de scrutation, fin de veille sans avis) et à la resynchronisation, le moteur
+    /// fait oublier à l'oracle le `didstart` en attente (repli sans SAC) : un hôte apparu ensuite n'ouvre pas de
+    /// session, et l'attente oubliée n'expire pas.
     func test_reveilEtResynchronisation_oublientLeDidstartEnAttente() {
         let declencheurs: [(String, (EngineCore) -> Void)] = [
             ("avis de réveil", { $0.handle(.systemDidWake) }),
             ("resynchronisation", { $0.resync() }),
+            // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
+            ("fin de veille sans avis", { core in
+                core.willSleep {}
+                self.horloge.advance(3)
+                self.signaux.inactiviteHID = 0.3
+                core.tick()
+            }),
         ]
         for (nom, declencher) in declencheurs {
             signaux = Self.signauxDeBureau()
@@ -2714,13 +2725,20 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(core.inspect().facts.displayEvidence, "awake")
     }
 
-    /// L'avis s'efface aussi sur le réveil des écrans, sur le réveil du système et à la resynchronisation, même
-    /// si un écran physique dort encore : l'avis dit alors une chose périmée.
+    /// L'avis s'efface aussi sur le réveil des écrans, sur le réveil du système (avis IOKit, ou fin de veille sans
+    /// avis) et à la resynchronisation, même si un écran physique dort encore : l'avis dit alors une chose périmée.
     func test_avisEcransEteints_effaceParLesReveilsEtLaResynchronisation() {
         let effaceurs: [(String, (EngineCore) -> Void)] = [
             ("réveil des écrans", { $0.handle(.screensDidWake) }),
             ("réveil du système", { $0.handle(.systemDidWake) }),
             ("resynchronisation", { $0.resync() }),
+            // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
+            ("fin de veille sans avis", { core in
+                core.willSleep {}
+                self.horloge.advance(3)
+                self.signaux.inactiviteHID = 0.3
+                core.tick()
+            }),
         ]
         for (nom, effacer) in effaceurs {
             signaux = Self.signauxDeBureau()
@@ -2872,5 +2890,292 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(vide["main_display"] as? String, "none")
         XCTAssertEqual((vide["display_list"] as? [[String: Any]])?.count, 0)
         XCTAssertEqual((vide["facts"] as? [String: Any])?["displays"] as? String, "none")
+    }
+
+    // MARK: - Veille avortée et réveils sombres (plan 3, tâche 5)
+
+    /// Faits tels que `/status` les publie, sans relire le système.
+    private func faitsPublies(_ core: EngineCore) -> [String: Any] {
+        core.statusSnapshot()["facts"] as? [String: Any] ?? [:]
+    }
+
+    /// `facts.system_asleep` de `/status`.
+    private func veilleSignalee(_ core: EngineCore) -> Bool? {
+        faitsPublies(core)["system_asleep"] as? Bool
+    }
+
+    /// Moteur démarré (ON publié), puis une veille annoncée à l'instant courant, rendu avec le moteur : OFF
+    /// `system-asleep`. Le Mac reste éveillé, comme au banc du 31/10 : la scrutation continue de tourner.
+    private func moteurEnVeille() -> (core: EngineCore, annonce: Double) {
+        let core = moteur()
+        core.start()
+        core.willSleep {}
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(veilleSignalee(core), true)
+        return (core, horloge.t)
+    }
+
+    /// La ligne INFO exacte de fin de veille sans avis de réveil, avec sa cause entre parenthèses.
+    private func finDeVeilleJournalisee(_ cause: String) -> Bool {
+        journal.lines.contains { $0.0 == .info && $0.1 == "fin de la veille sans avis de réveil (\(cause))" }
+    }
+
+    /// C26 : la veille annoncée n'aboutit pas, puis une frappe, plus de 2 s après l'annonce, met fin à la veille
+    /// sans attendre IOKit. `system_asleep` retombe, une ligne INFO le dit, et ON revient après le lissage de
+    /// 300 ms (l'évaluation n'est pas immédiate), sans republication forcée.
+    func test_frappeApresLAnnonce_metFinALaVeille() {
+        XCTAssertEqual(EngineCore.sleepAbortInputMargin, 2)
+        let (core, annonce) = moteurEnVeille()
+        for _ in 0..<29 { scruterSansActivite(core, 0.5) }   // 14,5 s sans activité depuis l'annonce
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(journalContient("fin de la veille"))
+
+        // Une frappe 0,3 s avant la lecture de t + 15 s : à t + 14,7 s.
+        signaux.inactiviteHID = 0.3
+        scruter(core, 0.5)
+        XCTAssertEqual(horloge.t - annonce, 15)
+        XCTAssertEqual(veilleSignalee(core), false)
+        XCTAssertTrue(finDeVeilleJournalisee("activité 14.7 s après l'annonce"), "\(journal.lines)")
+        XCTAssertFalse(core.currentState, "évaluation non immédiate : ON attend le lissage de 300 ms")
+
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "desktop-ui")
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
+                                               Publication(etat: false, force: false),
+                                               Publication(etat: true, force: false)])
+    }
+
+    /// Le clic qui a demandé la veille précède l'annonce, ou la suit de moins de 2 s : il ne l'annule pas.
+    func test_frappeAvantLAnnonce_neMetPasFinALaVeille() {
+        let (core, _) = moteurEnVeille()
+        signaux.inactiviteHID = 1.5
+        scruter(core, 1)                // t + 1 s : dernière frappe à t − 0,5 s, avant l'annonce
+        XCTAssertEqual(veilleSignalee(core), true)
+        signaux.inactiviteHID = 0.2
+        scruter(core, 0.5)              // t + 1,5 s : dernière frappe à t + 1,3 s, à moins de 2 s de l'annonce
+        XCTAssertEqual(veilleSignalee(core), true)
+        for _ in 0..<20 { scruterSansActivite(core, 0.5) }   // la dernière frappe reste à t + 1,3 s
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(core.currentState)
+        XCTAssertFalse(journalContient("fin de la veille"))
+    }
+
+    /// La borne de la marge est stricte : une frappe à 2,0 s pile de l'annonce n'y met pas fin, une frappe à 2,5 s si.
+    func test_margeDeDeuxSecondes_borneStricte() {
+        let (core, _) = moteurEnVeille()
+        signaux.inactiviteHID = 0.5
+        scruter(core, 2.5)              // t + 2,5 s : dernière frappe à t + 2,0 s exactement
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(journalContient("fin de la veille"))
+
+        signaux.inactiviteHID = 0.5
+        scruter(core, 0.5)              // t + 3 s : dernière frappe à t + 2,5 s
+        XCTAssertEqual(veilleSignalee(core), false)
+        XCTAssertTrue(finDeVeilleJournalisee("activité 2.5 s après l'annonce"), "\(journal.lines)")
+    }
+
+    /// Une inactivité illisible (−1) ne prouve aucune frappe : elle ne met jamais fin à la veille (sans cette
+    /// garde, `now + 1` passerait pour une activité postérieure à l'annonce).
+    func test_inactiviteIllisible_neMetPasFinALaVeille() {
+        let (core, _) = moteurEnVeille()
+        signaux.inactiviteHID = -1
+        for _ in 0..<20 { scruter(core, 0.5) }   // 10 s
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(core.currentState)
+        XCTAssertFalse(journalContient("fin de la veille"))
+    }
+
+    /// C26 : une session vue verrouillée depuis l'annonce, puis relue déverrouillée, met fin à la veille — à la
+    /// scrutation ou sur l'avis de déverrouillage, que le verrou précède l'annonce ou la suive. L'inactivité HID
+    /// continue de croître : aucune frappe n'entre en compte, seule la règle du déverrouillage joue.
+    func test_deverrouillageApresLAnnonce_metFinALaVeille() {
+        let declencheurs: [(String, (EngineCore) -> Void)] = [
+            ("scrutation", { self.scruterSansActivite($0, 0.5) }),
+            ("avis de déverrouillage", { core in
+                self.horloge.advance(0.5)
+                self.signaux.inactiviteHID += 0.5
+                core.handle(.screenUnlocked)
+            }),
+        ]
+        for verrouAvantLAnnonce in [true, false] {
+            for (nom, deverrouiller) in declencheurs {
+                let cas = "\(nom), verrou \(verrouAvantLAnnonce ? "avant" : "après") l'annonce"
+                signaux = Self.signauxDeBureau()
+                publieur = FakePublisher()
+                journal.lines = []
+                signaux.etatSession.locked = verrouAvantLAnnonce
+                let (core, _) = moteurEnVeille()
+                if !verrouAvantLAnnonce {
+                    signaux.etatSession.locked = true
+                    scruterSansActivite(core, 0.5)   // la session est vue verrouillée après l'annonce
+                }
+                for _ in 0..<10 { scruterSansActivite(core, 0.5) }   // toujours verrouillée, aucune activité
+                XCTAssertEqual(veilleSignalee(core), true, cas)
+                XCTAssertFalse(journalContient("fin de la veille"), cas)
+
+                signaux.etatSession.locked = false
+                deverrouiller(core)
+                XCTAssertEqual(veilleSignalee(core), false, cas)
+                XCTAssertTrue(finDeVeilleJournalisee("session déverrouillée"), "\(cas) : \(journal.lines)")
+                XCTAssertFalse(core.currentState, "\(cas) : évaluation non immédiate")
+                scruterSansActivite(core, 0.5)
+                XCTAssertTrue(core.currentState, cas)
+                XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "desktop-ui", cas)
+                XCTAssertEqual(publicationsForcees, 0, cas)
+            }
+        }
+    }
+
+    /// Un avis de déverrouillage seul ne prouve rien : la session n'a jamais été vue verrouillée depuis l'annonce.
+    func test_sessionJamaisVerrouillee_avisDeDeverrouillage_neMetPasFin() {
+        let (core, _) = moteurEnVeille()
+        horloge.advance(1)
+        signaux.inactiviteHID += 1
+        core.handle(.screenUnlocked)
+        for _ in 0..<10 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(core.currentState)
+        XCTAssertFalse(journalContient("fin de la veille"))
+    }
+
+    /// L'indicateur « session vue verrouillée » est remis à zéro à chaque annonce de veille : un verrou vu avant la
+    /// seconde annonce (sans réveil entre les deux) ne compte plus.
+    func test_nouvelleAnnonce_remetAZeroLaSessionVueVerrouillee() {
+        signaux.etatSession.locked = true
+        let (core, _) = moteurEnVeille()   // vue verrouillée à la première annonce
+        signaux.etatSession.locked = false
+        horloge.advance(1)
+        signaux.inactiviteHID += 1
+        core.willSleep {}                  // seconde annonce : la session est lue déverrouillée
+        XCTAssertEqual(veilleSignalee(core), true)
+
+        horloge.advance(1)
+        signaux.inactiviteHID += 1
+        core.handle(.screenUnlocked)
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(journalContient("fin de la veille"))
+    }
+
+    /// Un avis de déverrouillage écarté par le filtre de 250 ms n'est pas perdu : le tick suivant relit la session
+    /// et met fin à la veille.
+    func test_avisDeDeverrouillageEcarteParLeFiltre_rattrapeAuTickSuivant() {
+        signaux.etatSession.locked = true
+        let (core, _) = moteurEnVeille()
+        horloge.advance(1)
+        signaux.inactiviteHID += 1
+        core.handle(.screenLocked)         // première relecture due à une notification : le filtre démarre
+        horloge.advance(0.0625)
+        signaux.inactiviteHID += 0.0625
+        signaux.etatSession.locked = false
+        core.handle(.screenUnlocked)       // écarté par le filtre : aucune relecture
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(journalContient("fin de la veille"))
+
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(veilleSignalee(core), false)
+        XCTAssertTrue(finDeVeilleJournalisee("session déverrouillée"), "\(journal.lines)")
+    }
+
+    /// Le trou de scrutation d'une veille réelle passe avant la règle de l'activité : un Mac qui dort 40 s puis
+    /// se réveille sur une frappe suit le chemin du trou couvert (une seule publication forcée, veille de plus de
+    /// 30 s), non la fin de veille sans avis.
+    func test_trouCouvertParUneVeilleLongue_activiteAuReveil_pasDeFinSansAvis() {
+        let core = moteurEcranEteint()
+        core.willSleep {}
+        horloge.advance(40)
+        signaux.inactiviteHID = 0.3
+        core.tick()
+        XCTAssertTrue(journalContient("couverte par la veille"), "\(journal.lines)")
+        XCTAssertFalse(journalContient("fin de la veille"), "\(journal.lines)")
+        XCTAssertEqual(publicationsForcees, 1, "\(publieur.publications)")
+        XCTAssertEqual(veilleSignalee(core), false)
+    }
+
+    /// Banc 1 (B6) : une entrée en veille retardée de 29 s ne déclenche aucun rattrapage du « réveil perdu » avant
+    /// 120 s. La scrutation tourne sans activité : l'état reste OFF `system-asleep`.
+    func test_entreeEnVeilleRetardee_pasDeRattrapageAvant120s() {
+        let (core, annonce) = moteurEnVeille()
+        for _ in 0..<58 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(horloge.t - annonce, 29)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "system-asleep")
+        XCTAssertFalse(journalContient("réveil non signalé"))
+
+        for _ in 0..<182 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(horloge.t - annonce, 120)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(journalContient("réveil non signalé"), "\(journal.lines)")
+        XCTAssertFalse(journalContient("fin de la veille"))
+    }
+
+    /// Le cas du banc, en entier : l'entrée en veille tarde de 29 s, le Mac dort ensuite 8 s (daemon gelé) et se
+    /// réveille 37 s après l'annonce — au-delà de l'ancien seuil de 35 s, mais avec un trou de scrutation de 8 s,
+    /// sous le seuil de trou. Rien n'est rattrapé à tort : l'avis de réveil d'IOKit, en retard, est traité
+    /// normalement (veille de plus de 30 s : republication forcée).
+    func test_entreeEnVeilleRetardee_puisVeilleCourte_avisDeReveilTraiteNormalement() {
+        let (core, annonce) = moteurEnVeille()
+        for _ in 0..<58 { scruterSansActivite(core, 0.5) }
+        horloge.advance(8)
+        signaux.inactiviteHID += 8
+        core.tick()
+        XCTAssertEqual(horloge.t - annonce, 37)
+        XCTAssertFalse(journalContient("réveil non signalé"), "\(journal.lines)")
+        XCTAssertFalse(journalContient("interruption de"), "un trou de 8 s reste une scrutation normale")
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(core.currentState)
+
+        core.handle(.systemDidWake)
+        XCTAssertTrue(journalContient("réveil après 37.0 s de veille → republication forcée"), "\(journal.lines)")
+        XCTAssertEqual(veilleSignalee(core), false)
+        XCTAssertTrue(core.currentState)
+    }
+
+    /// R56 : l'avis IOKit qui arrive après la fin de veille sans avis trouve la fin posée. Il ne force rien, même
+    /// après plus de 30 s de veille annoncée, et n'envoie rien de plus.
+    func test_avisIOKitApresLaFin_neForcePas() {
+        let (core, _) = moteurEnVeille()
+        for _ in 0..<64 { scruterSansActivite(core, 0.5) }   // 32 s : un avis normal forcerait la republication
+        signaux.inactiviteHID = 0.3
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertEqual(veilleSignalee(core), false)
+        XCTAssertTrue(finDeVeilleJournalisee("activité 32.2 s après l'annonce"), "\(journal.lines)")
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publicationsForcees, 0, "\(publieur.publications)")
+        let envois = publieur.envois.count
+
+        core.handle(.systemDidWake)
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publicationsForcees, 0, "\(publieur.publications)")
+        XCTAssertEqual(publieur.envois.count, envois, "rien de plus n'est envoyé")
+        XCTAssertFalse(journalContient("réveil après"), "la fin est déjà posée : la durée n'est plus annoncée")
+    }
+
+    /// Réveil sombre (maintenance, Power Nap) : le système se réveille, les écrans restent éteints. L'avis de
+    /// réveil laisse l'état OFF (`display-asleep`) : aucun ON n'est publié, ni au réveil ni ensuite, jusqu'au
+    /// rallumage des écrans.
+    func test_reveilSombre_ecranEteint_resteOFF() {
+        let (core, _) = moteurEnVeille()
+        horloge.advance(300)
+        signaux.inactiviteHID += 300
+        signaux.etatEcran.asleep = true
+        core.handle(.systemDidWake)
+        XCTAssertEqual(veilleSignalee(core), false)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "display-asleep")
+        for _ in 0..<20 { scruterSansActivite(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.inspect().reason, "display-asleep")
+        XCTAssertFalse(publieur.publications.dropFirst().contains { $0.etat }, "aucun ON depuis l'état initial")
+
+        // Les écrans se rallument : ON après le lissage de 300 ms.
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState)
     }
 }
