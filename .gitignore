@@ -28,3 +28,6 @@ config.json
 # Liste locale des valeurs réelles à ne jamais publier (lue par la garde pre-push,
 # outils/pre-push) : jamais commitée.
 garde.local.txt
+
+# Schémas Archify (pages HTML locales) : jamais commités.
+.archify/
