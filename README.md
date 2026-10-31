@@ -268,8 +268,8 @@ launchctl print gui/$UID/com.djoko.macstatusd
 swift test                               # unit tests of MacStatusCore (rules, engine, webhook, HTTP)
 ./scripts/selftest.sh                    # runs swift test, then checks on isolated test instances
 ./scripts/validate-live.sh               # guided validation through the real states
-# Diagnostic probe: triggers a real OFF (screen saver) at t≈4 s
-swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe 60
+# Diagnostic probe: only observes (no command, no request); options --duree, --sortie, --intervalle
+swiftc -O -o /tmp/saver-probe diagnostics/saver-probe.swift && /tmp/saver-probe --duree 60
 ```
 
 `selftest.sh` runs `swift test` first, then starts test instances that are
