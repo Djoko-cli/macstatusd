@@ -172,6 +172,10 @@ journal ; la migration supprime aussi les anciens journaux de la 5.0.0.
 | C20 | **macstatusd devient une app d'arrière-plan** (`macstatusd.app`, `LSUIElement`, ni fenêtre ni Dock) qui enregistre son agent par `SMAppService` : plist de l'agent dans le paquet, `BundleProgram`, même session Aqua et mêmes clés de relance (`KeepAlive`, `ProcessType`). L'app apparaît dans **Réglages > Général > Ouverture et extensions**, avec son nom et son icône, et Djoko peut l'y couper. Son `Info.plist` porte la description de l'invite « Réseau local » (`NSLocalNetworkUsageDescription`). Elle a une icône dans le style des autres apps de Djoko, validée par lui avant toute compilation signée. Quelqu'un qui clone le dépôt peut toujours compiler et installer sans certificat (signature ad hoc). | Règle de Djoko « l'expérience native avant tout » : c'est l'intégration d'origine d'un service d'arrière-plan depuis macOS 13. Une app se notarise avec agrafage, et une identité de signature stable garde les autorisations (Réseau local, pare-feu) d'une mise à jour à l'autre, alors qu'une signature ad hoc change à chaque compilation. |
 | C21 | **Version initiale renommée 0.5.0 dans l'historique réécrit** (`Version.swift`, titres des README, message du premier commit), pour une suite 0.5.0 → 0.6.0 cohérente. Les prototypes de `Versionning/` gardent leurs noms d'origine, comme archives. | D7 ; l'historique est réécrit de toute façon (D4). |
 | C22 | **Compilations de travail en signature ad hoc** (tests, instances de test sur ports réservés). Seule l'app installée par Djoko et les versions publiées portent le Developer ID. | Les tests n'ont besoin d'aucune autorisation du système ; la notarisation prend plusieurs minutes. |
+| C23 | **Session d'économiseur établie par `SACScreenSaverIsRunning`** (ou par un process `ScreenSaverEngine`), jamais par les fenêtres ni par le seul process hôte. | Banc 1 (31/10) : SAC vaut 1 pendant chaque session et 0 sur un simple verrouillage ; les fenêtres de loginwindow et le pointeur existent dans les deux cas. |
+| C24 | **`/wake` écarte l'économiseur par `SACScreenSaverStopNow`**, `killall` en repli. | Banc 1 : seule méthode qui fasse apparaître le panneau ; les autres laissaient l'économiseur et publiaient un faux ON. |
+| C25 | **`saver_redisplay_idle_seconds` : défaut 30** (au lieu de 90). | Banc 1 : retour à l'économiseur 30 s après la dernière frappe ou le dernier arrêt natif, mesuré cinq fois sous 27.0.1. |
+| C26 | **Veille avortée** par une frappe postérieure à l'annonce ou par un déverrouillage ; filet du réveil perdu porté de 35 à 120 s. | Banc 1 (B5, B6) : une veille annulée laissait le daemon à OFF 14 s ; une entrée en veille de 29 s a déclenché le rattrapage à tort. |
 | C19 | **Banc du lot 4 sur deux économiseurs** : l'actuel, tiers et x86_64 (hôte `legacyScreenSaver-x86_64`), et un économiseur d'Apple (hôte arm64 `legacyScreenSaver`, celui du piège du faux OFF permanent). L'hôte est identifié par son chemin complet et son instant de lancement, jamais par le seul nom. | Avis des vérificateurs de F03 ; Rosetta sera restreint après macOS 27. |
 
 ## 6. Les lots
@@ -290,28 +294,60 @@ F72, F74, F14 (option).
 
 F03, F16, F17, F46, F50, et les scénarios de F67.
 
-- **Banc d'abord (avec Djoko).** Sonde mise à jour, rangée dans `diagnostics/`, sortie dans
-  `$TMPDIR` (F36). Elle observe un économiseur lancé **par l'inactivité** sous macOS 27 : process
-  hôte (`legacyScreenSaver-x86_64` ou `ScreenSaverEngine`), `SACScreenSaverIsRunning`,
-  notifications, fenêtres. Résultats rangés dans `.superpowers/banc/` avant de concevoir le
-  correctif.
-- **Règle visée, à confirmer par le banc** : l'économiseur tourne si `ScreenSaverEngine` existe, ou
-  si une fenêtre d'économiseur couvre l'écran, ou si `didstart` est corroboré dans les 5 s par
-  `SACScreenSaverIsRunning` ou par le PID de l'hôte ; `didstop` y met fin. Jamais le seul préfixe de
-  process de l'hôte (C19).
-- **`SACScreenSaverIsRunning` n'est pas validé.** En juillet, sous 26.5, une sonde l'a appelé avec un
-  pointeur valide : sa valeur de retour suivait l'économiseur (1 pendant, 0 hors), et le pointeur
-  n'était pas écrit. Ce n'est qu'une observation, que le dépôt ne garde pas : la sonde essaie encore
-  les deux signatures (`diagnostics/saver-probe.swift:38-45`). Le banc la refait sous 27.0.1 et
-  range la preuve dans `.superpowers/banc/`. Si elle ne tient pas, la corroboration passe par le
-  PID de l'hôte seul, et la fonction est chargée dynamiquement, avec repli si elle manque.
-- Arrêt de l'économiseur lors d'un ON : la déclaration d'activité utilisateur l'écarte déjà ;
-  `killall` ne reste qu'en repli pour `ScreenSaverEngine`. À vérifier au banc pour l'hôte
-  `legacyScreenSaver`.
+- **Banc d'abord (avec Djoko) : fait le 31/10/2026 (banc 1).** La sonde est mise à jour dans
+  `diagnostics/`, avec une sortie dans `$TMPDIR` (F36). Les résultats sont rangés dans `.superpowers/banc/`.
+  Trois familles d'économiseurs ont été vues sous 27.0.1 :
+  - un économiseur tiers ancien, hébergé par `legacyScreenSaver-x86_64` sous Rosetta ;
+  - l'extension moderne d'Apple « Message » (`Computer Name.appex`) ;
+  - les paysages aériens, dessinés par `WallpaperAerialsExtension`, présente en permanence.
+
+  Le choix de l'économiseur se fait par écran et par bureau (magasin `com.apple.wallpaper`).
+- **Règle retenue après le banc 1** (elle remplace la règle visée, qui comptait sur une fenêtre
+  d'économiseur) :
+  - **Session d'économiseur** : `SACScreenSaverIsRunning` vrai, ou un process `ScreenSaverEngine`
+    (économiseur commandé). Mesuré : SAC vaut 1 de `didstart` jusqu'au déverrouillage, panneau compris,
+    et 0 pendant un simple verrouillage.
+  - **Corroboration de `didstart`** : `didstart` sans corroboration dans les 5 s est expiré (F46).
+    - La corroboration vient de SAC.
+    - Si SAC manque, elle vient d'un hôte apparu après la notification.
+    - Une notification seule ne fait jamais foi : n'importe quel process local peut la poster (F17).
+  - **Fin de session** : `didstop`, ou SAC faux sur deux lectures de suite. Avec SAC vrai, un
+    `didstop` est incohérent : il est journalisé et ignoré.
+  - **Ce qui ne prouve jamais un économiseur** :
+    - les fenêtres de loginwindow aux niveaux 2001 à 2004 et le pointeur, qui existent aussi sur un
+      simple verrouillage ;
+    - le seul process hôte (C19), qui peut s'attarder 27 min après un aperçu des Réglages, ou 26 s
+      après un déverrouillage.
+
+    Les **noms** de fenêtres ne sont pas lisibles sans l'autorisation d'enregistrer l'écran : le
+    daemon ne s'en sert pas.
+  - **Panneau par-dessus l'économiseur (ON)** : depuis la dernière frappe ou le dernier arrêt natif,
+    pendant `saver_redisplay_idle_seconds`. Mesuré cinq fois sous 27.0.1 : 30 s, d'où un défaut
+    ramené de 90 à 30. Ensuite, macOS revient à l'économiseur (OFF).
+- **`SACScreenSaverIsRunning` est validé sous 27.0.1 (banc 1).** Appelé avec un pointeur valide, il
+  rend 1 pendant la session et 0 hors session. L'octet n'est jamais écrit : la valeur passe par le
+  retour. La fonction est chargée dynamiquement. Si elle manque, la corroboration passe par l'hôte
+  apparu après `didstart` ; les paysages aériens, sans hôte propre, ne sont alors plus détectés, et le
+  daemon le dit au démarrage.
+- **Écarter l'économiseur lors d'un ON : `SACScreenSaverStopNow`** (login.framework, sans argument).
+  - Au banc 1, la déclaration d'activité utilisateur, `caffeinate -u` et `killall ScreenSaverEngine`
+    n'ont **rien changé à l'écran**, alors que le daemon publiait ON (faux ON, A1.8 et B4).
+  - `SACScreenSaverStopNow` montre le panneau par-dessus l'économiseur, comme une frappe : vérifié sur
+    l'économiseur tiers x86_64 et sur Message, lancés par l'inactivité ou commandés.
+  - `killall ScreenSaverEngine` ne reste qu'en repli, si la fonction manque.
+  - Limite connue : avec un réglage mixte par écran (Message au centre, l'économiseur tiers sur les
+    côtés), l'arrêt natif n'a rien montré. Le daemon publiera ON pendant 30 s, à tort ; à revoir au
+    banc de validation.
 - Notifications horodatées, avec échéance quand rien ne les corrobore (F46) ; pas de réarmement par
   une paire forgée pour un même PID (F17).
 - Écrans : l'écran fantôme du WindowServer est exclu (F16) ; `screensDidSleep` sert de source
   indépendante (F50).
+- **Veille avortée et réveils sombres (banc 1)** :
+  - Une veille annoncée (`WillSleep`) peut ne jamais aboutir : des pilotes et des process lents
+    peuvent retarder l'entrée en veille de 30 s, et une frappe l'annule. Une frappe postérieure à
+    l'annonce, ou un déverrouillage, met fin à la veille sans attendre IOKit.
+  - Le rattrapage du « réveil perdu » (35 s) s'est déclenché à tort pendant une entrée en veille de
+    29 s : il devient un filet à 120 s.
 
 ### Lot 5 — Efficience et observabilité
 
