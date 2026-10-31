@@ -641,14 +641,21 @@ public final class EngineCore {
             evaluate(immediate: false)
         case .screenSaverDidStart:
             saver.noteNotification(active: true)
+            // R55 : l'indice précède toute relecture, pour que celle-ci cherche le process tout neuf.
+            signals.saverProcessHint()
             refreshFacts()
             evaluate(immediate: false)
         case .screenSaverDidStop:
             saver.noteNotification(active: false)
+            signals.saverProcessHint()
+            refreshFacts()
+            evaluate(immediate: false)
+        case .saverProcessChanged:
+            signals.saverProcessHint()
             refreshFacts()
             evaluate(immediate: false)
         case .screensDidSleep, .screensDidWake, .screenLocked, .screenUnlocked,
-             .sessionActive, .sessionInactive, .saverProcessChanged:
+             .sessionActive, .sessionInactive:
             refreshFacts()
             evaluate(immediate: false)
         }
@@ -765,6 +772,9 @@ public final class EngineCore {
         logInfo("commande OFF (\(source)) → action=\(action.rawValue)")
         intent = makeIntent(target: false, source: "off/\(action.rawValue)")
         actions.runOff(action)
+        // L'économiseur lancé crée un process `ScreenSaverEngine` : la lecture suivante le cherche tout
+        // de suite. Une extinction de l'écran ou une veille n'en crée aucun.
+        if action == .screensaver { signals.saverProcessHint() }
         evaluate(immediate: true)
     }
 

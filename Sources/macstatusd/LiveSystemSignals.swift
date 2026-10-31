@@ -14,6 +14,8 @@ import MacStatusCore
 /// - écran éteint : `CGDisplayIsAsleep` sur l'écran principal, avec repli sur
 ///   « tous les écrans en ligne endormis ».
 /// - champ d'authentification : `IsSecureEventInputEnabled`.
+/// - économiseur : `SACScreenSaverIsRunning` (login.framework, chargé une fois) ; `ScreenSaverEngine` et
+///   ses hôtes se cherchent dans les process de l'utilisateur seulement, jamais ceux des autres comptes.
 final class LiveSystemSignals: SystemSignals {
     private let registryRoot: io_registry_entry_t
 
@@ -160,18 +162,148 @@ final class LiveSystemSignals: SystemSignals {
         return Double(value.uint64Value) / 1_000_000_000
     }
 
-    // MARK: - Économiseur d'écran
+    // MARK: - Économiseur d'écran : process
 
-    /// `p_comm` est tronqué à 16 caractères par le noyau : « ScreenSaverEngine »
-    /// devient « ScreenSaverEngin ».
-    private let engineCommPrefix = "ScreenSaverEngin"
+    /// Horloge de la politique de balayage : l'horloge monotone du moteur, jamais l'heure murale.
+    private let clock: Clock = SystemClock()
+    private var scanPolicy = SaverProcessScanPolicy()
+    /// PID de `ScreenSaverEngine` trouvé par le dernier balayage, revalidé à chaque lecture (0 : aucun).
+    private var cachedEnginePID: Int32 = 0
 
+    func saverProcessHint() {
+        scanPolicy.noteHint()
+    }
+
+    /// Le PID gardé est relu à chaque appel (un appel système) ; sans PID valide, la table des process
+    /// de l'utilisateur n'est balayée que si la politique l'accorde : au premier appel, après un indice,
+    /// ou toutes les 5 s.
     func saverEnginePID() -> Int32 {
-        for process in runningProcesses() where process.name.hasPrefix(engineCommPrefix) {
-            return process.pid
+        if cachedEnginePID != 0 {
+            if isOwnSaverEngine(pid: cachedEnginePID) { return cachedEnginePID }
+            cachedEnginePID = 0
+        }
+        guard scanPolicy.shouldScan(now: clock.monotonic()) else { return 0 }
+        for process in ownProcesses() where SaverHostRule.isEngine(shortName: Self.shortName(process.kp_proc.p_comm)) {
+            cachedEnginePID = process.kp_proc.p_pid
+            return cachedEnginePID
         }
         return 0
     }
+
+    /// Process de l'utilisateur qui hébergent un économiseur, avec leur âge. Un balayage complet à
+    /// chaque appel : c'est le repli d'un système sans `SACScreenSaverIsRunning`, pas le chemin ordinaire.
+    func saverHosts() -> [SaverHost] {
+        let now = Date().timeIntervalSince1970
+        return ownProcesses().compactMap { process -> SaverHost? in
+            let pid = process.kp_proc.p_pid
+            guard let path = executablePath(pid: pid), SaverHostRule.isHost(path: path) else { return nil }
+            // `p_starttime` est une heure murale (`timeval`) : l'âge se mesure à l'heure murale.
+            let started = process.kp_proc.p_starttime
+            let launchedAt = Double(started.tv_sec) + Double(started.tv_usec) / 1_000_000
+            return SaverHost(pid: pid, launchedSecondsAgo: max(0, now - launchedAt))
+        }
+    }
+
+    /// Le PID est-il encore un `ScreenSaverEngine` de l'utilisateur ? Le noyau réutilise les PID : un
+    /// process disparu peut avoir cédé le sien à un autre.
+    private func isOwnSaverEngine(pid: Int32) -> Bool {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return false }
+        return info.pbi_uid == getuid() && SaverHostRule.isEngine(shortName: Self.shortName(info.pbi_comm))
+    }
+
+    /// Les process de l'utilisateur courant (`KERN_PROC_UID`), zombies exclus : ceux des autres comptes
+    /// ne sont jamais lus. Vide si la table est illisible. Utilisable depuis n'importe quel contexte, y
+    /// compris hors session graphique.
+    private func ownProcesses() -> [kinfo_proc] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(bitPattern: getuid())]
+        var margin = 32
+        for _ in 0..<4 {
+            var length = 0
+            guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0, length > 0 else { return [] }
+
+            // Marge : des process naissent entre les deux appels. Si elle ne suffit pas (ENOMEM), on
+            // recommence avec une marge plus large.
+            let capacity = length / MemoryLayout<kinfo_proc>.stride + margin
+            let buffer = UnsafeMutablePointer<kinfo_proc>.allocate(capacity: capacity)
+            defer { buffer.deallocate() }
+            var size = capacity * MemoryLayout<kinfo_proc>.stride
+            if sysctl(&mib, UInt32(mib.count), buffer, &size, nil, 0) == 0 {
+                let count = size / MemoryLayout<kinfo_proc>.stride
+                return UnsafeBufferPointer(start: buffer, count: count).filter { Int32($0.kp_proc.p_stat) != SZOMB }
+            }
+            guard errno == ENOMEM else { return [] }
+            margin *= 4
+        }
+        return []
+    }
+
+    /// Chemin de l'exécutable d'un process (`proc_pidpath`), `nil` s'il a disparu ou n'est pas lisible.
+    private func executablePath(pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// Nom court d'un process (`p_comm` : 16 caractères au plus ; `pbi_comm` : 15, tronqué plus court que
+    /// `p_comm`). Lu jusqu'au premier NUL ou à la fin du tableau, jamais au-delà.
+    private static func shortName<Field>(_ field: Field) -> String {
+        withUnsafeBytes(of: field) { raw in
+            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+        }
+    }
+
+    // MARK: - Économiseur d'écran : SACScreenSaverIsRunning (login.framework)
+
+    private static let loginFrameworkPath = "/System/Library/PrivateFrameworks/login.framework/login"
+    private typealias SACIsRunning = @convention(c) (UnsafeMutablePointer<UInt8>) -> Int32
+
+    /// Fonction résolue une seule fois (`loadSACFunction`) ; `nil` si login.framework ou le symbole manquent.
+    private var sacIsRunning: SACIsRunning?
+    private var sacLoadAttempted = false
+    /// Codes de retour inattendus déjà signalés : une ligne par valeur, pas une par scrutation. Plafonné,
+    /// pour qu'une fonction qui rendrait n'importe quoi ne remplisse ni le journal ni la mémoire.
+    private var reportedSACCodes = Set<Int32>()
+    private static let maxReportedSACCodes = 8
+
+    /// `SACScreenSaverIsRunning` rend sa valeur par son code de retour : 1 pendant toute une session
+    /// d'économiseur, panneau de connexion compris ; 0 hors session, y compris sur un simple verrouillage
+    /// (`SaverSessionFlag`). C'est une lecture : elle n'agit ni sur l'écran ni sur l'économiseur.
+    func saverSessionFlag() -> Bool? {
+        guard let isRunning = loadSACFunction() else { return nil }
+        // La signature veut un pointeur valide ; la valeur utile passe par le code de retour (au banc,
+        // l'octet n'est jamais écrit).
+        var unused: UInt8 = 0
+        let code = withUnsafeMutablePointer(to: &unused) { isRunning($0) }
+        if let flag = SaverSessionFlag.from(returnCode: code) { return flag }
+        if reportedSACCodes.count < Self.maxReportedSACCodes, reportedSACCodes.insert(code).inserted {
+            logWarn("SACScreenSaverIsRunning a rendu le code inattendu \(code) : drapeau de session ignoré")
+        }
+        return nil
+    }
+
+    /// Ouvre login.framework et résout la fonction, une seule fois. Un échec se journalise une seule fois
+    /// (WARN) et `saverSessionFlag()` rend alors `nil`. Le cadre reste ouvert jusqu'à la fin du process :
+    /// le pointeur de fonction doit rester valide.
+    private func loadSACFunction() -> SACIsRunning? {
+        if sacLoadAttempted { return sacIsRunning }
+        sacLoadAttempted = true
+        guard let framework = dlopen(Self.loginFrameworkPath, RTLD_LAZY) else {
+            let reason = dlerror().map { escapeForLog(String(cString: $0)) } ?? "raison inconnue"
+            logWarn("SACScreenSaverIsRunning indisponible : login.framework ne s'ouvre pas (\(reason))")
+            return nil
+        }
+        guard let symbol = dlsym(framework, "SACScreenSaverIsRunning") else {
+            logWarn("SACScreenSaverIsRunning indisponible : symbole absent de login.framework")
+            return nil
+        }
+        sacIsRunning = unsafeBitCast(symbol, to: SACIsRunning.self)
+        return sacIsRunning
+    }
+
+    // MARK: - Économiseur d'écran : fenêtres
 
     func saverWindow() -> WindowVerdict {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
@@ -212,33 +344,4 @@ final class LiveSystemSignals: SystemSignals {
 func CGSessionAvailable() -> Bool {
     guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
     return dict["kCGSSessionUserIDKey"] != nil
-}
-
-/// Liste des process (`p_comm` est tronqué à 16 caractères par le noyau).
-/// Utilisable depuis n'importe quel contexte, y compris hors session graphique.
-func runningProcesses() -> [(pid: Int32, name: String)] {
-    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-    var length = 0
-    guard sysctl(&mib, 4, nil, &length, nil, 0) == 0, length > 0 else { return [] as [(pid: Int32, name: String)] }
-
-    // Marge : la table peut grandir entre les deux appels.
-    let capacity = length / MemoryLayout<kinfo_proc>.stride + 32
-    let buffer = UnsafeMutablePointer<kinfo_proc>.allocate(capacity: capacity)
-    defer { buffer.deallocate() }
-
-    var size = capacity * MemoryLayout<kinfo_proc>.stride
-    guard sysctl(&mib, 4, buffer, &size, nil, 0) == 0 else { return [] }
-
-    let count = size / MemoryLayout<kinfo_proc>.stride
-    var processes: [(pid: Int32, name: String)] = []
-    processes.reserveCapacity(count)
-    for index in 0..<count {
-        var comm = buffer[index].kp_proc.p_comm
-        let name = withUnsafeBytes(of: &comm) { raw -> String in
-            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return "" }
-            return String(cString: base)
-        }
-        if !name.isEmpty { processes.append((buffer[index].kp_proc.p_pid, name)) }
-    }
-    return processes
 }

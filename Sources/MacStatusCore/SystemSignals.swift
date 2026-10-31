@@ -38,6 +38,18 @@ public enum WindowVerdict {
     case visible, notVisible, unavailable
 }
 
+/// Un process de l'utilisateur qui héberge un économiseur d'écran (`SaverHostRule`).
+public struct SaverHost: Equatable {
+    public var pid: Int32
+    /// Secondes écoulées (temps réel) depuis le lancement du process.
+    public var launchedSecondsAgo: Double
+
+    public init(pid: Int32, launchedSecondsAgo: Double) {
+        self.pid = pid
+        self.launchedSecondsAgo = launchedSecondsAgo
+    }
+}
+
 /// Tout ce que le moteur lit du système. L'implémentation réelle vit dans
 /// l'exécutable (IOKit, CoreGraphics, Carbon) ; les tests injectent un faux.
 public protocol SystemSignals: AnyObject {
@@ -46,9 +58,20 @@ public protocol SystemSignals: AnyObject {
     /// Secondes depuis la dernière activité clavier ou souris, -1 si indisponible.
     func hidIdleSeconds() -> Double
     func secureInputActive() -> Bool
-    /// PID du process `ScreenSaverEngine`, 0 s'il n'existe pas.
+    /// PID du process `ScreenSaverEngine` de l'utilisateur, 0 s'il n'existe pas ou n'est pas encore
+    /// connu (voir `saverProcessHint()`). Les process des autres utilisateurs ne comptent pas.
     func saverEnginePID() -> Int32
     func saverWindow() -> WindowVerdict
+    /// `SACScreenSaverIsRunning` : vrai pendant toute une session d'économiseur, panneau de connexion
+    /// compris ; faux hors session, y compris sur un simple verrouillage ; `nil` si la fonction manque
+    /// ou rend un code inattendu.
+    func saverSessionFlag() -> Bool?
+    /// Process de l'utilisateur qui hébergent un économiseur (`SaverHostRule.isHost(path:)`). Appelé
+    /// seulement en repli, quand `saverSessionFlag()` rend `nil`.
+    func saverHosts() -> [SaverHost]
+    /// Indice qu'un process d'économiseur vient de naître ou de disparaître : la lecture suivante de
+    /// `saverEnginePID()` refait un balayage complet des process, sans attendre l'échéance.
+    func saverProcessHint()
     /// Le daemon tourne-t-il dans une session graphique (Aqua) ?
     func hasAquaSession() -> Bool
 }

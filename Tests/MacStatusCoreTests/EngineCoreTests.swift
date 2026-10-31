@@ -2038,4 +2038,84 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(instantane["session_context"] as? String, "aqua")
         XCTAssertEqual(instantane["uptime_seconds"] as? Int, 5)
     }
+
+    // MARK: - Indices de scan des process d'économiseur (plan 3, tâche 1)
+
+    /// Ruling R55 : l'événement donne son indice une seule fois, AVANT que le moteur relise les faits.
+    /// Sinon la relecture qu'il déclenche pourrait ne pas chercher le process tout neuf.
+    private func verifierUnIndiceAvantLaRelecture(_ evenement: SystemEvent,
+                                                  file: StaticString = #filePath, line: UInt = #line) {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(signaux.indicesProcess, 0, "aucun indice au démarrage", file: file, line: line)
+        let lecturesAvant = signaux.lecturesPID
+
+        core.handle(evenement)
+
+        XCTAssertEqual(signaux.indicesProcess, 1, file: file, line: line)
+        XCTAssertEqual(signaux.lecturesPIDAuxIndices, [lecturesAvant],
+                       "l'indice précède la relecture des faits", file: file, line: line)
+        XCTAssertGreaterThan(signaux.lecturesPID, lecturesAvant, "la relecture a bien lieu", file: file, line: line)
+    }
+
+    func test_didstart_demandeUnScanDesProcess() {
+        verifierUnIndiceAvantLaRelecture(.screenSaverDidStart)
+    }
+
+    func test_didstop_demandeUnScanDesProcess() {
+        verifierUnIndiceAvantLaRelecture(.screenSaverDidStop)
+    }
+
+    func test_processEconomiseurChange_demandeUnScanDesProcess() {
+        verifierUnIndiceAvantLaRelecture(.saverProcessChanged)
+    }
+
+    /// Un indice par scrutation annulerait la politique de balayage (un scan toutes les 5 s) : ni la
+    /// scrutation ordinaire ni les autres événements n'en donnent.
+    func test_scrutationEtAutresEvenements_neDonnentAucunIndice() {
+        let core = moteur()
+        core.start()
+        for _ in 0..<4 { scruter(core, 0.5) }
+        let autres: [SystemEvent] = [.systemWillNotSleep, .screensDidSleep, .screensDidWake, .screenLocked,
+                                     .screenUnlocked, .sessionActive, .sessionInactive, .systemDidWake]
+        for evenement in autres { core.handle(evenement) }
+        core.resync()
+        XCTAssertEqual(signaux.indicesProcess, 0)
+        XCTAssertGreaterThan(signaux.lecturesPID, 0, "les faits ont bien été relus")
+    }
+
+    /// L'OFF par économiseur lance `ScreenSaverEngine` : la lecture suivante doit le chercher tout de
+    /// suite, sans attendre l'échéance du balayage.
+    func test_offParEconomiseur_demandeUnScanDesProcess() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(signaux.indicesProcess, 0)
+
+        core.requestOff(source: "essai")
+
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
+        XCTAssertEqual(signaux.indicesProcess, 1)
+    }
+
+    /// Une extinction de l'écran, choisie ou imposée par la session verrouillée, ne lance aucun
+    /// économiseur : rien à chercher.
+    func test_offParExtinctionDEcran_neDemandePasDeScan() {
+        var config = Config()
+        config.offAction = .displaySleep
+        let configuree = moteur(config)
+        configuree.start()
+        configuree.requestOff(source: "essai")
+        XCTAssertEqual(actions.appels, [.runOff(.displaySleep)])
+        XCTAssertEqual(signaux.indicesProcess, 0)
+
+        signaux = Self.signauxDeBureau()
+        signaux.etatSession.locked = true
+        actions = FakeActions()
+        publieur = FakePublisher()
+        let verrouillee = moteur()
+        verrouillee.start()
+        verrouillee.requestOff(source: "essai")
+        XCTAssertEqual(actions.appels, [.runOff(.displaySleep)], "session verrouillée : extinction de l'écran")
+        XCTAssertEqual(signaux.indicesProcess, 0)
+    }
 }
