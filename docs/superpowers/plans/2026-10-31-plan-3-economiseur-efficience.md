@@ -387,7 +387,7 @@ F16, F50, F90.
   n écrans physiques `0x1`…, de fournisseur `0x1234` et de modèle `0x5678`, le premier principal, tous
   `asleep: a`.
 
-- [ ] **Étape 1 : tests de la topologie.**
+- [x] **Étape 1 : tests de la topologie.**
   - `test_fantome_reconnuParFournisseurEtModele` ;
   - `test_fantomeSeul_aucunEcranPhysique` ;
   - `test_fantomePrincipal_ecransPhysiquesEteints_displayAsleep` (`all`) ;
@@ -396,7 +396,7 @@ F16, F50, F90.
     principal éveillé de fournisseur `0x4321` → endormi, `screensDidSleep` ;
   - `test_avisDuSystemeSansEcranEndormi_neDitRien` ;
   - `test_resume_principalEndormiEtFantome`.
-- [ ] **Étape 2 : tests du moteur.**
+- [x] **Étape 2 : tests du moteur.**
   - `test_ecranFantomeSeul_tient5sPuisNoDisplay` : ON publié, puis le fantôme seul. ON tient jusqu'à 5 s,
     puis OFF `no-display` après le lissage ;
   - `test_ecranFantomeAuReveil_resteOFFJusquAuxEcransPhysiques` : OFF de veille, réveil sur le fantôme
@@ -407,11 +407,11 @@ F16, F50, F90.
 
   Les tests existants qui attendent `no-display` tout de suite avancent désormais l'horloge de 5 s ; le
   rapport les nomme.
-- [ ] **Étape 3 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
-- [ ] **Étape 4 : mettre en œuvre.**
-- [ ] **Étape 5 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
+- [x] **Étape 3 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
+- [x] **Étape 4 : mettre en œuvre.**
+- [x] **Étape 5 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
   `--once` : `display_list` donne autant d'écrans physiques que le Mac en a, et aucun fantôme écran allumé.
-- [ ] **Étape 6 : commit** « Écrans : fantôme exclu, avis d'extinction, topologie dans /status ».
+- [x] **Étape 6 : commit** « Écrans : fantôme exclu, avis d'extinction, topologie dans /status ».
 
 ### Tâche 5 : veille avortée et réveils sombres
 
