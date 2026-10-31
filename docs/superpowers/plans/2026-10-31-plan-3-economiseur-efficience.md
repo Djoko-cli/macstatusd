@@ -324,7 +324,7 @@ C24, R49, R52.
     d'en lancer un autre ;
   - nom de la retenue en ASCII : `"macstatusd retenue d'ecran"`. `pmset -g assertions` affichait mal l'accent.
 
-- [ ] **Étape 1 : tests.**
+- [x] **Étape 1 : tests.**
   - `test_onSurEconomiseurSeul_ecarteParLeSystemeEtConfirme` : session SAC et intention ON → `.wake` puis
     `.dismissScreenSaver` ; l'évaluation suivante confirme ON par `écarté-par-commande` ;
   - `test_onSurEconomiseurSeul_repliKillall_attendLesFaits` : moyen `.processKill` → aucun écartement
@@ -334,10 +334,10 @@ C24, R49, R52.
   - `test_escaladeOn_economiseurEncoreSeul_ecarteEncore` ;
   - `test_reveilLegerPuisOFF_relacheEtExecuteLOFF` (R52) ;
   - `test_demarrage_journaliseLeMoyenDEcartement` : INFO s'il est natif, WARN pour le repli.
-- [ ] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.** `PowerActions` ne se teste pas ici : il se vérifie à la lecture, puis au banc.
-- [ ] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Économiseur : un ON l'écarte par SACScreenSaverStopNow ».
+- [x] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.** `PowerActions` ne se teste pas ici : il se vérifie à la lecture, puis au banc.
+- [x] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
+- [x] **Étape 5 : commit** « Économiseur : un ON l'écarte par SACScreenSaverStopNow ».
 
 ### Tâche 4 : écran fantôme, extinction et topologie
 
