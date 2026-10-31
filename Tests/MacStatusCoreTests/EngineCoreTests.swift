@@ -32,8 +32,8 @@ final class EngineCoreTests: XCTestCase {
         super.tearDown()
     }
 
-    /// Bureau ouvert, un écran, aucune activité depuis 30 s (en deçà du
-    /// réaffichage à 90 s : un économiseur détecté reste seul à l'écran).
+    /// Bureau ouvert, un écran, aucune activité depuis 30 s, SAC à 0 : la dernière frappe précède
+    /// toute session d'économiseur ouverte ensuite, qui reste donc seule à l'écran.
     private static func signauxDeBureau() -> FakeSignals {
         let signaux = FakeSignals()
         signaux.inactiviteHID = 30
@@ -51,7 +51,6 @@ final class EngineCoreTests: XCTestCase {
 
     private func moteurBrut(_ config: Config = Config()) -> EngineCore {
         let oracle = ScreenSaverOracle(
-            minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
             dismissOnInput: config.saverDismissOnInput,
             dismissGrace: Double(config.saverDismissGraceMS) / 1000,
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
@@ -401,7 +400,10 @@ final class EngineCoreTests: XCTestCase {
         // 2,5 s : escalade, l'économiseur est arrêté.
         scruter(core, 0.5)
         XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake, .stopScreenSaver])
+        // Le process disparaît : la deuxième lecture de suite sans lui ferme la session.
         signaux.pidEconomiseur = 0
+        scruter(core, 0.5)
+        XCTAssertNotNil(commandeEnAttente(core), "une lecture sans source ne ferme pas la session")
         scruter(core, 0.5)
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
@@ -459,7 +461,7 @@ final class EngineCoreTests: XCTestCase {
     }
 
     func test_onSousUnEconomiseurEcarte_reveilSansIntention() {
-        // R30 : l'oracle dit « écarté » (ON) jusqu'à 90 s après une frappe, alors que macOS a pu
+        // R30 : l'oracle dit « écarté » (ON) jusqu'à 30 s après une frappe, alors que macOS a pu
         // revenir à l'économiseur. Tant qu'il tourne, /wake réveille quand même, sans intention.
         let core = moteur()
         core.start()
@@ -470,8 +472,8 @@ final class EngineCoreTests: XCTestCase {
         signaux.inactiviteHID = 0
         for _ in 0..<4 { scruter(core, 0.5) }
         XCTAssertTrue(core.currentState)
-        // 60 s sans activité : toujours « écarté » pour l'oracle (réaffichage à 90 s).
-        for _ in 0..<120 {
+        // 20 s sans activité : toujours « écarté » pour l'oracle (retour à l'économiseur à 30 s).
+        for _ in 0..<40 {
             signaux.inactiviteHID += 0.5
             scruter(core, 0.5)
         }
@@ -485,10 +487,13 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(core.currentState)
         XCTAssertTrue(journalContient("économiseur en marche"), "\(journal.lines.map { $0.1 })")
 
-        // Sans économiseur, « déjà ON » donne un réveil léger (R49), toujours sans intention.
+        // Sans économiseur (deux lectures sans process), « déjà ON » donne un réveil léger (R49), toujours
+        // sans intention.
         signaux.pidEconomiseur = 0
         scruter(core, 0.5)
+        scruter(core, 0.5)
         core.requestOn(source: "essai")
+        XCTAssertTrue(journalContient("déjà ON (desktop-ui) : réveil léger"))
         XCTAssertEqual(actions.appels, [.wake, .wake])
         XCTAssertNil(commandeEnAttente(core))
     }
@@ -610,7 +615,10 @@ final class EngineCoreTests: XCTestCase {
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [])
 
+        // Parti : la deuxième lecture de suite sans process ferme la session.
         signaux.pidEconomiseur = 0
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [], "une lecture sans source ne ferme pas la session")
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
     }
@@ -913,7 +921,6 @@ final class EngineCoreTests: XCTestCase {
     private func moteurBrut(publieur autre: StatePublisher) -> EngineCore {
         let config = Config()
         let oracle = ScreenSaverOracle(
-            minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
             dismissOnInput: config.saverDismissOnInput,
             dismissGrace: Double(config.saverDismissGraceMS) / 1000,
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
@@ -975,22 +982,24 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(publieur.publications, avant)
         XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
 
-        // Notification de l'économiseur : intacte (l'oracle des fenêtres ne tranche pas).
+        // Notification de l'économiseur : intacte. Sans SAC (repli), un didstart attend son hôte ;
+        // une veille annulée entre les deux n'efface pas l'attente, contrairement à un réveil.
         signaux = Self.signauxDeBureau()
-        signaux.fenetreEconomiseur = .unavailable
+        signaux.drapeauSAC = nil
         publieur = FakePublisher()
         let autre = moteur()
         autre.start()
         autre.handle(.screenSaverDidStart)
-        scruter(autre, 0.5)
-        scruter(autre, 0.5)
+        autre.handle(.systemWillNotSleep)
+        signaux.hotes = [SaverHost(pid: 4242, launchedSecondsAgo: 0.2)]
+        for _ in 0..<3 { scruter(autre, 0.5) }
         XCTAssertFalse(autre.currentState)
-        XCTAssertEqual(autre.statusSnapshot()["reason"] as? String, "screensaver:notification")
+        XCTAssertEqual(autre.statusSnapshot()["reason"] as? String, "screensaver:notification+hôte")
         let publicationsAvant = publieur.publications
         autre.handle(.systemWillNotSleep)
         for _ in 0..<4 { scruter(autre, 0.5) }
         XCTAssertFalse(autre.currentState)
-        XCTAssertEqual(autre.statusSnapshot()["reason"] as? String, "screensaver:notification")
+        XCTAssertEqual(autre.statusSnapshot()["reason"] as? String, "screensaver:notification+hôte")
         XCTAssertEqual(publieur.publications, publicationsAvant)
 
         // Après une veille annoncée : la veille est levée, mais par le lissage (300 ms), sans
@@ -2117,5 +2126,171 @@ final class EngineCoreTests: XCTestCase {
         verrouillee.requestOff(source: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.displaySleep)], "session verrouillée : extinction de l'écran")
         XCTAssertEqual(signaux.indicesProcess, 0)
+    }
+
+    // MARK: - Économiseur sous macOS 27 (plan 3, tâche 2)
+
+    /// F03 : l'économiseur d'inactivité de macOS 27 n'a pas de `ScreenSaverEngine` ; SAC le voit, et OFF
+    /// part après le lissage de 800 ms.
+    func test_economiseurDInactivite_publieOFF() {
+        let core = moteur()
+        core.start()
+        XCTAssertTrue(core.currentState)
+
+        signaux.drapeauSAC = true
+        core.handle(.screenSaverDidStart)
+        XCTAssertTrue(core.currentState, "OFF attend le lissage")
+        signaux.inactiviteHID += 0.5
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState)
+        signaux.inactiviteHID += 0.5
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "screensaver:sac")
+        XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
+                                               Publication(etat: false, force: false)])
+    }
+
+    /// Point de vigilance 1 : un simple verrouillage (⌃⌘Q) laisse SAC à 0. L'écran de verrouillage est une
+    /// UI accessible : ON, jamais `screensaver`, même bien au-delà de 30 s sans activité.
+    func test_verrouillageSimple_sansSAC_resteSurLEcranDeVerrouillage() {
+        let core = moteur()
+        core.start()
+        signaux.etatSession.locked = true
+        core.handle(.screenLocked)
+        for _ in 0..<80 {
+            signaux.inactiviteHID += 0.5
+            scruter(core, 0.5)
+        }
+        XCTAssertTrue(core.currentState)
+        // La raison publiée reste celle de la dernière transition (ON → ON n'en est pas une) : la raison
+        // des faits se lit par `inspect()`.
+        let lecture = core.inspect()
+        XCTAssertTrue(lecture.state)
+        XCTAssertEqual(lecture.reason, "lock-screen-ui")
+        XCTAssertEqual(lecture.facts.screenSaverEvidence, "none")
+        XCTAssertFalse(lecture.facts.screenSaverRunning)
+        XCTAssertFalse(publieur.publications.contains { !$0.etat }, "aucun OFF")
+    }
+
+    /// Réveil du Mac pendant une session d'économiseur (SAC toujours à 1) : la session est gardée, l'état
+    /// reste OFF, sans passer par ON.
+    func test_reveilAvecSessionSAC_resteOFF() {
+        let core = moteur()
+        core.start()
+        signaux.drapeauSAC = true
+        core.handle(.screenSaverDidStart)
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+
+        core.willSleep {}
+        horloge.advance(60)
+        signaux.inactiviteHID += 60
+        core.handle(.systemDidWake)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "screensaver:sac")
+        for _ in 0..<10 {
+            signaux.inactiviteHID += 0.5
+            scruter(core, 0.5)
+        }
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "screensaver:sac")
+        XCTAssertFalse(publieur.publications.dropFirst().contains { $0.etat }, "aucun ON après l'état initial")
+    }
+
+    /// Au réveil (avis IOKit, trou de scrutation) et à la resynchronisation, le moteur fait oublier à
+    /// l'oracle le `didstart` en attente (repli sans SAC) : un hôte apparu ensuite n'ouvre pas de session,
+    /// et l'attente oubliée n'expire pas.
+    func test_reveilEtResynchronisation_oublientLeDidstartEnAttente() {
+        let declencheurs: [(String, (EngineCore) -> Void)] = [
+            ("avis de réveil", { $0.handle(.systemDidWake) }),
+            ("resynchronisation", { $0.resync() }),
+        ]
+        for (nom, declencher) in declencheurs {
+            signaux = Self.signauxDeBureau()
+            signaux.drapeauSAC = nil
+            let core = moteur()
+            core.start()
+            core.handle(.screenSaverDidStart)
+            declencher(core)
+            let lectures = signaux.lecturesHotes
+            signaux.hotes = [SaverHost(pid: 4242, launchedSecondsAgo: 0.2)]
+            for _ in 0..<4 { scruter(core, 0.5) }
+            XCTAssertTrue(core.currentState, nom)
+            XCTAssertEqual(signaux.lecturesHotes, lectures, "\(nom) : plus d'attente, les hôtes ne sont pas lus")
+        }
+
+        signaux = Self.signauxDeBureau()
+        signaux.drapeauSAC = nil
+        let core = moteur()
+        core.start()
+        core.handle(.screenSaverDidStart)
+        scruter(core, 20)
+        XCTAssertTrue(journalContient("interruption de 20.0 s détectée"))
+        XCTAssertFalse(journalContient("didstart non corroboré"), "trou de scrutation : attente oubliée")
+    }
+
+    /// Point de vigilance 2 : une rafale de notifications ne coûte qu'une relecture des faits par 250 ms ;
+    /// la scrutation rattrape le reste. L'indice de scan, lui, part à chaque notification (R55).
+    /// Pas de 1/64 s : exacts en binaire, pour que la borne des 250 ms tombe juste.
+    func test_rafaleDeNotifications_unRafraichissementPar250ms() {
+        XCTAssertEqual(EngineCore.notificationRefreshMinInterval, 0.25)
+        let core = moteur()
+        core.start()
+        let avant = signaux.lecturesSession
+
+        // 10 didstart en 0,16 s.
+        for _ in 0..<10 {
+            core.handle(.screenSaverDidStart)
+            horloge.advance(0.015625)
+        }
+        XCTAssertEqual(signaux.lecturesSession, avant + 1, "une seule relecture hors scrutation")
+        XCTAssertEqual(signaux.indicesProcess, 10, "un indice par notification, avant le filtre")
+
+        // didstop, verrouillage et déverrouillage partagent le même filtre.
+        core.handle(.screenSaverDidStop)
+        core.handle(.screenLocked)
+        core.handle(.screenUnlocked)
+        XCTAssertEqual(signaux.lecturesSession, avant + 1)
+        XCTAssertEqual(signaux.indicesProcess, 11)
+
+        // 250 ms après la dernière relecture due à une notification, la suivante relit les faits.
+        horloge.advance(0.09375)
+        core.handle(.screenLocked)
+        XCTAssertEqual(signaux.lecturesSession, avant + 2)
+
+        // La scrutation relit toujours, et ne compte pas pour le filtre.
+        scruter(core, 0.5)
+        XCTAssertEqual(signaux.lecturesSession, avant + 3)
+        core.handle(.screenUnlocked)
+        XCTAssertEqual(signaux.lecturesSession, avant + 4)
+    }
+
+    /// Point de vigilance 3 : sans SAC (macOS futur), un avertissement au démarrage, une seule fois.
+    func test_sansSAC_avertissementAuDemarrage() {
+        let message = "économiseur : SACScreenSaverIsRunning indisponible → repli sur l'hôte apparu après didstart ; "
+            + "les paysages aériens ne seront pas détectés"
+        let avecSAC = moteur()
+        avecSAC.start()
+        XCTAssertFalse(journal.lines.contains { $0.1 == message })
+
+        signaux.drapeauSAC = nil
+        let sansSAC = moteur()
+        sansSAC.start()
+        for _ in 0..<4 { scruter(sansSAC, 0.5) }
+        sansSAC.handle(.screenSaverDidStart)
+        XCTAssertEqual(journal.lines.filter { $0.0 == .warn && $0.1 == message }.count, 1)
+    }
+
+    /// `/status` dit comment l'économiseur est détecté : par SAC, ou par l'hôte apparu après didstart.
+    func test_statusDitLaSourceDeDetection() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(core.statusSnapshot()["saver_detection"] as? String, "sac")
+        signaux.drapeauSAC = true
+        XCTAssertEqual(core.statusSnapshot()["saver_detection"] as? String, "sac")
+        signaux.drapeauSAC = nil
+        XCTAssertEqual(core.statusSnapshot()["saver_detection"] as? String, "hôte")
     }
 }

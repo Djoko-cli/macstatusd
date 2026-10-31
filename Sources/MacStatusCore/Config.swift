@@ -226,8 +226,9 @@ public struct Config {
     /// compte (absorbe l'activité qui a précédé la commande OFF).
     public var saverDismissGraceMS = 1500
     /// Inactivité au‑delà de laquelle on considère que macOS est revenu à
-    /// l'économiseur après un panneau resté sans réponse.
-    public var saverRedisplayIdleSeconds = 90
+    /// l'économiseur après un panneau resté sans réponse. Mesuré au banc du 31/10
+    /// sous macOS 27 : 30 s après la dernière activité.
+    public var saverRedisplayIdleSeconds = 30
 
     // --- Commandes ON/OFF ---
     public var offAction: OffAction = .screensaver

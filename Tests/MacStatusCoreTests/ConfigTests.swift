@@ -610,4 +610,14 @@ final class ConfigOriginTests: XCTestCase {
         XCTAssertEqual(plafond.config.webhookTargets.count, Config.maxWebhookTargets)
         XCTAssertTrue(plafond.warnings.contains { $0.hasPrefix("webhook_targets") && $0.contains("\(Config.maxWebhookTargets)") })
     }
+
+    // MARK: - Plan 3, tâche 2 : économiseur
+
+    /// Mesuré au banc du 31/10 : macOS 27 revient à l'économiseur 30 s après la dernière activité.
+    func test_redisplayParDefaut30s() {
+        XCTAssertEqual(Config().saverRedisplayIdleSeconds, 30)
+        XCTAssertEqual(Config.parse(data: Data("{}".utf8)).config.saverRedisplayIdleSeconds, 30)
+        let reglee = Config.parse(data: Data(#"{"saver_redisplay_idle_seconds": 90}"#.utf8))
+        XCTAssertEqual(reglee.config.saverRedisplayIdleSeconds, 90, "la clé garde la main")
+    }
 }

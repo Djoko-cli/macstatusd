@@ -126,7 +126,6 @@ final class FakeSignals: SystemSignals {
     var inactiviteHID: Double = 0
     var saisieSecurisee = false
     var pidEconomiseur: Int32 = 0
-    var fenetreEconomiseur = WindowVerdict.notVisible
     var sessionAqua = true
     /// `SACScreenSaverIsRunning` : vrai pendant une session d'économiseur, faux hors session, `nil` si la
     /// fonction est indisponible.
@@ -141,8 +140,15 @@ final class FakeSignals: SystemSignals {
     /// Pour chaque indice, le nombre de lectures de `saverEnginePID()` déjà faites à cet instant :
     /// prouve qu'un indice précède la relecture qu'il annonce.
     private(set) var lecturesPIDAuxIndices: [Int] = []
+    /// Nombre d'appels de `session()` : une relecture des faits par appel.
+    private(set) var lecturesSession = 0
+    /// Nombre d'appels de `saverHosts()` (balayage coûteux, réservé au repli sans SAC).
+    private(set) var lecturesHotes = 0
 
-    func session() -> SessionState { etatSession }
+    func session() -> SessionState {
+        lecturesSession += 1
+        return etatSession
+    }
     func display() -> DisplayState { etatEcran }
     func hidIdleSeconds() -> Double { inactiviteHID }
     func secureInputActive() -> Bool { saisieSecurisee }
@@ -150,9 +156,11 @@ final class FakeSignals: SystemSignals {
         lecturesPID += 1
         return pidEconomiseur
     }
-    func saverWindow() -> WindowVerdict { fenetreEconomiseur }
     func saverSessionFlag() -> Bool? { drapeauSAC }
-    func saverHosts() -> [SaverHost] { hotes }
+    func saverHosts() -> [SaverHost] {
+        lecturesHotes += 1
+        return hotes
+    }
     func saverProcessHint() {
         indicesProcess += 1
         lecturesPIDAuxIndices.append(lecturesPID)

@@ -38,7 +38,6 @@ final class EngineRunner: EngineFacade {
                                 probe: NWLocalNetworkProbe(engineQueue: queue))
         let signals = LiveSystemSignals()
         let oracle = ScreenSaverOracle(
-            minimumInterval: max(1.0, Double(config.pollIntervalMS) / 1000),
             dismissOnInput: config.saverDismissOnInput,
             dismissGrace: Double(config.saverDismissGraceMS) / 1000,
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),

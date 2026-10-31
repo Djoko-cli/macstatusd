@@ -142,9 +142,9 @@ final class LiveSystemSignals: SystemSignals {
     /// Secondes depuis la dernière activité clavier/souris, -1 si indisponible.
     ///
     /// Mesuré au niveau HID, donc lisible même session verrouillée : c'est le
-    /// seul signal qui distingue « économiseur seul à l'écran » de « panneau
-    /// d'authentification par‑dessus l'économiseur », les deux états étant
-    /// identiques pour le process, les fenêtres et les notifications.
+    /// seul signal du système qui distingue « économiseur seul à l'écran » de
+    /// « panneau d'authentification par‑dessus l'économiseur », les deux états
+    /// étant identiques pour SAC, le process, les fenêtres et les notifications.
     func hidIdleSeconds() -> Double {
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault,
@@ -301,35 +301,6 @@ final class LiveSystemSignals: SystemSignals {
         }
         sacIsRunning = unsafeBitCast(symbol, to: SACIsRunning.self)
         return sacIsRunning
-    }
-
-    // MARK: - Économiseur d'écran : fenêtres
-
-    func saverWindow() -> WindowVerdict {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
-              !list.isEmpty else {
-            return .unavailable
-        }
-
-        let screen = CGDisplayBounds(CGMainDisplayID())
-        let screenArea = Double(screen.width * screen.height)
-        let saverLevel = Int(CGWindowLevelForKey(.screenSaverWindow))
-
-        for window in list {
-            guard let layer = window[kCGWindowLayer as String] as? Int, layer >= saverLevel else { continue }
-            guard let owner = window[kCGWindowOwnerName as String] as? String,
-                  owner.lowercased().contains("screensaver") else { continue }
-
-            // Écarte l'aperçu miniature des Réglages Système : on exige une
-            // fenêtre qui couvre réellement l'écran.
-            guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
-                  let height = (bounds["Height"] as? NSNumber)?.doubleValue else { continue }
-            if screenArea <= 0 || (width * height) >= 0.5 * screenArea {
-                return .visible
-            }
-        }
-        return .notVisible
     }
 
     // MARK: - Session graphique

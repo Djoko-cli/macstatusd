@@ -32,12 +32,6 @@ public struct DisplayState {
     }
 }
 
-/// Une fenêtre d'économiseur couvre-t-elle l'écran ? `unavailable` : le système
-/// ne permet pas de trancher (hors session graphique, permission manquante).
-public enum WindowVerdict {
-    case visible, notVisible, unavailable
-}
-
 /// Un process de l'utilisateur qui héberge un économiseur d'écran (`SaverHostRule`).
 public struct SaverHost: Equatable {
     public var pid: Int32
@@ -61,7 +55,6 @@ public protocol SystemSignals: AnyObject {
     /// PID du process `ScreenSaverEngine` de l'utilisateur, 0 s'il n'existe pas ou n'est pas encore
     /// connu (voir `saverProcessHint()`). Les process des autres utilisateurs ne comptent pas.
     func saverEnginePID() -> Int32
-    func saverWindow() -> WindowVerdict
     /// `SACScreenSaverIsRunning` : vrai pendant toute une session d'économiseur, panneau de connexion
     /// compris ; faux hors session, y compris sur un simple verrouillage ; `nil` si la fonction manque
     /// ou rend un code inattendu.

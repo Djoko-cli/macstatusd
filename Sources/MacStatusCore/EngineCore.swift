@@ -56,6 +56,12 @@ public final class EngineCore {
     /// Au-delà de cette durée sans avis de réveil, `tick()` conclut que l'avis est perdu : la veille
     /// annoncée plus tôt ne peut pas durer (la scrutation tourne, donc le Mac est éveillé).
     static let lostWakeDelay: Double = 35
+    /// Intervalle minimal entre deux relectures des faits dues à une notification (`didstart`, `didstop`,
+    /// verrouillage, déverrouillage) : une rafale, forgée ou non, ne coûte qu'une relecture par 250 ms.
+    /// La scrutation suivante rattrape le reste ; elle n'entre pas dans ce compte.
+    static let notificationRefreshMinInterval: Double = 0.25
+    /// Instant monotone de la dernière relecture due à une de ces notifications ; `nil` : aucune encore.
+    private var lastNotificationRefreshAt: Double?
 
     /// Marge de couverture d'un trou de scrutation par une veille : deux périodes de scrutation,
     /// entre 1 et 3 s (bien moins que le seuil de trou, 10 s au moins).
@@ -151,8 +157,13 @@ public final class EngineCore {
 
     // MARK: - Cycle de vie
 
-    /// Premier relevé des faits et publication forcée de l'état initial.
+    /// Premier relevé des faits et publication forcée de l'état initial. Sans `SACScreenSaverIsRunning`,
+    /// un avertissement unique annonce le repli de l'oracle de l'économiseur.
     public func start() {
+        if signals.saverSessionFlag() == nil {
+            logWarn("économiseur : SACScreenSaverIsRunning indisponible → repli sur l'hôte apparu après didstart ; "
+                    + "les paysages aériens ne seront pas détectés")
+        }
         refreshFacts()
         evaluate(immediate: true, force: true)
         logInfo("état initial: \(published == true ? "ON" : "OFF") (\(publishedReason)) — faits: \(factsSummary())")
@@ -200,7 +211,7 @@ public final class EngineCore {
                 logWarn("interruption de \(shown) s détectée → resynchronisation")
             }
             systemAsleep = false
-            saver.noteNotification(active: false)
+            saver.noteSystemWake()
         }
 
         // Réveil perdu : une veille courte (moins que le seuil de trou) dont ni `HasPoweredOn` ni
@@ -213,7 +224,7 @@ public final class EngineCore {
             sleep.end = now
             lastSleep = sleep
             systemAsleep = false
-            saver.noteNotification(active: false)
+            saver.noteSystemWake()
             lostWake = true
             logWarn("réveil non signalé : rattrapé (veille annoncée il y a \(String(format: "%.1f", now - sleep.start)) s)")
         }
@@ -618,7 +629,7 @@ public final class EngineCore {
                 lastSleep = sleep
             }
             systemAsleep = false
-            saver.noteNotification(active: false)
+            saver.noteSystemWake()
             refreshFacts()
             // Après une veille longue, Homebridge a pu perdre l'état : on le force. Après une
             // veille courte (ou de durée inconnue : second avis de réveil, ou réveil déjà traité
@@ -633,32 +644,43 @@ public final class EngineCore {
                 ensurePublished()
             }
         case .systemWillNotSleep:
-            // Veille annulée : ni réveil ni nouvel état. La commande en cours et la notification
-            // de l'économiseur restent ; l'état revient par le lissage habituel.
+            // Veille annulée : ni réveil ni nouvel état. La commande en cours et le `didstart` en
+            // attente de l'économiseur restent ; l'état revient par le lissage habituel.
             systemAsleep = false
             lastSleep = nil
             refreshFacts()
             evaluate(immediate: false)
         case .screenSaverDidStart:
-            saver.noteNotification(active: true)
-            // R55 : l'indice précède toute relecture, pour que celle-ci cherche le process tout neuf.
+            let now = clock.monotonic()
+            saver.noteDidStart(now: now)
+            // R55 : l'indice précède toute relecture, et le filtre de 250 ms, pour que la relecture cherche
+            // le process tout neuf ; un scan que le filtre retarde est fait à la scrutation suivante.
             signals.saverProcessHint()
-            refreshFacts()
-            evaluate(immediate: false)
+            refreshAfterNotification(now: now)
         case .screenSaverDidStop:
-            saver.noteNotification(active: false)
+            let now = clock.monotonic()
+            saver.noteDidStop(now: now)
             signals.saverProcessHint()
-            refreshFacts()
-            evaluate(immediate: false)
+            refreshAfterNotification(now: now)
         case .saverProcessChanged:
             signals.saverProcessHint()
             refreshFacts()
             evaluate(immediate: false)
-        case .screensDidSleep, .screensDidWake, .screenLocked, .screenUnlocked,
-             .sessionActive, .sessionInactive:
+        case .screenLocked, .screenUnlocked:
+            refreshAfterNotification(now: clock.monotonic())
+        case .screensDidSleep, .screensDidWake, .sessionActive, .sessionInactive:
             refreshFacts()
             evaluate(immediate: false)
         }
+    }
+
+    /// Relecture des faits et évaluation après une notification de l'économiseur ou du verrouillage, au
+    /// plus une toutes les `notificationRefreshMinInterval` secondes.
+    private func refreshAfterNotification(now: Double) {
+        if let last = lastNotificationRefreshAt, now - last < Self.notificationRefreshMinInterval { return }
+        lastNotificationRefreshAt = now
+        refreshFacts()
+        evaluate(immediate: false)
     }
 
     // MARK: - Arrêt
@@ -782,9 +804,9 @@ public final class EngineCore {
     /// rien ; une intention OFF en cours est remplacée. Les faits sont relus d'abord. Déjà ON et
     /// sans intention OFF en cours, aucune intention n'est créée et rien n'est attendu, mais un
     /// réveil part quand même :
-    /// - économiseur encore en marche (Ruling R30) : l'oracle le dit « écarté » jusqu'à 90 s après
-    ///   une frappe, alors que macOS a pu revenir à l'économiseur. L'assertion tient tant qu'il
-    ///   tourne, au plus un délai de commande ;
+    /// - économiseur encore en marche (Ruling R30) : l'oracle le dit « écarté » jusqu'à
+    ///   `saver_redisplay_idle_seconds` (30 s par défaut) après une frappe, alors que macOS a pu revenir
+    ///   à l'économiseur. L'assertion tient tant qu'il tourne, au plus un délai de commande ;
     /// - sinon, réveil léger (Ruling R49) : les faits ne voient ni l'économiseur lancé par
     ///   l'inactivité sous macOS 27, ni l'écran assombri. L'assertion est relâchée à l'évaluation
     ///   suivante.
@@ -851,7 +873,7 @@ public final class EngineCore {
             logDebug("resynchronisation pendant une veille annoncée : veille gardée")
         } else {
             systemAsleep = false
-            saver.noteNotification(active: false)
+            saver.noteSystemWake()
         }
         refreshFacts()
         evaluate(immediate: true, force: true)
@@ -905,6 +927,7 @@ public final class EngineCore {
             "session_context": signals.hasAquaSession() ? "aqua" : "headless",
             "publishing_allowed": authorizationVerdict().allowed,
             "publishing_reason": authorizationVerdict().reason,
+            "saver_detection": saverDetection,
         ]
         if isShutDown { dict["shutting_down"] = true }
         if let lastTransitionAt {
@@ -919,6 +942,12 @@ public final class EngineCore {
             ]
         }
         return dict
+    }
+
+    /// Comment l'économiseur est détecté : `sac` (`SACScreenSaverIsRunning`), ou `hôte` si la fonction
+    /// manque (repli sur l'hôte apparu après `didstart`).
+    private var saverDetection: String {
+        signals.saverSessionFlag() == nil ? "hôte" : "sac"
     }
 
     /// Instantané des faits pour `--once` / `--watch` (hors serveur HTTP).
