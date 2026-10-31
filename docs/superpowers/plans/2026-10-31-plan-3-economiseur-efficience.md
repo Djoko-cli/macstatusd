@@ -143,7 +143,7 @@ C23, F75.
   - dans `handle(_:)`, sur `.screenSaverDidStart`, `.screenSaverDidStop` et `.saverProcessChanged` ;
   - dans `requestOff`, juste après `actions.runOff(.screensaver)`.
 
-- [ ] **Étape 1 : tests.**
+- [x] **Étape 1 : tests.**
   - `test_regleHote_reconnaitLesHotesDuBanc` : vrai pour
     `/System/Library/Frameworks/ScreenSaver.framework/PlugIns/legacyScreenSaver-x86_64.appex/Contents/MacOS/legacyScreenSaver-x86_64`,
     pour la même chose sans `-x86_64`, pour le chemin de `ScreenSaverEngine`, et pour
@@ -158,8 +158,8 @@ C23, F75.
   - `test_politiqueDeScan_indiceForceUnScan`.
   - `test_didstart_demandeUnScanDesProcess` et `test_offParEconomiseur_demandeUnScanDesProcess` :
     `indicesProcess` monte.
-- [ ] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échec de compilation.
-- [ ] **Étape 3 : mettre en œuvre.** Les trois types purs, puis le protocole et les faux. Dans `LiveSystemSignals` :
+- [x] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échec de compilation.
+- [x] **Étape 3 : mettre en œuvre.** Les trois types purs, puis le protocole et les faux. Dans `LiveSystemSignals` :
   - **SAC** : `login.framework` ouvert une fois (`dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_LAZY)`),
     `SACScreenSaverIsRunning` résolu par `dlsym` en `@convention(c) (UnsafeMutablePointer<UInt8>) -> Int32`.
     On l'appelle avec un octet valide ; sa valeur passe par le retour (banc 1 : l'octet n'est jamais
@@ -171,8 +171,8 @@ C23, F75.
       l'accorde ; `saverProcessHint()` appelle `noteHint()`.
   - **`saverHosts()`** : scan `KERN_PROC_UID`, chemin par `proc_pidpath`, âge tiré de `kp_proc.p_starttime`.
   - **`runningProcesses()`**, qui parcourait tous les utilisateurs, disparaît.
-- [ ] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Économiseur : signaux SAC, hôtes et PID de l'utilisateur seulement ».
+- [x] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
+- [x] **Étape 5 : commit** « Économiseur : signaux SAC, hôtes et PID de l'utilisateur seulement ».
 
 ### Tâche 2 : oracle de l'économiseur sous macOS 27
 
