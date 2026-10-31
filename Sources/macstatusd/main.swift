@@ -157,8 +157,11 @@ if options.once {
     output["state"] = snapshot.state ? "1" : "0"
     output["reason"] = snapshot.reason
     output["session_context"] = CGSessionAvailable() ? "aqua" : "headless"
-    // Comme dans /status : économiseur détecté par SAC, ou par l'hôte apparu après didstart (repli).
-    output["saver_detection"] = engine.statusSnapshot()["saver_detection"]
+    // Comme dans /status : économiseur détecté par SAC, ou par l'hôte apparu après didstart (repli), et moyen
+    // de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall).
+    let status = engine.statusSnapshot()
+    output["saver_detection"] = status["saver_detection"]
+    output["saver_dismissal"] = status["saver_dismissal"]
     output["version"] = macstatusdVersion
     if let configError { output["config_error"] = configError }
     let data = (try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])) ?? Data()

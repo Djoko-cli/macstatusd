@@ -28,9 +28,38 @@ final class PowerActions: CommandActions {
     private let offCommandOverride: [String]
     private let wakeCommandOverride: [String]
 
+    /// `SACScreenSaverStopNow` (login.framework) : arrête l'économiseur comme une frappe, sans argument. Rend 0
+    /// (mesuré au banc). Résolue une fois à la création ; `nil` si le cadre ou le symbole manquent.
+    private typealias SACStopNow = @convention(c) () -> Int32
+    private static let loginFrameworkPath = "/System/Library/PrivateFrameworks/login.framework/login"
+    private let sacStopNow: SACStopNow?
+
+    /// Connu dès la création : natif si la fonction est résolue, sinon le repli `killall`.
+    let screenSaverDismissal: ScreenSaverDismissal
+
     init(config: Config) {
         offCommandOverride = config.offCommand
         wakeCommandOverride = config.wakeCommand
+        let stopNow = Self.resolveSACStopNow()
+        sacStopNow = stopNow
+        screenSaverDismissal = stopNow == nil ? .processKill : .native
+    }
+
+    /// Ouvre login.framework et résout la fonction, sans l'appeler. Le cadre reste ouvert jusqu'à la fin du
+    /// process (le pointeur de fonction doit rester valide) ; `LiveSystemSignals` y résout déjà
+    /// `SACScreenSaverIsRunning`. Un échec se journalise ici (WARN, la raison) ; le moteur annonce le repli au
+    /// démarrage.
+    private static func resolveSACStopNow() -> SACStopNow? {
+        guard let framework = dlopen(loginFrameworkPath, RTLD_LAZY) else {
+            let reason = dlerror().map { escapeForLog(String(cString: $0)) } ?? "raison inconnue"
+            logWarn("SACScreenSaverStopNow indisponible : login.framework ne s'ouvre pas (\(reason))")
+            return nil
+        }
+        guard let symbol = dlsym(framework, "SACScreenSaverStopNow") else {
+            logWarn("SACScreenSaverStopNow indisponible : symbole absent de login.framework")
+            return nil
+        }
+        return unsafeBitCast(symbol, to: SACStopNow.self)
     }
 
     var hasOffOverride: Bool { !offCommandOverride.isEmpty }
@@ -113,13 +142,7 @@ final class PowerActions: CommandActions {
                     logWarn("IOPMAssertionRelease (activité utilisateur) a échoué (0x\(String(result, radix: 16)))")
                 }
             }
-            if let process = caffeinateProcess {
-                caffeinateProcess = nil
-                if process.isRunning {
-                    logInfo("réveil: caffeinate (pid \(process.processIdentifier)) arrêté")
-                    process.terminate()
-                }
-            }
+            stopCaffeinate(raison: "réveil relâché")
         }
     }
 
@@ -139,7 +162,8 @@ final class PowerActions: CommandActions {
 
             let proprietes: [String: Any] = [
                 kIOPMAssertionTypeKey as String: kIOPMAssertPreventUserIdleDisplaySleep as String,
-                kIOPMAssertionNameKey as String: "macstatusd retenue d'écran",
+                // ASCII : `pmset -g assertions` affichait mal l'accent.
+                kIOPMAssertionNameKey as String: "macstatusd retenue d'ecran",
                 kIOPMAssertionLevelKey as String: kIOPMAssertionLevelOn,
                 // Filet : le système la relâche lui-même, quelques secondes après notre minuterie.
                 kIOPMAssertionTimeoutKey as String: duree + 3,
@@ -179,8 +203,21 @@ final class PowerActions: CommandActions {
         }
     }
 
-    /// À appeler sur `queue`. Lance `caffeinate -u -t 2` sans attendre, ni tuyau.
+    /// À appeler sur `queue`. Arrête le `caffeinate` du dernier réveil s'il tourne encore, par son PID, jamais
+    /// par son nom. Sans effet s'il n'y en a pas.
+    private func stopCaffeinate(raison: String) {
+        guard let process = caffeinateProcess else { return }
+        caffeinateProcess = nil
+        guard process.isRunning else { return }
+        logInfo("réveil: caffeinate (pid \(process.processIdentifier)) arrêté (\(raison))")
+        process.terminate()
+    }
+
+    /// À appeler sur `queue`. Lance `caffeinate -u -t 2` sans attendre, ni tuyau. Un seul à la fois (R52) :
+    /// celui du réveil précédent, s'il tourne encore, est d'abord arrêté par son PID. Sans cela, deux /wake
+    /// rapprochés en laissaient un orphelin, hors de portée de `releaseWake()`.
     private func startCaffeinate() {
+        stopCaffeinate(raison: "remplacé par un nouveau réveil")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
         process.arguments = ["-u", "-t", "2"]
@@ -196,8 +233,24 @@ final class PowerActions: CommandActions {
         }
     }
 
-    func stopScreenSaver() {
-        launch(["/usr/bin/killall", "ScreenSaverEngine"], label: "arrêt économiseur")
+    /// Écarte l'économiseur par `screenSaverDismissal`. Le moyen natif est appelé sur la file des actions, jamais
+    /// sur celle du moteur ; son code est journalisé, 0 attendu. Le repli lance `killall ScreenSaverEngine`
+    /// sans attendre.
+    func dismissScreenSaver() {
+        switch screenSaverDismissal {
+        case .native:
+            queue.async { [self] in
+                guard let stopNow = sacStopNow else { return }
+                let code = stopNow()
+                if code == 0 {
+                    logInfo("économiseur: SACScreenSaverStopNow appelé (code 0)")
+                } else {
+                    logWarn("économiseur: SACScreenSaverStopNow a rendu le code \(code) (0 attendu)")
+                }
+            }
+        case .processKill:
+            launch(["/usr/bin/killall", "ScreenSaverEngine"], label: "arrêt économiseur")
+        }
     }
 
     // MARK: - Exécution

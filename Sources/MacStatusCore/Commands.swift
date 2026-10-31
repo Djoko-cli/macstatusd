@@ -23,7 +23,25 @@ public protocol CommandActions: AnyObject {
     /// avec son propre délai). Une nouvelle retenue remplace l'ancienne : jamais deux à la fois.
     /// `seconds <= 0` relâche la retenue en cours. Ne bloque jamais.
     func holdDisplay(seconds: Double)
-    func stopScreenSaver()
+    /// Moyen par lequel `dismissScreenSaver()` écarte l'économiseur. Connu dès la création des actions (la
+    /// fonction du système est résolue une fois pour toutes) : le moteur le journalise au démarrage et le
+    /// publie dans `/status` (`saver_dismissal`).
+    var screenSaverDismissal: ScreenSaverDismissal { get }
+    /// Écarte l'économiseur d'écran par `screenSaverDismissal`, comme le ferait une frappe. Rapporte
+    /// seulement le lancement : la confirmation vient des faits. Ne bloque jamais : l'appelant est la file
+    /// du moteur.
+    func dismissScreenSaver()
+}
+
+/// Moyen d'écarter l'économiseur lors d'un ON. La valeur brute sert au journal et à `/status`.
+public enum ScreenSaverDismissal: String {
+    /// `SACScreenSaverStopNow` (login.framework, sans argument) : fait apparaître le panneau de connexion
+    /// par-dessus l'économiseur, comme une frappe. L'économiseur d'inactivité tourne encore dessous, et macOS
+    /// y revient quelques secondes plus tard (30 s mesurées).
+    case native = "SACScreenSaverStopNow"
+    /// Repli quand la fonction manque : `killall ScreenSaverEngine`. Au banc 1, sans effet visible sous
+    /// macOS 27 sur l'économiseur d'inactivité : le moteur n'en suppose aucun et attend les faits.
+    case processKill = "killall ScreenSaverEngine"
 }
 
 /// Résumé d'une commande de surcharge (`off_command`, `wake_command`) pour le journal : l'exécutable,

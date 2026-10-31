@@ -174,18 +174,22 @@ final class FakeActions: CommandActions {
         case runOff(OffAction)
         case displaySleep
         case wake
-        case stopScreenSaver
+        case dismissScreenSaver
     }
 
     var hasOffOverride = false
     /// Vrai : une surcharge `wake_command` est définie, `wake()` ne pose rien à relâcher.
     var hasWakeOverride = false
+    /// Moyen d'écartement que ces actions annoncent : `.native` (`SACScreenSaverStopNow`), ou le repli
+    /// `.processKill` quand la fonction manque. Les tests le changent avant de créer le moteur.
+    var moyenEcartement: ScreenSaverDismissal = .native
+    var screenSaverDismissal: ScreenSaverDismissal { moyenEcartement }
     private(set) var appels: [Appel] = []
 
     func runOff(_ action: OffAction) { appels.append(.runOff(action)) }
     func displaySleep() { appels.append(.displaySleep) }
     func wake() { appels.append(.wake) }
-    func stopScreenSaver() { appels.append(.stopScreenSaver) }
+    func dismissScreenSaver() { appels.append(.dismissScreenSaver) }
 
     /// Appels de la tâche 17, tenus à part de `appels` pour ne pas toucher aux assertions
     /// existantes : relâchement du réveil, pose (`seconds > 0`) ou levée (`seconds <= 0`) de la retenue.

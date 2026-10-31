@@ -157,9 +157,17 @@ public final class EngineCore {
 
     // MARK: - Cycle de vie
 
-    /// Premier relevé des faits et publication forcée de l'état initial. Sans `SACScreenSaverIsRunning`,
-    /// un avertissement unique annonce le repli de l'oracle de l'économiseur.
+    /// Premier relevé des faits et publication forcée de l'état initial. Le moyen d'écarter l'économiseur est
+    /// journalisé une fois (INFO s'il est natif, WARN pour le repli), et, sans `SACScreenSaverIsRunning`, un
+    /// avertissement unique annonce le repli de l'oracle de l'économiseur.
     public func start() {
+        switch actions.screenSaverDismissal {
+        case .native:
+            logInfo("économiseur : moyen d'écartement SACScreenSaverStopNow (commande du système)")
+        case .processKill:
+            logWarn("SACScreenSaverStopNow indisponible → repli killall ScreenSaverEngine, "
+                    + "sans effet sous macOS 27 sur l'économiseur d'inactivité")
+        }
         if signals.saverSessionFlag() == nil {
             logWarn("économiseur : SACScreenSaverIsRunning indisponible → repli sur l'hôte apparu après didstart ; "
                     + "les paysages aériens ne seront pas détectés")
@@ -470,7 +478,7 @@ public final class EngineCore {
         }
         if facts.screenSaverActive && config.stopScreensaverOnWake {
             logWarn("commande \(intent.source) sans effet observé → escalade: arrêt de l'économiseur")
-            actions.stopScreenSaver()
+            dismissSaver(now: clock.monotonic())
             return
         }
         logWarn("commande \(intent.source) sans effet observé → escalade: nouvelle tentative de réveil")
@@ -508,6 +516,24 @@ public final class EngineCore {
         displayHoldUntil = nil
         actions.holdDisplay(seconds: 0)
         logInfo("retenue d'écran levée (\(why))")
+    }
+
+    /// Écarte l'économiseur par la commande du système (C24), puis, si le moyen est natif, prévient l'oracle :
+    /// l'arrêt natif fait apparaître le panneau de connexion par-dessus un économiseur qui tourne encore, comme
+    /// une frappe, sans que rien dans les faits ne le dise avant leur prochaine relecture. L'évaluation
+    /// suivante confirme alors l'ON (preuve `écarté-par-commande`). Le repli `killall` n'écarte rien sous
+    /// macOS 27 : rien n'est supposé, la confirmation attend les faits.
+    /// Appelé seulement avec `stop_screensaver_on_wake` vrai.
+    private func dismissSaver(now: Double) {
+        let means = actions.screenSaverDismissal
+        actions.dismissScreenSaver()
+        switch means {
+        case .native:
+            saver.noteDismissed(now: now)
+            logInfo("économiseur : écartement demandé (\(means.rawValue))")
+        case .processKill:
+            logInfo("économiseur : écartement demandé (\(means.rawValue)) : aucun effet supposé, les faits décideront")
+        }
     }
 
     /// Un ON vient d'être confirmé par les faits : l'assertion de réveil a fini son travail et est
@@ -806,10 +832,12 @@ public final class EngineCore {
     /// réveil part quand même :
     /// - économiseur encore en marche (Ruling R30) : l'oracle le dit « écarté » jusqu'à
     ///   `saver_redisplay_idle_seconds` (30 s par défaut) après une frappe, alors que macOS a pu revenir
-    ///   à l'économiseur. L'assertion tient tant qu'il tourne, au plus un délai de commande ;
-    /// - sinon, réveil léger (Ruling R49) : les faits ne voient ni l'économiseur lancé par
-    ///   l'inactivité sous macOS 27, ni l'écran assombri. L'assertion est relâchée à l'évaluation
-    ///   suivante.
+    ///   à l'économiseur. L'assertion tient tant qu'il tourne, au plus un délai de commande. Avec
+    ///   `stop_screensaver_on_wake`, il est aussi écarté par la commande du système : si macOS est déjà
+    ///   revenu à l'économiseur, le panneau reparaît pour 30 s ;
+    /// - sinon, réveil léger (Ruling R49), réservé aux cas sans session d'économiseur : les faits ne voient
+    ///   ni l'économiseur lancé par l'inactivité sous macOS 27, ni l'écran assombri. L'assertion est
+    ///   relâchée à l'évaluation suivante.
     ///
     /// Un ON qui remplace un OFF dont l'action est partie n'est pas confirmé avant
     /// `command_escalate_after_ms` : l'économiseur lancé par `open -a` peut démarrer après coup, et
@@ -835,6 +863,11 @@ public final class EngineCore {
                 if wakeAssertionHeld {
                     wakeSaverWaitUntil = clock.monotonic() + Double(config.commandConfirmTimeoutMS) / 1000
                 }
+                // macOS a pu revenir à l'économiseur, que le panneau supposé visible ne montre plus : l'arrêt
+                // natif le fait reparaître pour `saver_redisplay_idle_seconds` de plus.
+                if config.stopScreensaverOnWake {
+                    dismissSaver(now: clock.monotonic())
+                }
             } else {
                 logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)) : réveil léger, sans intention")
                 wakeNow()
@@ -857,11 +890,10 @@ public final class EngineCore {
         }
         intent = next
         wakeNow()
-        // Un économiseur actif ne s'arrête pas toujours sur simple activité
-        // déclarée : on le termine dans le même geste, comme le ferait une
-        // frappe clavier.
+        // Un économiseur seul à l'écran ne s'arrête pas sur simple activité déclarée : on l'écarte dans le
+        // même geste, comme le ferait une frappe clavier. Les faits ne le verront qu'à la relecture suivante.
         if facts.screenSaverActive && config.stopScreensaverOnWake {
-            actions.stopScreenSaver()
+            dismissSaver(now: clock.monotonic())
         }
         evaluate(immediate: true)
     }
@@ -928,6 +960,7 @@ public final class EngineCore {
             "publishing_allowed": authorizationVerdict().allowed,
             "publishing_reason": authorizationVerdict().reason,
             "saver_detection": saverDetection,
+            "saver_dismissal": actions.screenSaverDismissal.rawValue,
         ]
         if isShutDown { dict["shutting_down"] = true }
         if let lastTransitionAt {

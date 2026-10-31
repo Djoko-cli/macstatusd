@@ -65,8 +65,21 @@ final class EngineCoreTests: XCTestCase {
         core.tick()
     }
 
+    /// Comme `scruter`, sans aucune activité matérielle : l'inactivité HID grandit du même pas, pour que la
+    /// dernière frappe connue de l'oracle reste fixe.
+    private func scruterSansActivite(_ core: EngineCore, _ secondes: Double) {
+        signaux.inactiviteHID += secondes
+        scruter(core, secondes)
+    }
+
     private func commandeEnAttente(_ core: EngineCore) -> [String: Any]? {
         core.statusSnapshot()["pending_command"] as? [String: Any]
+    }
+
+    /// Preuve de l'économiseur telle que `/status` la publie (`facts.screensaver_evidence`), sans relire
+    /// le système.
+    private func preuveEconomiseur(_ core: EngineCore) -> String? {
+        (core.statusSnapshot()["facts"] as? [String: Any])?["screensaver_evidence"] as? String
     }
 
     private func journalContient(_ fragment: String) -> Bool {
@@ -397,15 +410,15 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(core.currentState, "l'intention ON tient l'état")
         XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
 
-        // 2,5 s : escalade, l'économiseur est arrêté.
+        // 2,5 s : escalade, l'économiseur est écarté par la commande du système (C24).
         scruter(core, 0.5)
-        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake, .stopScreenSaver])
-        // Le process disparaît : la deuxième lecture de suite sans lui ferme la session.
-        signaux.pidEconomiseur = 0
-        scruter(core, 0.5)
-        XCTAssertNotNil(commandeEnAttente(core), "une lecture sans source ne ferme pas la session")
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake, .dismissScreenSaver])
+        XCTAssertNotNil(commandeEnAttente(core), "les faits n'ont pas encore relu l'écartement")
+        // L'évaluation suivante voit le panneau de connexion par-dessus l'économiseur, qui tourne encore :
+        // l'arrêt natif compte comme une activité, et confirme l'ON.
         scruter(core, 0.5)
         XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(preuveEconomiseur(core), "process+écarté-par-commande")
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
 
         for _ in 0..<30 { scruter(core, 0.5) }
@@ -481,20 +494,22 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(core.statusSnapshot()["facts"].flatMap { ($0 as? [String: Any])?["screensaver_running"] as? Bool }, true)
         XCTAssertEqual(actions.appels, [])
 
+        // Le réveil est suivi de l'arrêt de l'économiseur par la commande du système (C24) : macOS a pu
+        // revenir à l'économiseur, que le panneau supposé visible ne montre plus.
         core.requestOn(source: "essai")
-        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertTrue(core.currentState)
         XCTAssertTrue(journalContient("économiseur en marche"), "\(journal.lines.map { $0.1 })")
 
         // Sans économiseur (deux lectures sans process), « déjà ON » donne un réveil léger (R49), toujours
-        // sans intention.
+        // sans intention, et sans arrêt de l'économiseur.
         signaux.pidEconomiseur = 0
         scruter(core, 0.5)
         scruter(core, 0.5)
         core.requestOn(source: "essai")
         XCTAssertTrue(journalContient("déjà ON (desktop-ui) : réveil léger"))
-        XCTAssertEqual(actions.appels, [.wake, .wake])
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver, .wake])
         XCTAssertNil(commandeEnAttente(core))
     }
 
@@ -609,7 +624,7 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(core.currentState)
 
         core.requestOn(source: "essai")
-        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "C24 : réveil, puis écartement")
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertEqual(actions.appelsReveil, [], "l'économiseur tourne encore : l'assertion reste posée")
         scruter(core, 0.5)
@@ -2292,5 +2307,236 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(core.statusSnapshot()["saver_detection"] as? String, "sac")
         signaux.drapeauSAC = nil
         XCTAssertEqual(core.statusSnapshot()["saver_detection"] as? String, "hôte")
+    }
+
+    // MARK: - Écartement de l'économiseur par la commande du système (plan 3, tâche 3)
+
+    /// C24 : un ON sur un économiseur seul à l'écran le réveille, puis l'écarte par la commande du système.
+    /// Le panneau de connexion apparaît par-dessus l'économiseur, qui tourne encore (SAC reste à 1) : l'oracle
+    /// compte l'arrêt natif comme une activité, sans grâce, et l'évaluation suivante confirme l'ON.
+    func test_onSurEconomiseurSeul_ecarteParLeSystemeEtConfirme() {
+        signaux.drapeauSAC = true
+        let core = moteur()
+        core.start()
+        XCTAssertFalse(core.currentState, "économiseur seul à l'écran : OFF")
+        XCTAssertEqual(preuveEconomiseur(core), "sac")
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "le réveil d'abord, puis l'écartement")
+        XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "on")
+        XCTAssertEqual(actions.appelsReveil, [], "R47 : rien n'est relâché dans l'évaluation du réveil")
+
+        // L'évaluation suivante relit les faits : le panneau recouvre l'économiseur, l'ON est confirmé.
+        scruterSansActivite(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("commande on confirmée par les faits en 0.5 s (desktop-ui)"))
+        XCTAssertEqual(preuveEconomiseur(core), "sac+écarté-par-commande")
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "un seul écartement")
+    }
+
+    /// Repli sans `SACScreenSaverStopNow` : `killall ScreenSaverEngine` n'écarte rien de l'économiseur
+    /// d'inactivité sous macOS 27. Aucun écartement n'est supposé (l'oracle n'est pas prévenu) : la
+    /// confirmation attend les faits, ici la fin de la session.
+    func test_onSurEconomiseurSeul_repliKillall_attendLesFaits() {
+        actions.moyenEcartement = .processKill
+        signaux.drapeauSAC = true
+        let core = moteur()
+        core.start()
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "le repli est lancé aussi")
+        for _ in 0..<3 { scruterSansActivite(core, 0.5) }
+        XCTAssertNotNil(commandeEnAttente(core), "aucun écartement supposé : l'intention attend les faits")
+        XCTAssertEqual(preuveEconomiseur(core), "sac", "l'oracle n'a pas été prévenu d'un arrêt natif")
+        XCTAssertTrue(core.currentState, "l'intention ON tient l'état")
+        XCTAssertEqual(actions.appelsReveil, [])
+
+        // La session se termine (deux lectures sans source de suite) : les faits confirment l'ON.
+        signaux.drapeauSAC = false
+        scruterSansActivite(core, 0.5)
+        XCTAssertNotNil(commandeEnAttente(core), "une lecture sans source ne ferme pas la session")
+        scruterSansActivite(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("commande on confirmée par les faits"))
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
+    }
+
+    /// `stop_screensaver_on_wake` à faux : un ON réveille sans jamais écarter l'économiseur, ni à la commande
+    /// ni à l'escalade (nouvelle tentative de réveil, comme avant).
+    func test_onAvecStopDesactive_nEcartePas() {
+        var config = Config()
+        config.stopScreensaverOnWake = false
+        signaux.drapeauSAC = true
+        let core = moteur(config)
+        core.start()
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        for _ in 0..<5 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(actions.appels, [.wake, .wake], "2,5 s : l'escalade renouvelle le réveil, sans écarter")
+        XCTAssertTrue(journalContient("escalade: nouvelle tentative de réveil"))
+        XCTAssertEqual(preuveEconomiseur(core), "sac")
+        XCTAssertNotNil(commandeEnAttente(core))
+    }
+
+    /// Même option à faux, sur un Mac déjà ON dont l'économiseur tourne (R30) : le réveil seul.
+    func test_onSurMacDejaON_stopDesactive_reveilSansEcartement() {
+        var config = Config()
+        config.stopScreensaverOnWake = false
+        let core = moteur(config)
+        mettreLePanneauSurUnEconomiseurSAC(core)
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertTrue(journalContient("économiseur en marche"))
+    }
+
+    /// Bureau, économiseur SAC, puis une frappe 2 s plus tard : le panneau recouvre l'économiseur, qui tourne
+    /// encore. 20 s sans activité plus tard, l'oracle suppose encore le panneau visible (ON), alors que
+    /// macOS a pu revenir à l'économiseur (R30). La dernière frappe date de `T0 + 2 s`, T0 étant l'instant
+    /// du démarrage ; l'horloge est à `T0 + 22 s` au retour.
+    private func mettreLePanneauSurUnEconomiseurSAC(_ core: EngineCore) {
+        signaux.drapeauSAC = true
+        core.start()
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        signaux.inactiviteHID = 0
+        for _ in 0..<40 { scruterSansActivite(core, 0.5) }
+        XCTAssertTrue(core.currentState, "le panneau est supposé visible")
+        XCTAssertEqual(preuveEconomiseur(core), "sac+écarté-par-activité")
+        XCTAssertEqual(actions.appels, [])
+    }
+
+    /// R30 + C24 : le Mac est déjà ON (l'oracle suppose le panneau visible) mais l'économiseur tourne. /wake
+    /// le réveille, sans intention, et l'écarte aussi par la commande du système : si macOS est déjà revenu
+    /// à l'économiseur, le panneau reparaît pour 30 s de plus. Le réveil léger (R49) reste pour les cas sans
+    /// session d'économiseur.
+    func test_onSurMacDejaON_economiseurEnMarche_ecarteAussi() {
+        let core = moteur()
+        mettreLePanneauSurUnEconomiseurSAC(core)
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
+        XCTAssertNil(commandeEnAttente(core), "aucune intention")
+        XCTAssertTrue(core.currentState)
+        XCTAssertTrue(journalContient("économiseur en marche"))
+        XCTAssertFalse(journalContient("réveil léger"))
+
+        // Sans l'arrêt natif, le panneau serait retiré 30 s après la frappe, soit à T0 + 32 s. Il tient 30 s
+        // après l'arrêt : à T0 + 33 s, l'état est toujours ON.
+        for _ in 0..<22 { scruterSansActivite(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(preuveEconomiseur(core), "sac+écarté-par-commande")
+        // À T0 + 54 s, 32 s après l'arrêt, macOS est revenu à l'économiseur : OFF, sans nouvelle commande.
+        for _ in 0..<42 { scruterSansActivite(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(preuveEconomiseur(core), "sac")
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
+    }
+
+    /// L'escalade d'un ON (2,5 s) dont l'économiseur est encore seul à l'écran l'écarte de nouveau, au lieu de
+    /// renouveler le réveil. Ici le premier écartement n'a rien changé (repli `killall`, sans effet sous
+    /// macOS 27 sur l'économiseur d'inactivité).
+    func test_escaladeOn_economiseurEncoreSeul_ecarteEncore() {
+        actions.moyenEcartement = .processKill
+        signaux.drapeauSAC = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
+
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "2,0 s : pas d'escalade")
+
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver, .dismissScreenSaver], "2,5 s : écarté de nouveau")
+        XCTAssertEqual(commandeEnAttente(core)?["escalated"] as? Bool, true)
+        XCTAssertTrue(journalContient("escalade: arrêt de l'économiseur"))
+
+        // Une seule escalade.
+        for _ in 0..<10 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver, .dismissScreenSaver])
+    }
+
+    /// Écran éteint sous une session d'économiseur : au moment du ON, les faits ne voient pas l'économiseur
+    /// (écran éteint : non évalué), donc rien n'est écarté. L'écran se rallume sur l'économiseur, seul à
+    /// l'écran : l'escalade l'écarte par la commande du système, et l'évaluation suivante confirme l'ON.
+    func test_escaladeOn_ecranRallumeSurEconomiseur_ecarteParLeSysteme() {
+        signaux.drapeauSAC = true
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake], "écran éteint : l'économiseur n'est pas évalué, rien à écarter")
+
+        signaux.etatEcran.asleep = false
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(preuveEconomiseur(core), "sac", "l'écran est rallumé sur l'économiseur")
+        XCTAssertNotNil(commandeEnAttente(core))
+        XCTAssertEqual(actions.appels, [.wake], "2,0 s : pas d'escalade")
+
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "2,5 s : l'escalade écarte l'économiseur")
+        scruterSansActivite(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(preuveEconomiseur(core), "sac+écarté-par-commande")
+        XCTAssertTrue(core.currentState)
+    }
+
+    /// R52 : un /wake sur un Mac déjà ON pose un réveil léger (jamais relâché dans la même évaluation). Un
+    /// OFF qui arrive avant l'évaluation suivante le relâche, puis lance l'économiseur : l'assertion et son
+    /// `caffeinate` ne survivent pas à l'OFF.
+    func test_reveilLegerPuisOFF_relacheEtExecuteLOFF() {
+        let core = moteur()
+        core.start()
+
+        core.requestOn(source: "essai")
+        XCTAssertEqual(actions.appels, [.wake])
+        XCTAssertEqual(actions.appelsReveil, [], "le réveil léger tient jusqu'à l'évaluation suivante")
+
+        core.requestOff(source: "essai")
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake], "l'OFF relâche le réveil léger")
+        XCTAssertEqual(actions.appels, [.wake, .runOff(.screensaver)], "puis exécute l'OFF")
+        XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/screensaver")
+        XCTAssertFalse(core.currentState)
+        XCTAssertTrue(journalContient("assertion de réveil relâchée (commande OFF)"))
+
+        // L'évaluation suivante ne relâche rien de plus.
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+    }
+
+    /// Le moyen d'écartement est journalisé une fois, au démarrage : INFO s'il est natif, WARN pour le repli.
+    func test_demarrage_journaliseLeMoyenDEcartement() {
+        let natif = moteur()
+        natif.start()
+        for _ in 0..<3 { scruter(natif, 0.5) }
+        XCTAssertEqual(journal.lines.filter { $0.0 == .info && $0.1.contains("SACScreenSaverStopNow") }.count, 1)
+        XCTAssertFalse(journal.lines.contains { $0.0 == .warn && $0.1.contains("SACScreenSaverStopNow") })
+
+        journal.lines = []
+        actions.moyenEcartement = .processKill
+        let repli = moteur()
+        repli.start()
+        for _ in 0..<3 { scruter(repli, 0.5) }
+        let avertissement = "SACScreenSaverStopNow indisponible → repli killall ScreenSaverEngine, "
+            + "sans effet sous macOS 27 sur l'économiseur d'inactivité"
+        XCTAssertEqual(journal.lines.filter { $0.0 == .warn && $0.1 == avertissement }.count, 1)
+        XCTAssertFalse(journal.lines.contains { $0.0 == .info && $0.1.contains("SACScreenSaverStopNow") })
+    }
+
+    /// `/status` dit par quel moyen l'économiseur est écarté : la commande du système, ou le repli.
+    func test_statusDitLeMoyenDEcartement() {
+        let natif = moteur()
+        natif.start()
+        XCTAssertEqual(natif.statusSnapshot()["saver_dismissal"] as? String, "SACScreenSaverStopNow")
+
+        actions.moyenEcartement = .processKill
+        let repli = moteur()
+        repli.start()
+        XCTAssertEqual(repli.statusSnapshot()["saver_dismissal"] as? String, "killall ScreenSaverEngine")
     }
 }
