@@ -621,6 +621,24 @@ final class ConfigOriginTests: XCTestCase {
         XCTAssertEqual(reglee.config.saverRedisplayIdleSeconds, 90, "la clé garde la main")
     }
 
+    /// R62 : `scripts/install.sh` copie `config.example.json` en `config.json`. Un exemple qui contredit un défaut de
+    /// l'économiseur le ferait gagner sur toute installation neuve : à 90 s au lieu de 30 s, chaque retour de
+    /// l'économiseur laisserait l'état ON 60 s de trop.
+    func test_exempleDeConfig_neContreditPasLesDefautsDeLEconomiseur() throws {
+        let racine = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let exemple = racine.appendingPathComponent("config.example.json")
+        guard let data = try? Data(contentsOf: exemple) else {
+            throw XCTSkip("config.example.json introuvable à la racine du dépôt (\(exemple.path))")
+        }
+        let lue = Config.parse(data: data).config
+        let defauts = Config()
+        XCTAssertEqual(lue.saverRedisplayIdleSeconds, defauts.saverRedisplayIdleSeconds,
+                       "saver_redisplay_idle_seconds : l'exemple doit donner le défaut (30 s mesurées)")
+        XCTAssertEqual(lue.saverDismissGraceMS, defauts.saverDismissGraceMS, "saver_dismiss_grace_ms")
+        XCTAssertEqual(lue.saverDismissOnInput, defauts.saverDismissOnInput, "saver_dismiss_on_input")
+    }
+
     // MARK: - Plan 3, tâche 7 : durées en secondes
 
     /// F70 : les durées en secondes se calculent dans `Config`, au lieu d'un `Double(…MS) / 1000` à chaque emploi.

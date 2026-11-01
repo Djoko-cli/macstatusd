@@ -2778,6 +2778,37 @@ final class EngineCoreTests: XCTestCase {
         }
     }
 
+    /// Une énumération qui échoue ne prouve rien (décision 2 de la tâche 4) : elle n'efface pas l'avis
+    /// `screensDidSleep`. Sinon une seule lecture ratée ferait croire qu'aucun écran physique ne dort, et le virtuel
+    /// resté éveillé retiendrait de nouveau l'état ON, l'écran physique étant toujours éteint.
+    func test_enumerationRatee_neEffacePasLAvisDEcransEteints() {
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        let core = moteur()
+        core.start()
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        core.handle(.screensDidSleep)
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep")
+
+        // L'énumération échoue : liste vide, rien n'est prouvé, l'avis reste.
+        signaux.ecrans = DisplaySnapshot(displays: [], enumerationOK: false)
+        scruter(core, 0.5)
+        XCTAssertFalse(core.inspect().facts.displayEnumerationOK)
+
+        // Elle revient : le physique dort toujours, le virtuel principal est éveillé, l'avis tient encore.
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep", "l'avis a survécu à l'échec")
+        for _ in 0..<3 { scruter(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "display-asleep")
+
+        // Il s'efface toujours, par ses voies ordinaires : plus aucun écran physique endormi.
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        scruter(core, 0.5)
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "awake")
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "awake", "l'ancien avis ne revient pas")
+    }
+
     /// Une ligne INFO « écrans : <résumé> » quand l'ensemble des écrans, l'écran principal ou la présence du
     /// fantôme change ; la première lecture est journalisée une fois. Aucune quand un écran s'endort ou se réveille,
     /// quand l'ordre de la liste change seul, ni pendant une énumération qui échoue.

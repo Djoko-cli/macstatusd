@@ -15,7 +15,7 @@
 
   "saver_dismiss_on_input": true,
   "saver_dismiss_grace_ms": 1500,
-  "saver_redisplay_idle_seconds": 90,
+  "saver_redisplay_idle_seconds": 30,
 
   "poll_interval_ms": 500,
   "settle_on_ms": 300,

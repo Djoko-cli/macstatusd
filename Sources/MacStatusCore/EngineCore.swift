@@ -85,7 +85,8 @@ public final class EngineCore {
     /// écrans physiques sont là. Une énumération ratée ne le démarre pas et ne le remet pas à zéro.
     private var noPhysicalDisplaySince: Double?
     /// Le système a annoncé `screensDidSleep` et un écran physique dort encore. Effacé au réveil des écrans, au
-    /// réveil du système, à la resynchronisation, et dès qu'aucun écran physique n'est endormi.
+    /// réveil du système, à la resynchronisation, et dès qu'une énumération réussie ne montre plus aucun écran
+    /// physique endormi (une énumération ratée ne prouve rien : elle le laisse).
     private var screensAsleepNotified = false
     /// Ce qui distingue deux topologies pour le journal : l'ensemble des écrans, le principal, la présence du
     /// fantôme. L'état de veille n'en fait pas partie.
@@ -385,7 +386,8 @@ public final class EngineCore {
         if sleepInProgress, session.locked { sleepSawLocked = true }
 
         let display = DisplayTopology.state(signals.displaySnapshot(), screensAsleepNotified: screensAsleepNotified)
-        if screensAsleepNotified, !display.displays.contains(where: { !$0.isPlaceholder && $0.asleep }) {
+        if screensAsleepNotified, display.enumerationOK,
+           !display.displays.contains(where: { !$0.isPlaceholder && $0.asleep }) {
             screensAsleepNotified = false
         }
         noteDisplays(display)
