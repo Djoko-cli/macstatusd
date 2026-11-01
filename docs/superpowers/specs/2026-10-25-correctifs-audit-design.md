@@ -184,6 +184,18 @@ Ordre d'exécution : chaque lot s'appuie sur les précédents. Le lot 0 vient av
 lot 1 avant tout correctif (il fournit les tests), le lot 8 après les lots 6 et 7 (icône, notes de
 version), et le lot 9 ne se fait qu'avec la session HA.
 
+### Feuille de route
+
+Les lots se livrent en cinq phases. Chaque phase a son plan, du même numéro, dans
+`docs/superpowers/plans/` (nom en `…-phase-N-….md`, pour que Jalons le rattache à sa phase). Une phase se
+coche quand son plan est fini, banc compris.
+
+- [x] Phase 1 : anonymisation du dépôt et garde (lot 0)
+- [x] Phase 2 : socle testable, sécurité HTTP et résilience (lots 1 à 3)
+- [ ] Phase 3 : économiseur sous macOS 27, écrans, veille avortée et efficience (lots 4 et 5)
+- [ ] Phase 4 : installation, documentation, signature et publication (lots 6 à 8)
+- [ ] Phase 5 : déploiement coordonné avec Home Assistant (lot 9)
+
 ### Lot 0 — Anonymisation et garde
 
 - Identité git du dépôt sur l'adresse noreply (déjà réglée localement le 25/10).

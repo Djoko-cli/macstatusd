@@ -466,7 +466,7 @@ F76, F78 ; F75 est fait à la tâche 1. Objectif de la spec : tick écran allum�
 **Fichiers :**
 - Modifier : `Sources/macstatusd/LiveSystemSignals.swift`, `EngineCore.swift`
 - Test : `EngineCoreTests.swift`, `Support/Fakes.swift`
-- Mesures, local : `.superpowers/sdd/2026-10-31-plan-3-economiseur-efficience/mesures-cpu.md`
+- Mesures, local : `.superpowers/sdd/2026-10-31-phase-3-economiseur-efficience/mesures-cpu.md`
 
 **Interfaces :**
 - `session()` n'appelle `CGSessionCopyCurrentDictionary` que si `registryRoot == 0`, ou si
