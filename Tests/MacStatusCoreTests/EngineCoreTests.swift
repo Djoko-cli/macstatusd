@@ -3042,6 +3042,21 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(journalContient("fin de la veille"))
     }
 
+    /// 0 est une inactivité lisible, et la frappe la plus nette (« il tape à l'instant ») : elle met fin à la veille,
+    /// là où −1 (illisible) ne prouve rien. Verrouille la borne `≥ 0` de la lecture, que `> 0` laisserait passer.
+    func test_inactiviteNulle_estUneFrappe_metFinALaVeille() {
+        let (core, annonce) = moteurEnVeille()
+        signaux.inactiviteHID = -1
+        for _ in 0..<6 { scruter(core, 0.5) }   // 3 s d'inactivité illisible
+        XCTAssertEqual(veilleSignalee(core), true)
+
+        signaux.inactiviteHID = 0
+        scruter(core, 0.5)                      // t + 3,5 s : la frappe est à l'instant de la lecture
+        XCTAssertEqual(horloge.t - annonce, 3.5)
+        XCTAssertEqual(veilleSignalee(core), false, "\(journal.lines)")
+        XCTAssertTrue(finDeVeilleJournalisee("activité 3.5 s après l'annonce"), "\(journal.lines)")
+    }
+
     /// C26 : une session vue verrouillée depuis l'annonce, puis relue déverrouillée, met fin à la veille — à la
     /// scrutation ou sur l'avis de déverrouillage, que le verrou précède l'annonce ou la suive. L'inactivité HID
     /// continue de croître : aucune frappe n'entre en compte, seule la règle du déverrouillage joue.
@@ -3268,7 +3283,7 @@ final class EngineCoreTests: XCTestCase {
         core.handle(.screensDidSleep)
         core.resync()
         XCTAssertEqual(signaux.lecturesHID, 0, "scrutations, notifications et resynchronisation, écran éteint")
-        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, -1, "non lue : −1, jamais une valeur périmée")
+        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, -1, "non lue : −1")
         XCTAssertEqual(signaux.lecturesHID, 0, "`--once` et `--watch` ne la lisent pas non plus")
         XCTAssertEqual(core.inspect().reason, "display-asleep")
 
@@ -3280,6 +3295,18 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(signaux.lecturesHID, 3, "une lecture par scrutation")
         XCTAssertEqual(core.inspect().facts.hidIdleSeconds, signaux.inactiviteHID, accuracy: 0.001)
         XCTAssertEqual(signaux.lecturesHID, 4)
+    }
+
+    /// L'écran se rendort après avoir été lu : les faits redisent −1, jamais la dernière valeur lue. (Écran éteint dès
+    /// le départ, un −1 périmé ne se distinguerait pas d'un −1 neuf : il faut une valeur lue d'abord.)
+    func test_ecranQuiSeRendort_inactiviteRedevientMoinsUn() {
+        let core = moteur()
+        core.start()
+        scruterSansActivite(core, 0.5)
+        XCTAssertGreaterThan(core.inspect().facts.hidIdleSeconds, 0, "écran allumé : l'inactivité est lue")
+        signaux.etatEcran.asleep = true
+        core.handle(.screensDidSleep)
+        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, -1, "écran éteint : non lue, pas la valeur d'avant")
     }
 
     /// Exception de la tâche 5 : pendant une veille en cours, l'inactivité est lue même si l'oracle ne l'est pas
@@ -3319,7 +3346,6 @@ final class EngineCoreTests: XCTestCase {
         signaux.inactiviteHID = 20
         XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, 20)
         XCTAssertEqual(signaux.lecturesHID, 2, "une lecture par appel")
-        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, -1, "/status ne réécrit pas les faits gardés")
 
         signaux.etatEcran.asleep = false     // écran allumé : la valeur de la scrutation précédente est périmée aussi
         scruter(core, 0.5)
@@ -3468,6 +3494,24 @@ final class EngineCoreTests: XCTestCase {
         // Les faits ne confirment rien : retour aux faits à l'échéance, la source est dans la ligne d'échéance.
         for _ in 0..<24 { scruter(core, 0.5) }
         XCTAssertTrue(journalContient("commande off/override non confirmée après 12.0 s"), "\(journal.lines)")
+    }
+
+    /// F44 : la raison publiée ne suit pas un état candidat que le lissage n'a pas encore publié (OFF : 800 ms). Sans
+    /// quoi `/status` dirait `state 1` avec la raison `display-asleep` : la raison ne suit les faits que pour l'état
+    /// déjà publié.
+    func test_raisonNeSuitPasUnEtatNonLisse() {
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(raisonPubliee(core), "desktop-ui")
+        signaux.etatEcran.asleep = true
+        scruter(core, 0.5)
+        XCTAssertTrue(core.currentState, "OFF candidat, pas encore publié")
+        XCTAssertEqual(raisonPubliee(core), "desktop-ui", "l'état publié est encore ON : sa raison ne change pas")
+        scruter(core, 0.5)
+        XCTAssertEqual(raisonPubliee(core), "desktop-ui")
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(raisonPubliee(core), "display-asleep")
     }
 
     /// F44 : `/status` donne la raison des faits seuls (`facts_reason`, celle que `--once` appelle `reason`) à côté de
