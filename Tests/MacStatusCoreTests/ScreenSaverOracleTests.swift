@@ -215,6 +215,25 @@ final class ScreenSaverOracleTests: XCTestCase {
         XCTAssertEqual(signaux.lecturesHotes, 0, "les hôtes ne se lisent qu'en repli, sans SAC")
     }
 
+    /// Les sources se lisent dans l'ordre : SAC d'abord. SAC vrai suffit, le process n'est même pas cherché (la lecture
+    /// du PID est un appel système de plus), et la preuve nomme SAC, pas le process.
+    func test_sacVraiEtProcessPresent_preuveSAC_sansLirePID() {
+        signaux.drapeauSAC = true
+        signaux.pidEconomiseur = 4242
+        let oracle = nouvelOracle()
+        let verdict = oracle.verdict(now: t0, hidIdle: 300)
+        XCTAssertTrue(verdict.active)
+        XCTAssertEqual(verdict.evidence, "sac")
+        XCTAssertEqual(signaux.lecturesPID, 0, "SAC vrai : le process n'est pas lu")
+        XCTAssertEqual(oracle.verdict(now: t0 + 0.5, hidIdle: 300.5).evidence, "sac")
+        XCTAssertEqual(signaux.lecturesPID, 0)
+
+        // SAC à 0 : le process reste une source, lue alors.
+        signaux.drapeauSAC = false
+        XCTAssertEqual(oracle.verdict(now: t0 + 1, hidIdle: 301).evidence, "process")
+        XCTAssertEqual(signaux.lecturesPID, 1, "SAC à 0 : le process est cherché")
+    }
+
     func test_sacVraiPuisFrappe_panneauDoncON() {
         let oracle = nouvelOracle()
         sessionSAC(oracle)
@@ -377,26 +396,66 @@ final class ScreenSaverOracleTests: XCTestCase {
         XCTAssertEqual(lignes(.warn, contenant: "didstop"), 0)
     }
 
-    func test_didstopPendantSACVrai_ignoreEtJournaliseUneFoisParMinute() {
+    func test_didstopPendantSACVrai_attendPuisAvertitUneFoisParMinute() {
         XCTAssertEqual(ScreenSaverOracle.incoherenceLogInterval, 60)
+        XCTAssertEqual(ScreenSaverOracle.didStopSettleDelay, 2)
         let oracle = nouvelOracle()
         sessionSAC(oracle)
         oracle.noteDidStop(now: t0 + 1)
+        // SAC retombe d'ordinaire dans la demi-seconde : le didstop attend, sans avertir, jusqu'à 2 s.
         XCTAssertTrue(oracle.verdict(now: t0 + 1, hidIdle: 301).running)
+        XCTAssertTrue(oracle.verdict(now: t0 + 2.5, hidIdle: 302.5).running)
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 0, "à 1,5 s du didstop, SAC a encore le temps de retomber")
+        // À l'échéance (2 s après le didstop), SAC vaut toujours 1 : incohérent, averti, ignoré.
+        XCTAssertTrue(oracle.verdict(now: t0 + 3, hidIdle: 303).running)
         XCTAssertEqual(lignes(.warn, contenant: "didstop"), 1)
+        XCTAssertTrue(oracle.verdict(now: t0 + 3.5, hidIdle: 303.5).running)
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 1, "consommé par l'avertissement : pas de second")
 
+        // Un second didstop, dans la minute : même attente, mais pas d'avertissement de plus.
         oracle.noteDidStop(now: t0 + 11)
         XCTAssertTrue(oracle.verdict(now: t0 + 11, hidIdle: 311).running)
+        XCTAssertTrue(oracle.verdict(now: t0 + 13, hidIdle: 313).running)
         XCTAssertEqual(lignes(.warn, contenant: "didstop"), 1, "au plus un avertissement par minute")
 
         // Ignoré, il ne ferme rien plus tard : une lecture SAC isolée à 0 laisse la session ouverte.
         signaux.drapeauSAC = false
-        XCTAssertTrue(oracle.verdict(now: t0 + 11.5, hidIdle: 311.5).running)
+        XCTAssertTrue(oracle.verdict(now: t0 + 13.5, hidIdle: 313.5).running)
 
+        // Un didstop plus d'une minute après le premier avertissement avertit de nouveau, à son échéance.
         signaux.drapeauSAC = true
-        oracle.noteDidStop(now: t0 + 61)
-        XCTAssertTrue(oracle.verdict(now: t0 + 61, hidIdle: 361).running)
+        oracle.noteDidStop(now: t0 + 70)
+        XCTAssertTrue(oracle.verdict(now: t0 + 70, hidIdle: 370).running)
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 1, "pas avant l'échéance")
+        XCTAssertTrue(oracle.verdict(now: t0 + 72, hidIdle: 372).running)
         XCTAssertEqual(lignes(.warn, contenant: "didstop"), 2)
+    }
+
+    /// Au banc du 31/10, SAC n'est déjà à 0 au `didstop` que dans une minorité de cas : la lecture que la
+    /// notification déclenche le voit souvent à 1. Le `didstop` attend alors, sans avertir ; la première lecture
+    /// sans source ferme la session, sans attendre une seconde lecture.
+    func test_didstopAvantLaChuteDeSAC_fermeALaPremiereLectureSansSource_sansAvertissement() {
+        let oracle = nouvelOracle()
+        panneauSAC(oracle)
+        oracle.noteDidStop(now: t0 + 20)
+        XCTAssertTrue(oracle.verdict(now: t0 + 20, hidIdle: 0.5).running, "SAC vaut encore 1 : la session tient")
+        XCTAssertTrue(oracle.verdict(now: t0 + 20.5, hidIdle: 1).running, "toujours dans le délai de 2 s")
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 0)
+
+        signaux.drapeauSAC = false
+        let fermee = oracle.verdict(now: t0 + 21, hidIdle: 1.5)
+        XCTAssertFalse(fermee.running, "fermée à cette lecture, sans attendre une deuxième lecture sans source")
+        XCTAssertFalse(fermee.active)
+        XCTAssertFalse(fermee.dismissed)
+        XCTAssertEqual(fermee.evidence, "none")
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 0, "SAC est retombé à temps : rien d'incohérent")
+
+        // Rien ne reste en attente : la session suivante n'est ni fermée ni avertie à tort.
+        signaux.drapeauSAC = true
+        XCTAssertTrue(oracle.verdict(now: t0 + 30, hidIdle: 300).active)
+        signaux.drapeauSAC = false
+        XCTAssertTrue(oracle.verdict(now: t0 + 30.5, hidIdle: 300.5).running, "une lecture isolée ne ferme rien")
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 0)
     }
 
     /// Un didstop sans session est consommé par la lecture qui suit : la session ouverte plus tard n'est

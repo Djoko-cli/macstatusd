@@ -18,9 +18,12 @@ import Foundation
 ///    Une notification seule ne prouve rien : `DistributedNotificationCenter` ne dit pas qui l'a postée.
 ///    Un `didstart` que rien ne corrobore expire au bout de `corroborationWindow` secondes (une ligne au
 ///    journal), sans OFF. La session s'ouvre dès qu'une source est vue ; elle se ferme à la deuxième
-///    lecture de suite sans source (une lecture isolée à 0 ne ferme rien), ou dès la première si un
-///    `didstop` est arrivé depuis la lecture précédente. Un `didstop` reçu alors que SAC vaut 1 est
-///    incohérent : averti, puis ignoré.
+///    lecture de suite sans source (une lecture isolée à 0 ne ferme rien), ou dès la première tant qu'un
+///    `didstop` attend. Un `didstop` reçu alors que SAC vaut encore 1 attend jusqu'à `didStopSettleDelay`
+///    secondes que SAC retombe à 0 (il y retombe d'ordinaire dans la demi-seconde, parfois après la lecture que
+///    la notification déclenche) : sans avertissement, la première lecture sans source ferme alors la session.
+///    Si SAC vaut toujours 1 à l'échéance, le `didstop` est incohérent : averti (au plus une fois par minute),
+///    puis ignoré.
 ///
 /// 2. *Est-il encore seul à l'écran ?* Une frappe ou un mouvement fait apparaître le panneau de connexion
 ///    **par-dessus un économiseur qui continue de tourner** : SAC reste à 1 et aucune notification n'est
@@ -51,6 +54,9 @@ public final class ScreenSaverOracle {
     public static let hostLaunchTolerance: Double = 1
     /// Intervalle minimal (s) entre deux avertissements « didstop incohérent ».
     public static let incoherenceLogInterval: Double = 60
+    /// Délai (s) laissé à SAC pour retomber à 0 après un `didstop`. Au banc, il y retombe dans la demi-seconde, mais
+    /// pas toujours avant la lecture que la notification déclenche : le `didstop` attend, sans avertir.
+    public static let didStopSettleDelay: Double = 2
 
     private struct Session {
         /// Ouverture : la grâce sur l'activité ne court qu'une fois, depuis cet instant.
@@ -81,7 +87,8 @@ public final class ScreenSaverOracle {
     private var nativeStopAt: Double?
     /// `didstart` en attente de corroboration : l'instant du plus récent.
     private var pendingDidStartAt: Double?
-    /// `didstop` arrivé depuis la lecture précédente : la lecture suivante en décide, puis l'oublie.
+    /// `didstop` en attente, avec l'instant où il est arrivé. Une lecture sans source, ou dont la source n'est pas
+    /// SAC, le consomme. Avec SAC à 1, il attend jusqu'à `didStopSettleDelay` secondes (`settleDidStop`).
     private var didStopAt: Double?
     /// Repli sans SAC : PID de l'hôte retenu après un `didstart`, jusqu'à sa disparition ou un `didstop`.
     private var retainedHostPID: Int32?
@@ -107,9 +114,10 @@ public final class ScreenSaverOracle {
         pendingDidStartAt = now
     }
 
-    /// `com.apple.screensaver.didstop` : la lecture suivante, si elle ne voit aucune source, ferme la
-    /// session. Il met fin à la preuve de l'hôte retenu et à l'attente d'un `didstart` : un économiseur
-    /// annoncé puis arrêté n'ouvre plus de session, même si son hôte s'attarde.
+    /// `com.apple.screensaver.didstop` : la première lecture qui ne voit aucune source ferme la session
+    /// (SAC à 1, il attend que SAC retombe : voir `didStopSettleDelay`). Il met fin à la preuve de l'hôte
+    /// retenu et à l'attente d'un `didstart` : un économiseur annoncé puis arrêté n'ouvre plus de session,
+    /// même si son hôte s'attarde.
     public func noteDidStop(now: Double) {
         didStopAt = now
         pendingDidStartAt = nil
@@ -212,13 +220,12 @@ public final class ScreenSaverOracle {
         }
     }
 
-    /// Ouvre la session à la première source vue ; la ferme à la deuxième lecture de suite sans source,
-    /// ou dès la première après un `didstop`. Le `didstop` est consommé par cette lecture, quelle qu'elle soit.
+    /// Ouvre la session à la première source vue ; la ferme à la deuxième lecture de suite sans source, ou dès
+    /// la première tant qu'un `didstop` attend. Le `didstop` est consommé par la première lecture sans source,
+    /// ou dont la source n'est pas SAC ; avec SAC à 1, il attend (`settleDidStop`).
     private func updateSession(source: String?, flag: Bool?, now: Double) {
-        let stoppedAt = didStopAt
-        didStopAt = nil
         if let source {
-            if let stoppedAt, flag == true { warnIncoherentDidStop(at: stoppedAt) }
+            settleDidStop(flag: flag, now: now)
             if var current = session {
                 current.source = source
                 current.missedReading = false
@@ -228,12 +235,15 @@ public final class ScreenSaverOracle {
                 nativeStopAt = nil
                 logDebug("économiseur : session ouverte (\(source))")
             }
-        } else if var current = session {
-            if stoppedAt != nil || current.missedReading {
+        } else {
+            let stopped = didStopAt != nil
+            didStopAt = nil
+            guard var current = session else { return }
+            if stopped || current.missedReading {
                 session = nil
                 nativeStopAt = nil
                 retainedHostPID = nil
-                logDebug("économiseur : session fermée (\(stoppedAt != nil ? "didstop" : "deux lectures sans source"))")
+                logDebug("économiseur : session fermée (\(stopped ? "didstop" : "deux lectures sans source"))")
             } else {
                 current.missedReading = true
                 session = current
@@ -241,11 +251,25 @@ public final class ScreenSaverOracle {
         }
     }
 
-    private func warnIncoherentDidStop(at instant: Double) {
-        if let last = lastIncoherenceWarningAt, instant - last < Self.incoherenceLogInterval { return }
-        lastIncoherenceWarningAt = instant
-        logWarn("économiseur : didstop reçu alors que SACScreenSaverIsRunning vaut 1 → incohérent, ignoré "
-                + "(un avertissement par minute au plus)")
+    /// Règle le sort du `didstop` en attente, devant une source vue à cette lecture. Une source autre que SAC
+    /// (process, hôte) le consomme sans effet. SAC à 1 le fait attendre : SAC retombe d'ordinaire à 0 dans la
+    /// demi-seconde qui suit le `didstop`, mais la lecture que la notification déclenche peut précéder cette chute.
+    /// Passé `didStopSettleDelay`, SAC vaut toujours 1 : le `didstop` est incohérent, averti puis ignoré. La
+    /// session reste ouverte, comme une lecture isolée à 0 la laisserait.
+    private func settleDidStop(flag: Bool?, now: Double) {
+        guard let stoppedAt = didStopAt else { return }
+        if flag == true {
+            guard now - stoppedAt >= Self.didStopSettleDelay else { return }
+            warnIncoherentDidStop(now: now)
+        }
+        didStopAt = nil
+    }
+
+    private func warnIncoherentDidStop(now: Double) {
+        if let last = lastIncoherenceWarningAt, now - last < Self.incoherenceLogInterval { return }
+        lastIncoherenceWarningAt = now
+        logWarn("économiseur : didstop reçu, mais SACScreenSaverIsRunning vaut toujours 1 après "
+                + "\(Int(Self.didStopSettleDelay)) s → incohérent, ignoré (un avertissement par minute au plus)")
     }
 
     /// Activité la plus récente qui recouvre l'économiseur du panneau : la dernière frappe connue, si elle
