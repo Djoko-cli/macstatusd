@@ -479,11 +479,11 @@ F76, F78 ; F75 est fait à la tâche 1. Objectif de la spec : tick écran allum�
 - `statusSnapshot()` relit `hidIdleSeconds()` à chaque appel pour `facts.hid_idle_seconds`.
 - `FakeSignals` : compteur `lecturesHID`.
 
-- [ ] **Étape 1 : tests.** `test_ecranEteint_neLitPasLInactivite`, `test_veilleEnCours_litLInactivite`,
+- [x] **Étape 1 : tests.** `test_ecranEteint_neLitPasLInactivite`, `test_veilleEnCours_litLInactivite`,
   `test_statusRelitLInactivite`.
-- [ ] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
+- [x] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
 - [ ] **Étape 5 : mesurer.**
   - Deux binaires en release :
     - la base du plan, le commit noté au registre avant la tâche 1, construit dans un worktree sous
@@ -498,7 +498,7 @@ F76, F78 ; F75 est fait à la tâche 1. Objectif de la spec : tick écran allum�
     noté, et seule la comparaison entre les deux binaires compte.
   - Attendu : la tête ≤ 0,35 %, et au moins deux fois moins que la base. Sinon, `sample <PID> 10` (lecture
     seule) sur la tête, et le poste dominant est noté au registre avant toute autre mesure.
-- [ ] **Étape 6 : commit** « Efficience : CGSession en repli, service HID gardé, lecture à la demande ».
+- [x] **Étape 6 : commit** « Efficience : CGSession en repli, service HID gardé, lecture à la demande ».
   Les mesures restent locales.
 
 ### Tâche 7 : observabilité et code mort
@@ -534,7 +534,7 @@ F71, F44, F70.
   - `requestOff(source:)` et `requestOn(source:)` deviennent `requestOff(peer:)` et `requestOn(peer:)`,
     dans le moteur, `EngineFacade` et le routeur : `source` désigne aussi l'étiquette d'une intention.
 
-- [ ] **Étape 1 : tests.**
+- [x] **Étape 1 : tests.**
   - `test_faits_memeDecisionMalgreLInactivite` ;
   - `test_faits_ligneDeDebugSeulementAuChangement` : dix ticks où seul `hidIdle` change → aucune ligne « faits: » ;
   - `test_logDebug_nEvaluePasLeMessageSiCoupe` ;
@@ -542,11 +542,11 @@ F71, F44, F70.
   - `test_offSurcharge_sourceOverride` ;
   - `test_statusDonneLaRaisonDesFaits` ;
   - `test_config_dureesEnSecondes`.
-- [ ] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`, puis le selftest des
+- [x] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`, puis le selftest des
   contraintes globales** — attendu : OK.
-- [ ] **Étape 5 : commit** « Observabilité : faits comparables, raison à jour, code mort retiré ».
+- [x] **Étape 5 : commit** « Observabilité : faits comparables, raison à jour, code mort retiré ».
 
 ---
 
