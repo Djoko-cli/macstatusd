@@ -6,7 +6,9 @@ import Foundation
 ///
 /// 1. *Une session d'économiseur est-elle en cours ?* Trois sources, dans cet ordre :
 ///    - `SACScreenSaverIsRunning` (login.framework) : vrai pendant toute la session, panneau de connexion
-///      compris ; faux hors session, y compris sur un simple verrouillage (banc du 31/10) → `sac` ;
+///      compris ; faux hors session, y compris sur un simple verrouillage (banc du 31/10), et aussi quand l'agent
+///      de session ne répond pas (le repli ci-dessous ne couvre pas cette panne : seul le WARN « didstart non
+///      corroboré » la trahit) → `sac` ;
 ///    - le process `ScreenSaverEngine` de l'utilisateur, qui n'existe que pour l'économiseur commandé
 ///      → `process` ;
 ///    - en repli, si SAC est indisponible : un hôte d'économiseur (`SaverHostRule`) lancé au plus

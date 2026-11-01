@@ -569,7 +569,7 @@ public final class EngineCore {
             return
         }
         if facts.screenSaverActive && config.stopScreensaverOnWake {
-            logWarn("commande \(intent.source) sans effet observé → escalade: arrêt de l'économiseur")
+            logWarn("commande \(intent.source) sans effet observé → escalade: écartement de l'économiseur")
             dismissSaver(now: clock.monotonic())
             return
         }
@@ -993,8 +993,7 @@ public final class EngineCore {
     ///   `stop_screensaver_on_wake`, il est aussi écarté par la commande du système : si macOS est déjà
     ///   revenu à l'économiseur, le panneau reparaît pour 30 s ;
     /// - sinon, réveil léger (Ruling R49), réservé aux cas sans session d'économiseur : les faits ne voient
-    ///   ni l'économiseur lancé par l'inactivité sous macOS 27, ni l'écran assombri. L'assertion est
-    ///   relâchée à l'évaluation suivante.
+    ///   pas l'écran assombri. L'assertion est relâchée à l'évaluation suivante.
     ///
     /// Un ON qui remplace un OFF dont l'action est partie n'est pas confirmé avant
     /// `command_escalate_after_ms` : l'économiseur lancé par `open -a` peut démarrer après coup, et
@@ -1040,7 +1039,7 @@ public final class EngineCore {
         var next = makeIntent(target: true, source: "on")
         if replacesOff {
             // L'action OFF est partie : l'économiseur peut encore démarrer. Pas de confirmation avant
-            // le délai d'escalade, qui arrête l'économiseur s'il est apparu entre-temps.
+            // le délai d'escalade, qui écarte l'économiseur s'il est apparu entre-temps.
             next.confirmNotBefore = next.issuedAt + config.commandEscalateAfter
             logInfo("commande ON (\(peer)) → remplace l'OFF en cours : confirmation au plus tôt dans "
                     + "\(String(format: "%.1f", config.commandEscalateAfter)) s")

@@ -5,8 +5,10 @@ import MacStatusCore
 /// Primitives d'extinction / réveil.
 ///
 /// Chaque primitive rapporte seulement son succès de *lancement* ; la
-/// confirmation réelle vient toujours des faits observés par le moteur d'état,
-/// jamais de la commande elle‑même.
+/// confirmation réelle vient des faits observés par le moteur d'état, jamais de
+/// la commande elle‑même. Seule exception : l'écartement natif de l'économiseur,
+/// que le moteur annonce à l'oracle (`noteDismissed`), où l'ordre compte lui‑même
+/// comme preuve (`écarté-par-commande`).
 ///
 /// Aucune commande ne peut bloquer la file : les commandes dont on n'a pas
 /// besoin du code retour sont lancées détachées, sans tuyau hérité (un enfant
@@ -28,11 +30,13 @@ final class PowerActions: CommandActions {
     private let offCommandOverride: [String]
     private let wakeCommandOverride: [String]
 
-    /// `SACScreenSaverStopNow` (login.framework) : arrête l'économiseur comme une frappe, sans argument. Rend 0
-    /// (mesuré au banc). Résolue une fois à la création ; `nil` si le cadre ou le symbole manquent.
+    /// `SACScreenSaverStopNow` (login.framework) : écarte l'économiseur comme une frappe, sans argument. Rend 0
+    /// (mesuré au banc), ou 22 (EINVAL, la valeur dont le bloc de réponse XPC est amorcé) quand l'agent de session
+    /// ne répond pas. Résolue une fois à la création ; `nil` si le cadre ou le symbole manquent.
     private typealias SACStopNow = @convention(c) () -> Int32
-    private static let loginFrameworkPath = "/System/Library/PrivateFrameworks/login.framework/login"
     private let sacStopNow: SACStopNow?
+    /// Code rendu par `SACScreenSaverStopNow` quand l'agent de session ne répond pas (EINVAL).
+    private static let noSessionAgentReplyCode: Int32 = 22
 
     /// Connu dès la création : natif si la fonction est résolue, sinon le repli `killall`.
     let screenSaverDismissal: ScreenSaverDismissal
@@ -45,20 +49,10 @@ final class PowerActions: CommandActions {
         screenSaverDismissal = stopNow == nil ? .processKill : .native
     }
 
-    /// Ouvre login.framework et résout la fonction, sans l'appeler. Le cadre reste ouvert jusqu'à la fin du
-    /// process (le pointeur de fonction doit rester valide) ; `LiveSystemSignals` y résout déjà
-    /// `SACScreenSaverIsRunning`. Un échec se journalise ici (WARN, la raison) ; le moteur annonce le repli au
-    /// démarrage.
+    /// Résout la fonction, sans l'appeler. login.framework s'ouvre une seule fois pour tout le process
+    /// (`LoginFramework`, qui journalise l'échec) ; le moteur annonce le repli au démarrage.
     private static func resolveSACStopNow() -> SACStopNow? {
-        guard let framework = dlopen(loginFrameworkPath, RTLD_LAZY) else {
-            let reason = dlerror().map { escapeForLog(String(cString: $0)) } ?? "raison inconnue"
-            logWarn("SACScreenSaverStopNow indisponible : login.framework ne s'ouvre pas (\(reason))")
-            return nil
-        }
-        guard let symbol = dlsym(framework, "SACScreenSaverStopNow") else {
-            logWarn("SACScreenSaverStopNow indisponible : symbole absent de login.framework")
-            return nil
-        }
+        guard let symbol = LoginFramework.symbol("SACScreenSaverStopNow") else { return nil }
         return unsafeBitCast(symbol, to: SACStopNow.self)
     }
 
@@ -234,8 +228,8 @@ final class PowerActions: CommandActions {
     }
 
     /// Écarte l'économiseur par `screenSaverDismissal`. Le moyen natif est appelé sur la file des actions, jamais
-    /// sur celle du moteur ; son code est journalisé, 0 attendu. Le repli lance `killall ScreenSaverEngine`
-    /// sans attendre.
+    /// sur celle du moteur ; son code est journalisé, 0 attendu (22 : l'agent de session n'a pas répondu). Le repli
+    /// lance `killall ScreenSaverEngine` sans attendre.
     func dismissScreenSaver() {
         switch screenSaverDismissal {
         case .native:
@@ -245,7 +239,11 @@ final class PowerActions: CommandActions {
                 if code == 0 {
                     logInfo("économiseur: SACScreenSaverStopNow appelé (code 0)")
                 } else {
-                    logWarn("économiseur: SACScreenSaverStopNow a rendu le code \(code) (0 attendu)")
+                    let meaning = code == Self.noSessionAgentReplyCode
+                        ? " : 22 veut dire « pas de réponse de l'agent de session », "
+                          + "l'écartement n'a sans doute pas eu lieu"
+                        : ""
+                    logWarn("économiseur: SACScreenSaverStopNow a rendu le code \(code) (0 attendu)\(meaning)")
                 }
             }
         case .processKill:

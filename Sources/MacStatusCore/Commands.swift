@@ -3,8 +3,9 @@ import Foundation
 /// Primitives d'extinction et de réveil que le moteur d'état commande.
 ///
 /// Chaque primitive rapporte seulement son *lancement* : la confirmation vient
-/// toujours des faits observés par le moteur, jamais de la commande elle-même.
-/// L'implémentation réelle (`PowerActions`) vit dans l'exécutable.
+/// des faits observés par le moteur, jamais de la commande elle-même (seule exception :
+/// l'écartement natif de l'économiseur, que le moteur annonce à l'oracle). L'implémentation
+/// réelle (`PowerActions`) vit dans l'exécutable.
 public protocol CommandActions: AnyObject {
     /// Une commande OFF personnalisée (`off_command`) remplace l'action configurée.
     var hasOffOverride: Bool { get }
@@ -28,8 +29,9 @@ public protocol CommandActions: AnyObject {
     /// publie dans `/status` (`saver_dismissal`).
     var screenSaverDismissal: ScreenSaverDismissal { get }
     /// Écarte l'économiseur d'écran par `screenSaverDismissal`, comme le ferait une frappe. Rapporte
-    /// seulement le lancement : la confirmation vient des faits. Ne bloque jamais : l'appelant est la file
-    /// du moteur.
+    /// seulement le lancement : la confirmation vient des faits, sauf pour le moyen natif, que le moteur annonce à
+    /// l'oracle (`noteDismissed`) : l'ordre y compte lui-même comme preuve (`écarté-par-commande`). Ne bloque
+    /// jamais : l'appelant est la file du moteur.
     func dismissScreenSaver()
 }
 

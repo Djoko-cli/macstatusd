@@ -289,26 +289,29 @@ final class LiveSystemSignals: SystemSignals {
 
     // MARK: - Économiseur d'écran : SACScreenSaverIsRunning (login.framework)
 
-    private static let loginFrameworkPath = "/System/Library/PrivateFrameworks/login.framework/login"
-    private typealias SACIsRunning = @convention(c) (UnsafeMutablePointer<UInt8>) -> Int32
+    /// `int SACScreenSaverIsRunning(void)` : aucun argument (désassemblage de login.framework) ; la valeur passe par
+    /// le code de retour.
+    private typealias SACIsRunning = @convention(c) () -> Int32
 
     /// Fonction résolue une seule fois (`loadSACFunction`) ; `nil` si login.framework ou le symbole manquent.
     private var sacIsRunning: SACIsRunning?
     private var sacLoadAttempted = false
-    /// Codes de retour inattendus déjà signalés : une ligne par valeur, pas une par scrutation. Plafonné,
-    /// pour qu'une fonction qui rendrait n'importe quoi ne remplisse ni le journal ni la mémoire.
+    /// Garde contre un changement futur de la fonction : sur macOS 27 elle ne rend que 0 ou 1, jamais un autre code.
+    /// Si elle en rendait un, le WARN le nomme, une fois par valeur et au plus `maxReportedSACCodes` valeurs, pour
+    /// qu'une fonction qui rendrait n'importe quoi ne remplisse ni le journal ni la mémoire.
     private var reportedSACCodes = Set<Int32>()
     private static let maxReportedSACCodes = 8
 
-    /// `SACScreenSaverIsRunning` rend sa valeur par son code de retour : 1 pendant toute une session
-    /// d'économiseur, panneau de connexion compris ; 0 hors session, y compris sur un simple verrouillage
-    /// (`SaverSessionFlag`). C'est une lecture : elle n'agit ni sur l'écran ni sur l'économiseur.
+    /// `SACScreenSaverIsRunning` : 1 pendant toute une session d'économiseur, panneau de connexion compris ; 0 hors
+    /// session, y compris sur un simple verrouillage (`SaverSessionFlag`). C'est une lecture : elle n'agit ni sur
+    /// l'écran ni sur l'économiseur. Elle part en appel XPC synchrone vers l'agent de session.
+    ///
+    /// **0 aussi quand l'agent de session ne répond pas** : une liaison XPC en échec rend 0, indiscernable de « hors
+    /// session ». Le repli sur l'hôte (`nil`) ne couvre que l'absence de la fonction, pas cette panne ; le WARN
+    /// « didstart non corroboré », à chaque économiseur, en est alors le seul signe.
     func saverSessionFlag() -> Bool? {
         guard let isRunning = loadSACFunction() else { return nil }
-        // La signature veut un pointeur valide ; la valeur utile passe par le code de retour (au banc,
-        // l'octet n'est jamais écrit).
-        var unused: UInt8 = 0
-        let code = withUnsafeMutablePointer(to: &unused) { isRunning($0) }
+        let code = isRunning()
         if let flag = SaverSessionFlag.from(returnCode: code) { return flag }
         if reportedSACCodes.count < Self.maxReportedSACCodes, reportedSACCodes.insert(code).inserted {
             logWarn("SACScreenSaverIsRunning a rendu le code inattendu \(code) : drapeau de session ignoré")
@@ -316,21 +319,12 @@ final class LiveSystemSignals: SystemSignals {
         return nil
     }
 
-    /// Ouvre login.framework et résout la fonction, une seule fois. Un échec se journalise une seule fois
-    /// (WARN) et `saverSessionFlag()` rend alors `nil`. Le cadre reste ouvert jusqu'à la fin du process :
-    /// le pointeur de fonction doit rester valide.
+    /// Résout la fonction (login.framework s'ouvre une seule fois pour tout le process : `LoginFramework`), une
+    /// seule fois. Un échec se journalise une seule fois (WARN) et `saverSessionFlag()` rend alors `nil`.
     private func loadSACFunction() -> SACIsRunning? {
         if sacLoadAttempted { return sacIsRunning }
         sacLoadAttempted = true
-        guard let framework = dlopen(Self.loginFrameworkPath, RTLD_LAZY) else {
-            let reason = dlerror().map { escapeForLog(String(cString: $0)) } ?? "raison inconnue"
-            logWarn("SACScreenSaverIsRunning indisponible : login.framework ne s'ouvre pas (\(reason))")
-            return nil
-        }
-        guard let symbol = dlsym(framework, "SACScreenSaverIsRunning") else {
-            logWarn("SACScreenSaverIsRunning indisponible : symbole absent de login.framework")
-            return nil
-        }
+        guard let symbol = LoginFramework.symbol("SACScreenSaverIsRunning") else { return nil }
         sacIsRunning = unsafeBitCast(symbol, to: SACIsRunning.self)
         return sacIsRunning
     }

@@ -68,8 +68,12 @@ public protocol SystemSignals: AnyObject {
     /// connu (voir `saverProcessHint()`). Les process des autres utilisateurs ne comptent pas.
     func saverEnginePID() -> Int32
     /// `SACScreenSaverIsRunning` : vrai pendant toute une session d'économiseur, panneau de connexion
-    /// compris ; faux hors session, y compris sur un simple verrouillage ; `nil` si la fonction manque
-    /// ou rend un code inattendu.
+    /// compris ; faux hors session, y compris sur un simple verrouillage ; `nil` seulement si la fonction manque
+    /// (ou rendrait un jour un code autre que 0 et 1, ce qu'on n'a jamais vu).
+    ///
+    /// **Faux aussi quand l'agent de session ne répond pas** : l'appel passe par XPC et rend 0 s'il échoue,
+    /// indiscernable de « hors session ». Le repli sur l'hôte (`nil`) ne couvre donc pas cette panne ; le WARN
+    /// « didstart non corroboré », à chaque économiseur, en est alors le seul signe.
     func saverSessionFlag() -> Bool?
     /// Process de l'utilisateur qui hébergent un économiseur (`SaverHostRule.isHost(path:)`). Appelé
     /// seulement en repli, quand `saverSessionFlag()` rend `nil`.

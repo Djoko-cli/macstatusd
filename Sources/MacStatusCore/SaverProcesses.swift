@@ -34,10 +34,12 @@ public enum SaverHostRule {
 
 /// Lecture du code de retour de `SACScreenSaverIsRunning` (login.framework).
 ///
-/// Mesuré au banc sous macOS 27 : la valeur passe par le code de retour, jamais par l'octet passé en
-/// argument. 1 pendant toute une session d'économiseur, panneau de connexion compris ; 0 hors session,
-/// y compris sur un simple verrouillage. Tout autre code montre que la fonction a changé : le drapeau
-/// n'est pas disponible (`nil`), et l'appelant se rabat sur les hôtes (`SaverHostRule`).
+/// La fonction n'a aucun argument : sa valeur passe par le code de retour. Mesuré au banc sous macOS 27 :
+/// 1 pendant toute une session d'économiseur, panneau de connexion compris ; 0 hors session, y compris sur un
+/// simple verrouillage, **et aussi quand l'agent de session ne répond pas** (la liaison XPC en échec rend 0 : ce
+/// cas-là n'est pas un drapeau absent, le repli ne s'engage pas). Tout autre code montrerait que la fonction a
+/// changé (jamais vu sur macOS 27) : le drapeau n'est pas disponible (`nil`), et l'appelant se rabat sur les hôtes
+/// (`SaverHostRule`).
 public enum SaverSessionFlag {
     public static func from(returnCode: Int32) -> Bool? {
         switch returnCode {

@@ -2496,7 +2496,7 @@ final class EngineCoreTests: XCTestCase {
         scruterSansActivite(core, 0.5)
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver, .dismissScreenSaver], "2,5 s : écarté de nouveau")
         XCTAssertEqual(commandeEnAttente(core)?["escalated"] as? Bool, true)
-        XCTAssertTrue(journalContient("escalade: arrêt de l'économiseur"))
+        XCTAssertTrue(journalContient("escalade: écartement de l'économiseur"), "\(journal.lines)")
 
         // Une seule escalade.
         for _ in 0..<10 { scruterSansActivite(core, 0.5) }
