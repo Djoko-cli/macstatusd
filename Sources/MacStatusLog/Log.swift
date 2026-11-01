@@ -96,6 +96,15 @@ public final class Log: LogSink {
         return home.appendingPathComponent("Library/Logs/macstatusd/macstatusd.log")
     }
 
+    /// Faut-il écrire aussi le journal sur la sortie ? Oui dans un terminal ou avec `--foreground`. `--debug` seul n'y
+    /// ajoute rien pour le daemon : sous launchd, l'écho doublerait le journal fichier dans le journal de sortie du
+    /// service. Mais `--once` et `--watch` (`diagnosticMode`) sont des modes de diagnostic lancés à la main, sans
+    /// journal fichier, dont l'écho va sur la sortie d'erreur (leur sortie standard ne porte que le JSON ou le
+    /// tableau) : `--debug` y demande le journal détaillé, même quand la sortie standard est redirigée.
+    public static func echoesToOutput(isTTY: Bool, foreground: Bool, debug: Bool, diagnosticMode: Bool) -> Bool {
+        isTTY || foreground || (debug && diagnosticMode)
+    }
+
     /// `maxBytes` : taille de rotation imposée par l'appelant (tests) ; sinon la variable d'environnement
     /// d'essai, sinon 2 Mio. `echoDescriptor` : où va l'écho (`echoToStdout`) ; la sortie d'erreur pour
     /// `--once` et `--watch`, dont la sortie standard ne porte que leur propre affichage.

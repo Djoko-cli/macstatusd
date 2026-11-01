@@ -83,3 +83,35 @@ public struct SaverProcessScanPolicy {
         return true
     }
 }
+
+/// Suit une lecture du système qui peut échouer, pour que le journal ne la dise qu'aux changements : un WARN au
+/// premier échec d'une panne, un INFO à la première lecture réussie qui suit, rien entre les deux. La table des
+/// process se relit à répétition (toutes les `SaverProcessScanPolicy.fullScanInterval` secondes au plus pour
+/// `ScreenSaverEngine`) : une ligne par essai noierait le journal.
+public struct ReadFailureEpisode {
+    public enum Change: Equatable {
+        case unchanged
+        /// Premier échec d'une panne.
+        case failureStarted
+        /// Première lecture réussie depuis le début d'une panne.
+        case recovered
+    }
+
+    private var failing = false
+
+    public init() {}
+
+    /// Note le résultat d'une lecture et dit si l'état de la panne a changé.
+    public mutating func note(succeeded: Bool) -> Change {
+        switch (failing, succeeded) {
+        case (false, false):
+            failing = true
+            return .failureStarted
+        case (true, true):
+            failing = false
+            return .recovered
+        default:
+            return .unchanged
+        }
+    }
+}

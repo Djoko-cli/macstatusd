@@ -323,6 +323,26 @@ final class LogFichierTests: XCTestCase {
         XCTAssertTrue(lu.contains("DEBUG faits relus"), lu)
     }
 
+    /// R70 : l'écho suit le terminal ou `--foreground`. `--debug` seul n'y ajoute rien pour le daemon (sous launchd,
+    /// il doublerait le journal fichier dans le journal de sortie du service), mais il le demande pour `--once` et
+    /// `--watch`, modes de diagnostic dont l'écho va sur la sortie d'erreur, même quand la sortie standard est
+    /// redirigée (`| jq`, `> fichier`).
+    func test_echo_regleDeChoixDeLaSortie() {
+        func echo(tty: Bool = false, premierPlan: Bool = false, debug: Bool = false, diagnostic: Bool = false) -> Bool {
+            Log.echoesToOutput(isTTY: tty, foreground: premierPlan, debug: debug, diagnosticMode: diagnostic)
+        }
+        // Le daemon : un terminal ou `--foreground`, jamais `--debug` seul.
+        XCTAssertFalse(echo(), "daemon sous launchd")
+        XCTAssertFalse(echo(debug: true), "daemon sous launchd avec --debug : pas de doublon du journal fichier")
+        XCTAssertTrue(echo(tty: true), "daemon lancé dans un terminal")
+        XCTAssertTrue(echo(premierPlan: true), "daemon --foreground")
+        // Les modes de diagnostic : `--debug` demande l'écho, même sortie redirigée.
+        XCTAssertFalse(echo(diagnostic: true), "--once redirigé, sans --debug : la sortie ne porte que le JSON")
+        XCTAssertTrue(echo(debug: true, diagnostic: true), "--once --debug redirigé")
+        XCTAssertTrue(echo(tty: true, diagnostic: true), "--once dans un terminal")
+        XCTAssertTrue(echo(premierPlan: true, diagnostic: true), "--once --foreground")
+    }
+
     // MARK: - Taille de rotation d'essai
 
     func test_tailleDeRotationReduite_ligneInfoAuDemarrage() {

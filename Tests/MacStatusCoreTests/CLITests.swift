@@ -105,6 +105,24 @@ final class CLITests: XCTestCase {
         }
     }
 
+    /// R70 : `--once --debug` garde son écho du journal, sur la sortie d'erreur, même quand la sortie standard est
+    /// redirigée (ici un tube) : c'est ainsi que le banc le lit. La sortie standard reste le JSON. Sans `--debug`,
+    /// aucun message DEBUG n'est ni construit ni écrit.
+    func test_once_debug_echoLeJournalSurLaSortieDErreur() throws {
+        let fichier = dossier.appendingPathComponent("config.json")
+        try Data("{}".utf8).write(to: fichier)
+
+        let avec = try lancer(["--once", "--debug", "--config", fichier.path])
+        XCTAssertEqual(avec.code, 0, avec.erreurs)
+        XCTAssertTrue(avec.erreurs.contains("DEBUG"), "journal détaillé attendu sur stderr : \(avec.erreurs)")
+        XCTAssertFalse(avec.sortie.contains("DEBUG"), "la sortie standard ne porte que le JSON")
+        XCTAssertNotNil(try JSONSerialization.jsonObject(with: Data(avec.sortie.utf8)) as? [String: Any], avec.sortie)
+
+        let sans = try lancer(["--once", "--config", fichier.path])
+        XCTAssertEqual(sans.code, 0, sans.erreurs)
+        XCTAssertFalse(sans.erreurs.contains("DEBUG"), "sans --debug, rien de détaillé : \(sans.erreurs)")
+    }
+
     func test_once_afficheLesAvertissementsEtConfigError() throws {
         let fichier = dossier.appendingPathComponent("config.json")
         try Data(#"{"auth_token": "jeton-essai-0123456789abcdef", "port":"#.utf8).write(to: fichier)

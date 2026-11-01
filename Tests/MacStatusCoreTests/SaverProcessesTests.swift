@@ -153,4 +153,25 @@ final class SaverProcessesTests: XCTestCase {
         XCTAssertTrue(politique.shouldScan(now: 0))
         XCTAssertFalse(politique.shouldScan(now: 0.5), "l'indice a été consommé par le premier scan")
     }
+
+    // MARK: - Lecture qui échoue : une ligne par panne
+
+    /// R61 a : la table des process se relit toutes les 5 s. Une panne ne fait pas une ligne par essai : un WARN au
+    /// premier échec, un INFO à la première lecture réussie qui suit, rien entre les deux. Une panne nouvelle, plus
+    /// tard, se signale de nouveau.
+    func test_lectureQuiEchoue_unAvertissementParPannePuisUnRetour() {
+        var lecture = ReadFailureEpisode()
+        XCTAssertEqual(lecture.note(succeeded: true), .unchanged, "rien à dire quand tout va bien")
+        XCTAssertEqual(lecture.note(succeeded: true), .unchanged)
+
+        XCTAssertEqual(lecture.note(succeeded: false), .failureStarted, "premier échec : on le dit")
+        XCTAssertEqual(lecture.note(succeeded: false), .unchanged, "la panne dure : pas une ligne par essai")
+        XCTAssertEqual(lecture.note(succeeded: false), .unchanged)
+
+        XCTAssertEqual(lecture.note(succeeded: true), .recovered, "la lecture revient : on le dit une fois")
+        XCTAssertEqual(lecture.note(succeeded: true), .unchanged)
+
+        XCTAssertEqual(lecture.note(succeeded: false), .failureStarted, "une panne nouvelle se signale de nouveau")
+        XCTAssertEqual(lecture.note(succeeded: true), .recovered)
+    }
 }

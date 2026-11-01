@@ -127,26 +127,31 @@ if configError != nil {
 }
 
 let isTTY = isatty(STDOUT_FILENO) == 1
+/// `--once` et `--watch` : modes de diagnostic, sans journal fichier, lancés à la main.
+let diagnosticMode = options.once || options.watch
 let logLevel: LogLevel = options.debug ? .debug : LogLevel.parse(config.logLevel)
 // Fixé une fois, avant le démarrage des files : sous le niveau DEBUG, les messages de débogage ne sont même pas
 // construits.
 CoreLog.debugEnabled = logLevel >= .debug
 let logFile: URL? = {
-    if options.once || options.watch { return nil }
+    if diagnosticMode { return nil }
     if config.logFile.isEmpty { return Log.defaultLogFile() }
     return URL(fileURLWithPath: config.logFile)
 }()
 // `--once` et `--watch` : l'écho du journal va sur la sortie d'erreur, la sortie standard ne porte que
-// le JSON (ou le tableau de surveillance). L'écho suit le terminal ou `--foreground`, jamais `--debug` seul : sous
-// launchd, il doublerait le journal fichier dans le journal de sortie du service.
-Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || options.foreground,
-                     echoDescriptor: (options.once || options.watch) ? STDERR_FILENO : STDOUT_FILENO)
+// le JSON (ou le tableau de surveillance). L'écho suit le terminal ou `--foreground` ; `--debug` le demande en plus
+// pour ces deux modes de diagnostic, même sortie redirigée. Pour le daemon, jamais `--debug` seul : sous launchd,
+// il doublerait le journal fichier dans le journal de sortie du service (`Log.echoesToOutput`).
+Log.shared.configure(level: logLevel, file: logFile,
+                     echoToStdout: Log.echoesToOutput(isTTY: isTTY, foreground: options.foreground,
+                                                      debug: options.debug, diagnosticMode: diagnosticMode),
+                     echoDescriptor: diagnosticMode ? STDERR_FILENO : STDOUT_FILENO)
 
 // MARK: - Modes de diagnostic
 
 // `--once` et `--watch` n'écrivent pas de journal : les avertissements de config vont sur stderr
 // (la sortie standard de `--once` reste un JSON lisible par un script).
-if options.once || options.watch {
+if diagnosticMode {
     for warning in configWarnings {
         FileHandle.standardError.write(Data("macstatusd: config: \(warning)\n".utf8))
     }

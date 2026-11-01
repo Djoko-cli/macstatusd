@@ -245,15 +245,37 @@ final class LiveSystemSignals: SystemSignals {
         return info.pbi_uid == getuid() && SaverHostRule.isEngine(shortName: Self.shortName(info.pbi_comm))
     }
 
+    /// Suit les échecs de lecture de la table des process : une panne se dit une fois (WARN), son retour aussi (INFO).
+    private var processTableReads = ReadFailureEpisode()
+
     /// Les process de l'utilisateur courant (`KERN_PROC_UID`), zombies exclus : ceux des autres comptes
-    /// ne sont jamais lus. Vide si la table est illisible. Utilisable depuis n'importe quel contexte, y
-    /// compris hors session graphique.
+    /// ne sont jamais lus. Vide si la table est illisible, ce que le journal dit une fois par panne et non à chaque
+    /// balayage : sans elle, `ScreenSaverEngine` et les hôtes d'économiseur restent introuvables.
+    /// Utilisable depuis n'importe quel contexte, y compris hors session graphique.
     private func ownProcesses() -> [kinfo_proc] {
+        let read = readOwnProcesses()
+        switch processTableReads.note(succeeded: read.failure == nil) {
+        case .failureStarted:
+            logWarn("table des process illisible (\(read.failure ?? "raison inconnue")) : ScreenSaverEngine et les "
+                    + "hôtes d'économiseur sont introuvables tant que la lecture échoue")
+        case .recovered:
+            logInfo("table des process de nouveau lisible")
+        case .unchanged:
+            break
+        }
+        return read.processes
+    }
+
+    /// Lecture brute de la table. `failure` : la raison de l'échec (liste vide alors), `nil` si la lecture a réussi.
+    private func readOwnProcesses() -> (processes: [kinfo_proc], failure: String?) {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(bitPattern: getuid())]
         var margin = 32
         for _ in 0..<4 {
             var length = 0
-            guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0, length > 0 else { return [] }
+            guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0 else {
+                return ([], "taille : \(String(cString: strerror(errno)))")
+            }
+            guard length > 0 else { return ([], "taille : table vide") }
 
             // Marge : des process naissent entre les deux appels. Si elle ne suffit pas (ENOMEM), on
             // recommence avec une marge plus large.
@@ -263,12 +285,15 @@ final class LiveSystemSignals: SystemSignals {
             var size = capacity * MemoryLayout<kinfo_proc>.stride
             if sysctl(&mib, UInt32(mib.count), buffer, &size, nil, 0) == 0 {
                 let count = size / MemoryLayout<kinfo_proc>.stride
-                return UnsafeBufferPointer(start: buffer, count: count).filter { Int32($0.kp_proc.p_stat) != SZOMB }
+                let processes = UnsafeBufferPointer(start: buffer, count: count)
+                    .filter { Int32($0.kp_proc.p_stat) != SZOMB }
+                return (processes, nil)
             }
-            guard errno == ENOMEM else { return [] }
+            let code = errno
+            guard code == ENOMEM else { return ([], "lecture : \(String(cString: strerror(code)))") }
             margin *= 4
         }
-        return []
+        return ([], "lecture : taille instable (ENOMEM à chaque essai)")
     }
 
     /// Chemin de l'exécutable d'un process (`proc_pidpath`), `nil` s'il a disparu ou n'est pas lisible.
