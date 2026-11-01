@@ -597,13 +597,13 @@ Contrôles :
 
 ## Fin du plan 3
 
-- [ ] Relecture de toute la branche par Opus, avant le report sur `main` : concurrence, faux ON et faux OFF,
+- [x] Relecture de toute la branche par Opus, avant le report sur `main` : concurrence, faux ON et faux OFF,
   appels de login.framework.
 - [ ] Vérification finale :
   - `swift test --scratch-path /private/tmp/macstatusd-plan3/build` → tout OK ;
   - selftest des contraintes globales, écran allumé puis écran éteint → aucun échec ;
   - `--once` sur le vrai Mac → des faits cohérents avec ceux de l'instance réelle.
-- [ ] Registre, rubrique « Pour le README (plan 4) », complète :
+- [x] Registre, rubrique « Pour le README (plan 4) », complète :
   - `saver_redisplay_idle_seconds` à 30 ;
   - preuves `sac`, `process`, `notification+hôte`, `écarté-par-commande` ;
   - raisons `displays-reconfiguring` et `command:off/override` ;
