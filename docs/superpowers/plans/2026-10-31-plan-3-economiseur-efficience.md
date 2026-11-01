@@ -437,7 +437,7 @@ C26.
   de 250 ms est rattrapé au tick suivant).
 - Ces règles lisent `hidIdleSeconds` pendant une veille en cours : la tâche 6 garde cette lecture.
 
-- [ ] **Étape 1 : tests.**
+- [x] **Étape 1 : tests.**
   - `test_frappeApresLAnnonce_metFinALaVeille` : annonce à t, `hidIdle` 0.3 à t + 15 → fin de veille, ON
     après le lissage ;
   - `test_frappeAvantLAnnonce_neMetPasFinALaVeille` : `hidIdle` 1.5 à t + 1, puis 0.2 à t + 1.5 → veille
@@ -450,10 +450,10 @@ C26.
   - `test_reveilSombre_ecranEteint_resteOFF` : `systemDidWake` écran éteint → OFF `display-asleep`, aucun ON publié.
 
   Les tests existants du réveil perdu passent de 35 s à 120 s.
-- [ ] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
-- [ ] **Étape 3 : mettre en œuvre.**
-- [ ] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
-- [ ] **Étape 5 : commit** « Veille : fin sur activité ou déverrouillage, filet du réveil perdu à 120 s ».
+- [x] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
+- [x] **Étape 3 : mettre en œuvre.**
+- [x] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
+- [x] **Étape 5 : commit** « Veille : fin sur activité ou déverrouillage, filet du réveil perdu à 120 s ».
 
 ---
 
