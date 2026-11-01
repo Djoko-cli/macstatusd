@@ -577,7 +577,7 @@ Contrôles :
    displaysleepnow`) : ce qui s'affiche, et l'état confirmé.
 6. **B5 rejoué** : « fin de la veille sans avis de réveil » au moment de la frappe, et plus d'OFF pendant
    que Djoko est actif.
-7. **B6 rejoué**, après le correctif de PTZBot s'il est déployé : aucun rattrapage à tort.
+7. **B6 rejoué**, après le correctif de l'application tierce qui retardait la veille, s'il est déployé : aucun rattrapage à tort.
 8. **`SACScreenSaverStartNow`** (`saver-ctl demarrage`) sur le bureau : lance-t-il l'économiseur réglé,
    écran par écran, comme l'inactivité ? Si oui, la proposition pour l'action OFF va au registre (plan 4
    ou suivant).
