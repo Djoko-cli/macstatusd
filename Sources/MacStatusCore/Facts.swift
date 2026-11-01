@@ -38,6 +38,27 @@ public struct Facts {
 
     public init() {}
 
+    /// Les deux relevés disent-ils la même chose pour la décision ? Tous les champs comptent, sauf l'inactivité HID, qui
+    /// change à chaque lecture sans rien décider : seule la ligne DEBUG « faits: » s'en sert (voir `EngineCore`), pour
+    /// ne s'écrire qu'au changement. Un champ ajouté à `Facts` doit l'être ici aussi (un test le vérifie par réflexion).
+    public func sameDecision(as other: Facts) -> Bool {
+        systemAsleep == other.systemAsleep
+            && displayAsleep == other.displayAsleep
+            && onlineDisplays == other.onlineDisplays
+            && displayEnumerationOK == other.displayEnumerationOK
+            && displayEvidence == other.displayEvidence
+            && displays == other.displays
+            && screenSaverActive == other.screenSaverActive
+            && screenSaverEvidence == other.screenSaverEvidence
+            && screenSaverRunning == other.screenSaverRunning
+            && screenSaverDismissed == other.screenSaverDismissed
+            && sessionLocked == other.sessionLocked
+            && lockEvidence == other.lockEvidence
+            && consoleUserLoggedIn == other.consoleUserLoggedIn
+            && onConsole == other.onConsole
+            && secureInputActive == other.secureInputActive
+    }
+
     public var asDictionary: [String: Any] {
         [
             "system_asleep": systemAsleep,

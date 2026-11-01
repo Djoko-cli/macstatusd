@@ -252,6 +252,13 @@ public struct Config {
     /// "" = automatique (/opt/macstatusd/logs si root, ~/Library/Logs sinon).
     public var logFile = ""
 
+    // --- Durées en secondes (calculées une fois ici, au lieu d'un `Double(…MS) / 1000` à chaque emploi) ---
+    public var pollInterval: Double { Double(pollIntervalMS) / 1000 }
+    public var commandConfirmTimeout: Double { Double(commandConfirmTimeoutMS) / 1000 }
+    public var commandEscalateAfter: Double { Double(commandEscalateAfterMS) / 1000 }
+    public var saverDismissGrace: Double { Double(saverDismissGraceMS) / 1000 }
+    public var webhookTimeout: Double { Double(webhookTimeoutMS) / 1000 }
+
     public init() {}
 
     static let knownKeys: Set<String> = [

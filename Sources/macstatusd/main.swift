@@ -128,14 +128,18 @@ if configError != nil {
 
 let isTTY = isatty(STDOUT_FILENO) == 1
 let logLevel: LogLevel = options.debug ? .debug : LogLevel.parse(config.logLevel)
+// Fixé une fois, avant le démarrage des files : sous le niveau DEBUG, les messages de débogage ne sont même pas
+// construits.
+CoreLog.debugEnabled = logLevel >= .debug
 let logFile: URL? = {
     if options.once || options.watch { return nil }
     if config.logFile.isEmpty { return Log.defaultLogFile() }
     return URL(fileURLWithPath: config.logFile)
 }()
 // `--once` et `--watch` : l'écho du journal va sur la sortie d'erreur, la sortie standard ne porte que
-// le JSON (ou le tableau de surveillance).
-Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || options.foreground || options.debug,
+// le JSON (ou le tableau de surveillance). L'écho suit le terminal ou `--foreground`, jamais `--debug` seul : sous
+// launchd, il doublerait le journal fichier dans le journal de sortie du service.
+Log.shared.configure(level: logLevel, file: logFile, echoToStdout: isTTY || options.foreground,
                      echoDescriptor: (options.once || options.watch) ? STDERR_FILENO : STDOUT_FILENO)
 
 // MARK: - Modes de diagnostic
@@ -156,10 +160,11 @@ if options.once {
     var output = snapshot.facts.asDictionary
     output["state"] = snapshot.state ? "1" : "0"
     output["reason"] = snapshot.reason
-    output["session_context"] = CGSessionAvailable() ? "aqua" : "headless"
-    // Comme dans /status : économiseur détecté par SAC, ou par l'hôte apparu après didstart (repli), moyen
-    // de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall), et topologie des écrans.
+    output["session_context"] = isAquaSession() ? "aqua" : "headless"
+    // Comme dans /status : raison des faits, économiseur détecté par SAC, ou par l'hôte apparu après didstart
+    // (repli), moyen de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall), et topologie des écrans.
     let status = engine.statusSnapshot()
+    output["facts_reason"] = status["facts_reason"]
     output["saver_detection"] = status["saver_detection"]
     output["saver_dismissal"] = status["saver_dismissal"]
     output["main_display"] = status["main_display"]
@@ -174,7 +179,7 @@ if options.once {
 if options.watch {
     print("macstatusd \(macstatusdVersion) — surveillance (Ctrl-C pour quitter)")
     print("état raison                    veille écran_off saver                     idleHID verrou         login écrans")
-    let interval = Double(config.pollIntervalMS) / 1000
+    let interval = config.pollInterval
     let watchTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "macstatusd.watch"))
     watchTimer.schedule(deadline: .now(), repeating: interval)
     watchTimer.setEventHandler {
@@ -201,7 +206,7 @@ if options.watch {
 
 // MARK: - Démarrage du daemon
 
-logInfo("macstatusd \(macstatusdVersion) démarrage — uid=\(getuid()) session=\(CGSessionAvailable() ? "aqua" : "headless") config=\(options.configPath)")
+logInfo("macstatusd \(macstatusdVersion) démarrage — uid=\(getuid()) session=\(isAquaSession() ? "aqua" : "headless") config=\(options.configPath)")
 for warning in configWarnings { logWarn("config: \(warning)") }
 if let configError {
     logError("mode dégradé : config \(options.configPath) invalide (\(configError)). Écoute sur 127.0.0.1 "
@@ -223,7 +228,7 @@ logInfo("configuration: port=\(config.port) écoute=\(listenDescription) "
         + "off_action=\(config.offAction.rawValue) webhook=\(webhookDescription) "
         + "poll=\(config.pollIntervalMS)ms settle_on=\(config.settleOnMS)ms settle_off=\(config.settleOffMS)ms "
         + "heartbeat=\(config.heartbeatSeconds)s")
-if !CGSessionAvailable() {
+if !isAquaSession() {
     logWarn("aucune session graphique visible : l'économiseur d'écran et l'état des écrans "
             + "peuvent être indétectables. Installer macstatusd comme LaunchAgent (session Aqua).")
 }

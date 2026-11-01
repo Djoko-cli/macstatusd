@@ -35,12 +35,21 @@ public enum CoreLog {
     /// Récepteur courant. À fixer une fois, au démarrage, avant le premier message.
     /// Sans récepteur (`nil`), les messages sont simplement perdus.
     public static var sink: LogSink?
+    /// Les messages DEBUG sont-ils écrits quelque part ? Vrai par défaut (les tests voient tout). L'exécutable le
+    /// fixe une fois, avant de démarrer les files, d'après le niveau du journal : coupé, `logDebug` ne construit
+    /// même pas son message.
+    public static var debugEnabled = true
 }
 
 public func logError(_ m: String) { CoreLog.sink?.log(.error, m) }
 public func logWarn(_ m: String) { CoreLog.sink?.log(.warn, m) }
 public func logInfo(_ m: String) { CoreLog.sink?.log(.info, m) }
-public func logDebug(_ m: String) { CoreLog.sink?.log(.debug, m) }
+/// Message DEBUG. Le texte n'est construit que s'il va quelque part : niveau DEBUG actif (`CoreLog.debugEnabled`)
+/// et récepteur branché. Une ligne de faits ou une liste d'écrans ne coûte donc rien en production.
+public func logDebug(_ m: @autoclosure () -> String) {
+    guard CoreLog.debugEnabled, let sink = CoreLog.sink else { return }
+    sink.log(.debug, m())
+}
 
 /// Rend une donnée reçue (chemin, ligne de requête…) sûre pour le journal.
 ///

@@ -100,7 +100,7 @@ public final class EngineCore {
     /// Marge de couverture d'un trou de scrutation par une veille : deux périodes de scrutation,
     /// entre 1 et 3 s (bien moins que le seuil de trou, 10 s au moins).
     private var sleepCoverMargin: Double {
-        min(3, max(1, 2 * Double(config.pollIntervalMS) / 1000))
+        min(3, max(1, 2 * config.pollInterval))
     }
 
     /// Vrai une fois `shutdown` appelé : le moteur ne publie ni n'agit plus, jamais.
@@ -145,9 +145,10 @@ public final class EngineCore {
     private var publisherSuspended = false
 
     private var published: Bool?
+    /// Raison de l'état publié : celle de la dernière transition, puis, tant que l'état ne change pas, la raison
+    /// courante (`followReason`), qu'elle vienne des faits ou d'une commande.
     private var publishedReason = "startup"
     private var candidate: Bool?
-    private var candidateReason = "startup"
     /// Instant monotone où le candidat actuel est apparu.
     private var candidateSince: Double
 
@@ -164,6 +165,8 @@ public final class EngineCore {
         let target: Bool
         let issuedAt: Double
         let deadline: Double
+        /// Étiquette de l'intention : `off/<action>`, `off/override` (surcharge `off_command`) ou `on`. Elle fait la
+        /// raison publiée (`command:<source>`). Le client qui a demandé est le `peer` de `requestOff` / `requestOn`.
         let source: String
         var escalated = false
         /// Pas de confirmation par les faits avant cet instant monotone. Sert à l'ON qui remplace un
@@ -231,7 +234,7 @@ public final class EngineCore {
         let gap = now - previous
         lastTickAt = now
 
-        let recovering = gap > max(10, Double(config.pollIntervalMS) / 1000 * 20)
+        let recovering = gap > max(10, config.pollInterval * 20)
         var force = recovering
         var covered = false
         if recovering {
@@ -420,7 +423,8 @@ public final class EngineCore {
 
         next.secureInputActive = signals.secureInputActive()
 
-        if next.asDictionary as NSDictionary != facts.asDictionary as NSDictionary {
+        // L'inactivité change à chaque lecture sans décider de rien : seule la décision fait écrire la ligne.
+        if !next.sameDecision(as: facts) {
             logDebug("faits: \(summary(of: next))")
         }
         facts = next
@@ -494,7 +498,7 @@ public final class EngineCore {
                 intent = nil
             } else {
                 if !current.escalated,
-                   now - current.issuedAt >= Double(config.commandEscalateAfterMS) / 1000 {
+                   now - current.issuedAt >= config.commandEscalateAfter {
                     current.escalated = true
                     escalate(current)
                 }
@@ -508,10 +512,7 @@ public final class EngineCore {
 
         if candidate != resolved.state {
             candidate = resolved.state
-            candidateReason = resolved.reason
             candidateSince = now
-        } else {
-            candidateReason = resolved.reason
         }
 
         let settleMS = resolved.state ? config.settleOnMS : config.settleOffMS
@@ -530,12 +531,22 @@ public final class EngineCore {
                     + "\(resolved.state ? "ON" : "OFF") (\(resolved.reason)) — faits: \(factsSummary())")
             emit(resolved.state, force: false)
             return true
-        } else if force, let state = published {
-            publishedReason = resolved.reason
+        }
+        // État stable et inchangé : la raison publiée suit la raison courante, sans republier (les cibles n'ont
+        // reçu que l'état). Sinon elle resterait sur celle de la dernière transition, ou de la dernière commande.
+        followReason(resolved.reason)
+        if force, let state = published {
             emit(state, force: true)
             return true
         }
         return false
+    }
+
+    /// Aligne la raison publiée sur la raison courante, quand l'état publié reste le même. DEBUG au changement.
+    private func followReason(_ reason: String) {
+        guard reason != publishedReason else { return }
+        logDebug("raison : \(publishedReason) → \(reason)")
+        publishedReason = reason
     }
 
     /// Redemande l'état publié, sans `force` : le publieur n'envoie que si l'état confirmé
@@ -929,13 +940,14 @@ public final class EngineCore {
 
     /// Commande OFF. Idempotente : un doublon reçu pendant une intention OFF en cours ne fait
     /// rien (ni action, ni nouvelle échéance) ; une intention ON en cours est remplacée.
-    public func requestOff(source: String) {
+    /// `peer` : le client qui la demande (son adresse), pour le journal seulement.
+    public func requestOff(peer: String) {
         guard !isShutDown else {
-            logInfo("commande OFF (\(source)) ignorée : arrêt en cours")
+            logInfo("commande OFF (\(peer)) ignorée : arrêt en cours")
             return
         }
         if isPending(target: false) {
-            logInfo("commande OFF (\(source)) → commande OFF déjà en cours, ignorée")
+            logInfo("commande OFF (\(peer)) → commande OFF déjà en cours, ignorée")
             return
         }
         // Un OFF remplace tout ON en attente et met fin à la retenue d'écran.
@@ -944,7 +956,7 @@ public final class EngineCore {
         refreshFacts()
         let factual = factsVerdict()
         if factual.state == false {
-            logInfo("commande OFF (\(source)) → déjà OFF (\(factual.reason)), aucune action")
+            logInfo("commande OFF (\(peer)) → déjà OFF (\(factual.reason)), aucune action")
             intent = nil
             evaluate(immediate: true)
             return
@@ -960,8 +972,10 @@ public final class EngineCore {
             action = .displaySleep
         }
 
-        logInfo("commande OFF (\(source)) → action=\(action.rawValue)")
-        intent = makeIntent(target: false, source: "off/\(action.rawValue)")
+        // Une surcharge (`off_command`) remplace l'action configurée : c'est elle qui part, et l'intention le dit.
+        let label = actions.hasOffOverride ? "override" : action.rawValue
+        logInfo("commande OFF (\(peer)) → action=\(label)")
+        intent = makeIntent(target: false, source: "off/\(label)")
         actions.runOff(action)
         // L'économiseur lancé crée un process `ScreenSaverEngine` : la lecture suivante le cherche tout
         // de suite. Une extinction de l'écran ou une veille n'en crée aucun.
@@ -985,13 +999,15 @@ public final class EngineCore {
     /// Un ON qui remplace un OFF dont l'action est partie n'est pas confirmé avant
     /// `command_escalate_after_ms` : l'économiseur lancé par `open -a` peut démarrer après coup, et
     /// l'escalade s'en charge alors.
-    public func requestOn(source: String) {
+    ///
+    /// `peer` : le client qui la demande (son adresse), pour le journal seulement.
+    public func requestOn(peer: String) {
         guard !isShutDown else {
-            logInfo("commande ON (\(source)) ignorée : arrêt en cours")
+            logInfo("commande ON (\(peer)) ignorée : arrêt en cours")
             return
         }
         if isPending(target: true) {
-            logInfo("commande ON (\(source)) → commande ON déjà en cours, ignorée")
+            logInfo("commande ON (\(peer)) → commande ON déjà en cours, ignorée")
             return
         }
         refreshFacts()
@@ -999,12 +1015,12 @@ public final class EngineCore {
         if factual.state, !isPending(target: false) {
             intent = nil
             if facts.screenSaverRunning {
-                logInfo("commande ON (\(source)) → ON selon les faits (\(factual.reason)), mais économiseur "
+                logInfo("commande ON (\(peer)) → ON selon les faits (\(factual.reason)), mais économiseur "
                         + "en marche (\(facts.screenSaverEvidence)) → réveil, sans intention")
                 wakeNow()
                 // Rien à confirmer : l'assertion tient tant que l'économiseur tourne, au plus un délai de commande.
                 if wakeAssertionHeld {
-                    wakeSaverWaitUntil = clock.monotonic() + Double(config.commandConfirmTimeoutMS) / 1000
+                    wakeSaverWaitUntil = clock.monotonic() + config.commandConfirmTimeout
                 }
                 // macOS a pu revenir à l'économiseur, que le panneau supposé visible ne montre plus : l'arrêt
                 // natif le fait reparaître pour `saver_redisplay_idle_seconds` de plus.
@@ -1012,7 +1028,7 @@ public final class EngineCore {
                     dismissSaver(now: clock.monotonic())
                 }
             } else {
-                logInfo("commande ON (\(source)) → déjà ON (\(factual.reason)) : réveil léger, sans intention")
+                logInfo("commande ON (\(peer)) → déjà ON (\(factual.reason)) : réveil léger, sans intention")
                 wakeNow()
                 lightWake = wakeAssertionHeld
             }
@@ -1025,11 +1041,11 @@ public final class EngineCore {
         if replacesOff {
             // L'action OFF est partie : l'économiseur peut encore démarrer. Pas de confirmation avant
             // le délai d'escalade, qui arrête l'économiseur s'il est apparu entre-temps.
-            next.confirmNotBefore = next.issuedAt + Double(config.commandEscalateAfterMS) / 1000
-            logInfo("commande ON (\(source)) → remplace l'OFF en cours : confirmation au plus tôt dans "
-                    + "\(String(format: "%.1f", Double(config.commandEscalateAfterMS) / 1000)) s")
+            next.confirmNotBefore = next.issuedAt + config.commandEscalateAfter
+            logInfo("commande ON (\(peer)) → remplace l'OFF en cours : confirmation au plus tôt dans "
+                    + "\(String(format: "%.1f", config.commandEscalateAfter)) s")
         } else {
-            logInfo("commande ON (\(source))")
+            logInfo("commande ON (\(peer))")
         }
         intent = next
         wakeNow()
@@ -1081,24 +1097,33 @@ public final class EngineCore {
         let now = clock.monotonic()
         return Intent(target: target,
                       issuedAt: now,
-                      deadline: now + Double(config.commandConfirmTimeoutMS) / 1000,
+                      deadline: now + config.commandConfirmTimeout,
                       source: source)
     }
 
     // MARK: - Diagnostic
 
+    /// Un seul formateur pour les heures de `/status` : en créer un coûte cher, et `statusSnapshot()` n'est appelée que
+    /// depuis la file du moteur.
+    private static let isoFormatter = ISO8601DateFormatter()
+
+    /// Instantané pour `/status`. `reason` : la raison de l'état publié, celle d'une commande en cours (`command:…`)
+    /// ou des faits, qu'elle suit tant que l'état ne change pas. `facts_reason` : la raison des faits seuls (celle que
+    /// `--once` appelle `reason`), à côté de `facts_verdict`, leur état.
     public func statusSnapshot() -> [String: Any] {
         let now = clock.monotonic()
         // Les faits gardés portent l'inactivité de la dernière relecture, ou −1 quand le moteur ne l'a pas lue
         // (économiseur non évalué) : /status la relit à chaque appel, sur une copie des faits.
         var shownFacts = facts
         shownFacts.hidIdleSeconds = signals.hidIdleSeconds()
+        let verdict = factsVerdict()
         var dict: [String: Any] = [
             "version": macstatusdVersion,
-            "state": (published ?? factsVerdict().state) ? "1" : "0",
+            "state": (published ?? verdict.state) ? "1" : "0",
             "reason": publishedReason,
             "facts": shownFacts.asDictionary,
-            "facts_verdict": factsVerdict().state ? "1" : "0",
+            "facts_verdict": verdict.state ? "1" : "0",
+            "facts_reason": verdict.reason,
             "uptime_seconds": Int(now - startedAt),
             "transitions": transitions,
             "poll_interval_ms": config.pollIntervalMS,
@@ -1117,7 +1142,7 @@ public final class EngineCore {
         ]
         if isShutDown { dict["shutting_down"] = true }
         if let lastTransitionAt {
-            dict["last_transition"] = ISO8601DateFormatter().string(from: lastTransitionAt)
+            dict["last_transition"] = Self.isoFormatter.string(from: lastTransitionAt)
         }
         if let intent {
             dict["pending_command"] = [

@@ -39,7 +39,7 @@ final class EngineRunner: EngineFacade {
         let signals = LiveSystemSignals()
         let oracle = ScreenSaverOracle(
             dismissOnInput: config.saverDismissOnInput,
-            dismissGrace: Double(config.saverDismissGraceMS) / 1000,
+            dismissGrace: config.saverDismissGrace,
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
             signals: signals
         )
@@ -59,7 +59,7 @@ final class EngineRunner: EngineFacade {
 
     private func startPollTimer() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        let interval = Double(config.pollIntervalMS) / 1000
+        let interval = config.pollInterval
         timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(50))
         timer.setEventHandler { [weak self] in self?.core.tick() }
         timer.resume()
@@ -145,12 +145,12 @@ final class EngineRunner: EngineFacade {
         sync { core.currentState }
     }
 
-    func requestOff(source: String = "homekit") {
-        queue.async { [self] in core.requestOff(source: source) }
+    func requestOff(peer: String = "homekit") {
+        queue.async { [self] in core.requestOff(peer: peer) }
     }
 
-    func requestOn(source: String = "homekit") {
-        queue.async { [self] in core.requestOn(source: source) }
+    func requestOn(peer: String = "homekit") {
+        queue.async { [self] in core.requestOn(peer: peer) }
     }
 
     func resync() {

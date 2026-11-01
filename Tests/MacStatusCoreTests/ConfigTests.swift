@@ -620,4 +620,35 @@ final class ConfigOriginTests: XCTestCase {
         let reglee = Config.parse(data: Data(#"{"saver_redisplay_idle_seconds": 90}"#.utf8))
         XCTAssertEqual(reglee.config.saverRedisplayIdleSeconds, 90, "la clé garde la main")
     }
+
+    // MARK: - Plan 3, tâche 7 : durées en secondes
+
+    /// F70 : les durées en secondes se calculent dans `Config`, au lieu d'un `Double(…MS) / 1000` à chaque emploi.
+    func test_config_dureesEnSecondes() {
+        let defauts = Config()
+        XCTAssertEqual(defauts.pollInterval, 0.5)
+        XCTAssertEqual(defauts.commandConfirmTimeout, 12)
+        XCTAssertEqual(defauts.commandEscalateAfter, 2.5)
+        XCTAssertEqual(defauts.saverDismissGrace, 1.5)
+        XCTAssertEqual(defauts.webhookTimeout, 4)
+
+        let json = #"{"poll_interval_ms":250,"command_confirm_timeout_ms":20000,"command_escalate_after_ms":1250,"saver_dismiss_grace_ms":0,"webhook_timeout_ms":1500}"#
+        let lue = Config.parse(data: Data(json.utf8)).config
+        XCTAssertEqual(lue.pollInterval, 0.25)
+        XCTAssertEqual(lue.commandConfirmTimeout, 20)
+        XCTAssertEqual(lue.commandEscalateAfter, 1.25)
+        XCTAssertEqual(lue.saverDismissGrace, 0)
+        XCTAssertEqual(lue.webhookTimeout, 1.5)
+
+        // Le délai d'escalade corrigé par la config (au moins égal au délai de confirmation) est celui qu'elles donnent.
+        let corrigee = Config.parse(data: Data(#"{"command_confirm_timeout_ms":3000,"command_escalate_after_ms":5000}"#.utf8)).config
+        XCTAssertEqual(corrigee.commandEscalateAfter, 1.5)
+
+        // Calculées, non copiées : elles suivent les millisecondes quand le code les change après coup.
+        var modifiee = Config()
+        modifiee.pollIntervalMS = 100
+        modifiee.webhookTimeoutMS = 500
+        XCTAssertEqual(modifiee.pollInterval, 0.1)
+        XCTAssertEqual(modifiee.webhookTimeout, 0.5)
+    }
 }

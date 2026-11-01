@@ -338,13 +338,17 @@ final class LiveSystemSignals: SystemSignals {
     // MARK: - Session graphique
 
     func hasAquaSession() -> Bool {
-        CGSessionAvailable()
+        isAquaSession()
     }
 }
 
-/// Indique si le process voit une session graphique (LaunchAgent Aqua) ou non
-/// (LaunchDaemon) : utile pour diagnostiquer les signaux disponibles.
-func CGSessionAvailable() -> Bool {
+/// Indique si le process voit une session graphique (LaunchAgent Aqua) ou non (LaunchDaemon) : utile pour
+/// diagnostiquer les signaux disponibles. Lue une seule fois, au premier appel (le journal de démarrage), puis
+/// gardée : la session d'un process ne change pas pendant sa vie, et la lire est un aller-retour avec launchd et le
+/// serveur de fenêtres, que `/status` paierait à chaque requête.
+func isAquaSession() -> Bool { cachedAquaSession }
+
+private let cachedAquaSession: Bool = {
     guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
     return dict["kCGSSessionUserIDKey"] != nil
-}
+}()

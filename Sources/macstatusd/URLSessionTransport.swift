@@ -46,8 +46,8 @@ final class URLSessionTransport: NSObject, WebhookTransport, URLSessionDataDeleg
         self.queue = queue
         super.init()
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = Double(config.webhookTimeoutMS) / 1000
-        configuration.timeoutIntervalForResource = Double(config.webhookTimeoutMS) / 1000 * 2
+        configuration.timeoutIntervalForRequest = config.webhookTimeout
+        configuration.timeoutIntervalForResource = config.webhookTimeout * 2
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.httpShouldUsePipelining = false
         configuration.httpShouldSetCookies = false

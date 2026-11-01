@@ -52,7 +52,7 @@ final class EngineCoreTests: XCTestCase {
     private func moteurBrut(_ config: Config = Config()) -> EngineCore {
         let oracle = ScreenSaverOracle(
             dismissOnInput: config.saverDismissOnInput,
-            dismissGrace: Double(config.saverDismissGraceMS) / 1000,
+            dismissGrace: config.saverDismissGrace,
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
             signals: signaux
         )
@@ -226,7 +226,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         core.start()
 
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
         // OFF publié tout de suite, sans attendre le lissage.
         XCTAssertEqual(publieur.publications.last, Publication(etat: false, force: false))
@@ -249,7 +249,7 @@ final class EngineCoreTests: XCTestCase {
     func test_commandeSansEffet_escaladeA2500ms_puisRetourAuxFaitsA12s() {
         let core = moteur()
         core.start()
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
 
         // Jusqu'à 2,0 s : pas d'escalade.
         for _ in 0..<4 { scruter(core, 0.5) }
@@ -285,7 +285,7 @@ final class EngineCoreTests: XCTestCase {
         core.start()
         XCTAssertTrue(core.currentState)
 
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.displaySleep)])
         XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/display_sleep")
 
@@ -294,7 +294,7 @@ final class EngineCoreTests: XCTestCase {
         actions.hasOffOverride = true
         let personnalise = moteur()
         personnalise.start()
-        personnalise.requestOff(source: "essai")
+        personnalise.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
     }
 
@@ -305,7 +305,7 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(core.currentState)
         let avant = publieur.publications
 
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [])
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertEqual(publieur.publications, avant)
@@ -317,16 +317,16 @@ final class EngineCoreTests: XCTestCase {
     func test_doublonOff_pendantUneCommandeOff_aucuneActionEtEcheanceInchangee() {
         let core = moteur()
         core.start()
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         let publications = publieur.publications
 
         // Doublons à 1 s et à 2 s : aucune action, la commande garde son origine.
         scruter(core, 0.5)
         scruter(core, 0.5)
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         scruter(core, 0.5)
         scruter(core, 0.5)
-        core.requestOff(source: "autre")
+        core.requestOff(peer: "autre")
         XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
         XCTAssertEqual(commandeEnAttente(core)?["age_seconds"] as? Int, 2)
         XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/screensaver")
@@ -348,11 +348,11 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         scruter(core, 0.5)
-        core.requestOn(source: "essai")
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertEqual(commandeEnAttente(core)?["age_seconds"] as? Int, 0)
         XCTAssertTrue(journalContient("commande ON (essai) → commande ON déjà en cours, ignorée"))
@@ -361,7 +361,7 @@ final class EngineCoreTests: XCTestCase {
         for _ in 0..<24 { scruter(core, 0.5) }
         XCTAssertNil(commandeEnAttente(core))
         let avant = actions.appels.count
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels.count, avant + 1)
         XCTAssertEqual(actions.appels.last, .wake)
     }
@@ -372,9 +372,9 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertTrue(core.currentState)
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertFalse(core.currentState)
@@ -387,9 +387,9 @@ final class EngineCoreTests: XCTestCase {
         // Bureau ouvert : OFF puis ON aussitôt. L'intention ON remplace l'intention OFF.
         let core = moteur()
         core.start()
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertFalse(core.currentState)
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
         XCTAssertTrue(core.currentState)
         XCTAssertEqual(publieur.publications, [Publication(etat: true, force: false),
@@ -413,8 +413,8 @@ final class EngineCoreTests: XCTestCase {
     func test_offPuisOn_economiseurQuiDemarreApres_etatFinalOn() {
         let core = moteur()
         core.start()
-        core.requestOff(source: "essai")
-        core.requestOn(source: "essai")
+        core.requestOff(peer: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.screensaver), .wake])
         XCTAssertNotNil(commandeEnAttente(core), "l'ON n'est pas confirmé dans l'évaluation du réveil")
         XCTAssertEqual(actions.appelsReveil, [], "R47 : rien n'est relâché dans l'évaluation du réveil")
@@ -452,7 +452,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         core.start()
         let avant = publieur.publications
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake], "un seul réveil")
         XCTAssertNil(commandeEnAttente(core), "aucune intention")
         XCTAssertEqual(actions.appelsReveil, [], "rien n'est relâché dans la même évaluation")
@@ -471,7 +471,7 @@ final class EngineCoreTests: XCTestCase {
         // Les faits sont relus avant de décider : un écran éteint depuis le dernier cycle
         // n'est pas « déjà ON » : la commande a son intention.
         signaux.etatEcran.asleep = true
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .wake])
         XCTAssertNotNil(commandeEnAttente(core))
     }
@@ -480,13 +480,13 @@ final class EngineCoreTests: XCTestCase {
     func test_reveilsLegersRepetes_chacunRelache() {
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .wake])
         XCTAssertEqual(actions.appelsReveil, [])
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [.releaseWake, .releaseWake])
     }
@@ -514,7 +514,7 @@ final class EngineCoreTests: XCTestCase {
 
         // Le réveil est suivi de l'arrêt de l'économiseur par la commande du système (C24) : macOS a pu
         // revenir à l'économiseur, que le panneau supposé visible ne montre plus.
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertTrue(core.currentState)
@@ -525,7 +525,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.pidEconomiseur = 0
         scruter(core, 0.5)
         scruter(core, 0.5)
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertTrue(journalContient("déjà ON (desktop-ui) : réveil léger"))
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver, .wake])
         XCTAssertNil(commandeEnAttente(core))
@@ -554,7 +554,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         core.start()
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertEqual(actions.appelsReveil, [], "tant que les faits ne confirment pas, l'assertion reste posée")
 
@@ -580,7 +580,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         for _ in 0..<23 { scruter(core, 0.5) }
         XCTAssertEqual(actions.appels, [.wake, .wake], "escalade à 2,5 s : nouvelle tentative de réveil")
         XCTAssertEqual(actions.appelsReveil, [], "11,5 s : la commande tient encore")
@@ -595,11 +595,11 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
-        core.requestOff(source: "essai")
+        core.requestOn(peer: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
         // Un second OFF ne relâche rien de plus.
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
     }
 
@@ -608,7 +608,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         core.willSleep {}
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
     }
@@ -618,7 +618,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         var termines = 0
         core.shutdown(publishOff: false) { termines += 1 }
         XCTAssertEqual(termines, 1)
@@ -626,7 +626,7 @@ final class EngineCoreTests: XCTestCase {
         // Le moteur arrêté ne relâche ni ne retient plus rien.
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
     }
 
@@ -641,7 +641,7 @@ final class EngineCoreTests: XCTestCase {
         for _ in 0..<4 { scruter(core, 0.5) }
         XCTAssertTrue(core.currentState)
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "C24 : réveil, puis écartement")
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertEqual(actions.appelsReveil, [], "l'économiseur tourne encore : l'assertion reste posée")
@@ -665,7 +665,7 @@ final class EngineCoreTests: XCTestCase {
         for _ in 0..<4 { scruter(core, 0.5) }
         signaux.inactiviteHID = 0
         for _ in 0..<4 { scruter(core, 0.5) }
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         for _ in 0..<23 { scruter(core, 0.5) }
         XCTAssertEqual(actions.appelsReveil, [])
         scruter(core, 0.5)
@@ -677,7 +677,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(0))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertNil(commandeEnAttente(core))
@@ -692,7 +692,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [], "la retenue vient après la confirmation, jamais dans /wake")
 
         signaux.etatEcran.asleep = false
@@ -710,7 +710,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
@@ -722,7 +722,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatSession.locked = true
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         scruter(core, 0.5)
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertEqual(actions.appelsReveil, [.releaseWake])
@@ -733,7 +733,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil.last, .holdDisplay(60))
@@ -751,7 +751,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
 
@@ -766,10 +766,10 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
         XCTAssertEqual(actions.appels.last, .runOff(.displaySleep))
     }
@@ -779,7 +779,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         for _ in 0..<12 { scruter(core, 5) }
@@ -799,7 +799,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
@@ -807,7 +807,7 @@ final class EngineCoreTests: XCTestCase {
         // Écran éteint (retenue levée), puis un second /wake.
         signaux.etatEcran.asleep = true
         scruter(core, 0.5)
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0),
@@ -821,7 +821,7 @@ final class EngineCoreTests: XCTestCase {
         actions.hasWakeOverride = true
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertNil(commandeEnAttente(core), "ON confirmé")
@@ -831,14 +831,14 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(journalContient("retenue d'écran"), "\(journal.lines.map { $0.1 })")
 
         // Réveil léger (R49) : la commande part, rien à relâcher ensuite.
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         scruter(core, 0.5)
         XCTAssertEqual(actions.appels, [.wake, .wake])
         XCTAssertEqual(actions.appelsReveil, [])
         XCTAssertFalse(journalContient("assertion de réveil relâchée"))
 
         // Un OFF ne lève aucune retenue qui n'existe pas.
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [])
     }
 
@@ -847,7 +847,7 @@ final class EngineCoreTests: XCTestCase {
         sessionVerrouilleeEcranEteint()
         let core = moteur(configRetenue(60))
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         var termines = 0
@@ -955,7 +955,7 @@ final class EngineCoreTests: XCTestCase {
         let config = Config()
         let oracle = ScreenSaverOracle(
             dismissOnInput: config.saverDismissOnInput,
-            dismissGrace: Double(config.saverDismissGraceMS) / 1000,
+            dismissGrace: config.saverDismissGrace,
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
             signals: signaux
         )
@@ -974,7 +974,7 @@ final class EngineCoreTests: XCTestCase {
 
         // La commande arrive au sortir de la veille, écran encore éteint.
         signaux.etatEcran.asleep = true
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertTrue(core.currentState)
 
@@ -1006,7 +1006,7 @@ final class EngineCoreTests: XCTestCase {
         // Commande en cours : intacte.
         let core = moteur()
         core.start()
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         scruter(core, 0.5)
         let avant = publieur.publications
         core.handle(.systemWillNotSleep)
@@ -1388,7 +1388,7 @@ final class EngineCoreTests: XCTestCase {
     func test_veille_abandonDIntention_journalise() {
         let core = moteur()
         core.start()
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertNotNil(commandeEnAttente(core))
         core.willSleep {}
         XCTAssertNil(commandeEnAttente(core))
@@ -1444,7 +1444,7 @@ final class EngineCoreTests: XCTestCase {
         var autorisations = 0
         core.willSleep { autorisations += 1 }
         // Une commande ON arrive avant la confirmation de OFF.
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertTrue(core.currentState)
         publieur.livrer()
         XCTAssertEqual(autorisations, 1)
@@ -1479,8 +1479,8 @@ final class EngineCoreTests: XCTestCase {
         core.handle(.screensDidSleep)
         core.handle(.systemDidWake)
         core.handle(.screenSaverDidStart)
-        core.requestOff(source: "http")
-        core.requestOn(source: "http")
+        core.requestOff(peer: "http")
+        core.requestOn(peer: "http")
         core.resync()
         var autorisations = 0
         core.willSleep { autorisations += 1 }
@@ -1665,7 +1665,7 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(publieur.publications, avant)
         XCTAssertEqual(publieur.delaisDemandes, [])
 
-        core.requestOff(source: "http")
+        core.requestOff(peer: "http")
         core.heartbeat()
         XCTAssertEqual(publieur.publications, avant)
         XCTAssertEqual(actions.appels, [])
@@ -1675,7 +1675,7 @@ final class EngineCoreTests: XCTestCase {
     func test_arret_commandeEnCoursOubliee_etSecondAppelSansEffet() {
         let core = moteur()
         core.start()
-        core.requestOff(source: "http")
+        core.requestOff(peer: "http")
         XCTAssertNotNil(commandeEnAttente(core))
         var termines = 0
         core.shutdown(publishOff: true) { termines += 1 }
@@ -1708,8 +1708,8 @@ final class EngineCoreTests: XCTestCase {
         core.resync()
         core.handle(.screensDidWake)
         core.handle(.systemDidWake)
-        core.requestOn(source: "essai")
-        core.requestOff(source: "essai")
+        core.requestOn(peer: "essai")
+        core.requestOff(peer: "essai")
         scruter(core, 30)
         XCTAssertEqual(publieur.publications, [], "aucune publication tant que le port n'est pas détenu")
         XCTAssertEqual(publieur.publicationsAvantDepart, 0)
@@ -2137,7 +2137,7 @@ final class EngineCoreTests: XCTestCase {
         core.start()
         XCTAssertEqual(signaux.indicesProcess, 0)
 
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
 
         XCTAssertEqual(actions.appels, [.runOff(.screensaver)])
         XCTAssertEqual(signaux.indicesProcess, 1)
@@ -2150,7 +2150,7 @@ final class EngineCoreTests: XCTestCase {
         config.offAction = .displaySleep
         let configuree = moteur(config)
         configuree.start()
-        configuree.requestOff(source: "essai")
+        configuree.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.displaySleep)])
         XCTAssertEqual(signaux.indicesProcess, 0)
 
@@ -2160,7 +2160,7 @@ final class EngineCoreTests: XCTestCase {
         publieur = FakePublisher()
         let verrouillee = moteur()
         verrouillee.start()
-        verrouillee.requestOff(source: "essai")
+        verrouillee.requestOff(peer: "essai")
         XCTAssertEqual(actions.appels, [.runOff(.displaySleep)], "session verrouillée : extinction de l'écran")
         XCTAssertEqual(signaux.indicesProcess, 0)
     }
@@ -2363,7 +2363,7 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(core.currentState, "économiseur seul à l'écran : OFF")
         XCTAssertEqual(preuveEconomiseur(core), "sac")
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "le réveil d'abord, puis l'écartement")
         XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "on")
         XCTAssertEqual(actions.appelsReveil, [], "R47 : rien n'est relâché dans l'évaluation du réveil")
@@ -2387,7 +2387,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         core.start()
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver], "le repli est lancé aussi")
         for _ in 0..<3 { scruterSansActivite(core, 0.5) }
         XCTAssertNotNil(commandeEnAttente(core), "aucun écartement supposé : l'intention attend les faits")
@@ -2414,7 +2414,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur(config)
         core.start()
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         for _ in 0..<5 { scruterSansActivite(core, 0.5) }
         XCTAssertEqual(actions.appels, [.wake, .wake], "2,5 s : l'escalade renouvelle le réveil, sans écarter")
@@ -2430,7 +2430,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur(config)
         mettreLePanneauSurUnEconomiseurSAC(core)
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertNil(commandeEnAttente(core))
         XCTAssertTrue(journalContient("économiseur en marche"))
@@ -2460,7 +2460,7 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         mettreLePanneauSurUnEconomiseurSAC(core)
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
         XCTAssertNil(commandeEnAttente(core), "aucune intention")
         XCTAssertTrue(core.currentState)
@@ -2487,7 +2487,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.drapeauSAC = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
 
         for _ in 0..<4 { scruterSansActivite(core, 0.5) }
@@ -2511,7 +2511,7 @@ final class EngineCoreTests: XCTestCase {
         signaux.etatEcran.asleep = true
         let core = moteur()
         core.start()
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake], "écran éteint : l'économiseur n'est pas évalué, rien à écarter")
 
         signaux.etatEcran.asleep = false
@@ -2535,11 +2535,11 @@ final class EngineCoreTests: XCTestCase {
         let core = moteur()
         core.start()
 
-        core.requestOn(source: "essai")
+        core.requestOn(peer: "essai")
         XCTAssertEqual(actions.appels, [.wake])
         XCTAssertEqual(actions.appelsReveil, [], "le réveil léger tient jusqu'à l'évaluation suivante")
 
-        core.requestOff(source: "essai")
+        core.requestOff(peer: "essai")
         XCTAssertEqual(actions.appelsReveil, [.releaseWake], "l'OFF relâche le réveil léger")
         XCTAssertEqual(actions.appels, [.wake, .runOff(.screensaver)], "puis exécute l'OFF")
         XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/screensaver")
@@ -3296,5 +3296,173 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, 7)
         signaux.inactiviteHID = -1           // illisible : −1, comme avant
         XCTAssertEqual(faitsPublies(core)["hid_idle_seconds"] as? Double, -1)
+    }
+
+    // MARK: - Observabilité et code mort (plan 3, tâche 7)
+
+    private func raisonPubliee(_ core: EngineCore) -> String? {
+        core.statusSnapshot()["reason"] as? String
+    }
+
+    /// F71 : « mêmes faits » veut dire tous les faits sauf l'inactivité HID, qui change à chaque lecture sans rien
+    /// décider. Chaque autre champ, changé seul, donne d'autres faits. Le décompte par réflexion échoue si un champ
+    /// est ajouté à `Facts` sans être traité ici (et dans `sameDecision`).
+    func test_faits_memeDecisionMalgreLInactivite() {
+        let base = Facts()
+        var inactif = base
+        inactif.hidIdleSeconds = 42.5
+        XCTAssertTrue(base.sameDecision(as: inactif), "l'inactivité seule ne change aucune décision")
+        inactif.hidIdleSeconds = -1
+        XCTAssertTrue(base.sameDecision(as: inactif), "illisible (−1) non plus")
+
+        let changements: [(champ: String, modifier: (inout Facts) -> Void)] = [
+            ("systemAsleep", { $0.systemAsleep.toggle() }),
+            ("displayAsleep", { $0.displayAsleep.toggle() }),
+            ("onlineDisplays", { $0.onlineDisplays += 1 }),
+            ("displayEnumerationOK", { $0.displayEnumerationOK.toggle() }),
+            ("displayEvidence", { $0.displayEvidence = "main" }),
+            ("displays", { $0.displays = [.physique(1, main: true)] }),
+            ("screenSaverActive", { $0.screenSaverActive.toggle() }),
+            ("screenSaverEvidence", { $0.screenSaverEvidence = "sac" }),
+            ("screenSaverRunning", { $0.screenSaverRunning.toggle() }),
+            ("screenSaverDismissed", { $0.screenSaverDismissed.toggle() }),
+            ("sessionLocked", { $0.sessionLocked.toggle() }),
+            ("lockEvidence", { $0.lockEvidence = "IOConsoleLocked" }),
+            ("consoleUserLoggedIn", { $0.consoleUserLoggedIn.toggle() }),
+            ("onConsole", { $0.onConsole.toggle() }),
+            ("secureInputActive", { $0.secureInputActive.toggle() }),
+        ]
+        for (champ, modifier) in changements {
+            var autre = base
+            modifier(&autre)
+            XCTAssertFalse(base.sameDecision(as: autre), champ)
+            XCTAssertFalse(autre.sameDecision(as: base), "\(champ), sens inverse")
+            autre.hidIdleSeconds += 7
+            XCTAssertFalse(base.sameDecision(as: autre), "\(champ), l'inactivité en plus ne l'efface pas")
+        }
+        XCTAssertEqual(changements.count + 1, Mirror(reflecting: base).children.count,
+                       "un champ de Facts n'est pas traité ici (l'inactivité est le +1)")
+
+        // La liste des écrans se compare en entier : un écran qui s'endort fait d'autres faits.
+        var deux = base
+        deux.displays = [.physique(1, main: true), .physique(2)]
+        var identiques = base
+        identiques.displays = [.physique(1, main: true), .physique(2)]
+        XCTAssertTrue(deux.sameDecision(as: identiques))
+        identiques.displays = [.physique(1, main: true), .physique(2, asleep: true)]
+        XCTAssertFalse(deux.sameDecision(as: identiques))
+    }
+
+    /// F71 : l'inactivité change à chaque scrutation, écran allumé. La ligne DEBUG « faits: » ne part plus que
+    /// pour un changement qui compte.
+    func test_faits_ligneDeDebugSeulementAuChangement() {
+        let core = moteur()
+        core.start()
+        func lignesFaits() -> [String] {
+            journal.lines.filter { $0.0 == .debug && $0.1.hasPrefix("faits:") }.map { $0.1 }
+        }
+        let avant = lignesFaits().count
+        XCTAssertGreaterThan(avant, 0, "la première lecture des faits est écrite")
+
+        for _ in 0..<10 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(core.inspect().facts.hidIdleSeconds, 35, accuracy: 0.001, "l'inactivité a bien grandi de 5 s")
+        XCTAssertEqual(lignesFaits().count, avant, "dix scrutations où seule l'inactivité change : aucune ligne")
+
+        signaux.etatSession.locked = true
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(lignesFaits().count, avant + 1, "un vrai changement s'écrit, lui")
+        XCTAssertTrue(lignesFaits().last?.contains("locked=1") ?? false, "\(lignesFaits())")
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(lignesFaits().count, avant + 1, "et une seule fois")
+    }
+
+    /// F44 : une fois l'état stable et inchangé, la raison publiée suit la raison courante, sans republier. Avant,
+    /// elle restait collée sur `command:on` (ou sur `displays-reconfiguring`) jusqu'à la transition suivante.
+    func test_raisonSuitLesFaitsSansRepublier() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        XCTAssertEqual(raisonPubliee(core), "display-asleep")
+
+        core.requestOn(peer: "essai")
+        XCTAssertEqual(raisonPubliee(core), "command:on")
+        XCTAssertTrue(core.currentState)
+        let publications = publieur.publications
+
+        // Les faits confirment la commande : la raison passe à celle des faits, l'état est le même.
+        signaux.etatEcran.asleep = false
+        scruter(core, 0.5)
+        XCTAssertNil(commandeEnAttente(core))
+        XCTAssertEqual(raisonPubliee(core), "desktop-ui")
+        XCTAssertTrue(journal.lines.contains { $0.0 == .debug && $0.1 == "raison : command:on → desktop-ui" },
+                      "\(journal.lines)")
+
+        // La session se verrouille : toujours ON, la raison suit, rien n'est republié.
+        signaux.etatSession.locked = true
+        scruter(core, 0.5)
+        XCTAssertEqual(raisonPubliee(core), "lock-screen-ui")
+        XCTAssertTrue(core.currentState)
+        XCTAssertEqual(publieur.publications, publications, "aucune nouvelle publication")
+        XCTAssertTrue(journal.lines.contains { $0.0 == .debug && $0.1 == "raison : desktop-ui → lock-screen-ui" })
+        let lignes = journal.lines.count
+        scruter(core, 0.5)
+        XCTAssertEqual(journal.lines.count, lignes, "rien ne change : rien n'est écrit")
+
+        // Les écrans physiques disparaissent (seul le fantôme reste) : l'état publié tient, la raison le dit, puis elle
+        // revient avec les écrans.
+        signaux.etatSession.locked = false
+        signaux.ecrans = DisplaySnapshot(displays: [.fantome(9, main: true)], enumerationOK: true)
+        scruter(core, 0.5)
+        XCTAssertEqual(raisonPubliee(core), "displays-reconfiguring")
+        XCTAssertTrue(core.currentState)
+        signaux.ecrans = DisplaySnapshot(displays: [.physique(1, main: true)], enumerationOK: true)
+        scruter(core, 0.5)
+        XCTAssertEqual(raisonPubliee(core), "desktop-ui")
+        XCTAssertEqual(publieur.publications, publications, "toujours aucune publication")
+    }
+
+    /// F44 : `off_command` remplace l'action configurée. La source de l'intention, donc la raison publiée et le journal,
+    /// dit `off/override`, et non `off/screensaver`, qui laisserait croire qu'un économiseur a été lancé.
+    func test_offSurcharge_sourceOverride() {
+        actions.hasOffOverride = true
+        let core = moteur()
+        core.start()
+
+        core.requestOff(peer: "essai")
+        XCTAssertEqual(actions.appels, [.runOff(.screensaver)], "l'action configurée est passée telle quelle")
+        XCTAssertEqual(commandeEnAttente(core)?["source"] as? String, "off/override")
+        XCTAssertEqual(raisonPubliee(core), "command:off/override")
+        XCTAssertTrue(journalContient("commande OFF (essai) → action=override"), "\(journal.lines)")
+
+        // Les faits ne confirment rien : retour aux faits à l'échéance, la source est dans la ligne d'échéance.
+        for _ in 0..<24 { scruter(core, 0.5) }
+        XCTAssertTrue(journalContient("commande off/override non confirmée après 12.0 s"), "\(journal.lines)")
+    }
+
+    /// F44 : `/status` donne la raison des faits seuls (`facts_reason`, celle que `--once` appelle `reason`) à côté de
+    /// la raison publiée, qui peut être celle d'une commande.
+    func test_statusDonneLaRaisonDesFaits() {
+        signaux.etatEcran.asleep = true
+        let core = moteur()
+        core.start()
+        var instantane = core.statusSnapshot()
+        XCTAssertEqual(instantane["reason"] as? String, "display-asleep")
+        XCTAssertEqual(instantane["facts_reason"] as? String, "display-asleep")
+
+        // Une commande ON tient l'état ON alors que les faits disent encore OFF.
+        core.requestOn(peer: "essai")
+        instantane = core.statusSnapshot()
+        XCTAssertEqual(instantane["state"] as? String, "1")
+        XCTAssertEqual(instantane["reason"] as? String, "command:on")
+        XCTAssertEqual(instantane["facts_verdict"] as? String, "0")
+        XCTAssertEqual(instantane["facts_reason"] as? String, "display-asleep")
+
+        // Les faits rejoignent la commande.
+        signaux.etatEcran.asleep = false
+        signaux.etatSession.locked = true
+        scruter(core, 0.5)
+        instantane = core.statusSnapshot()
+        XCTAssertEqual(instantane["facts_reason"] as? String, "lock-screen-ui")
+        XCTAssertEqual(instantane["facts_reason"] as? String, core.inspect().reason, "même raison que `--once`")
     }
 }

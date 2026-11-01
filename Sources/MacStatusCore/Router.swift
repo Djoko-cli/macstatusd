@@ -6,8 +6,9 @@ import Foundation
 public protocol EngineFacade: AnyObject {
     var currentState: Bool { get }
     func statusSnapshot() -> [String: Any]
-    func requestOff(source: String)
-    func requestOn(source: String)
+    /// Commandes HomeKit. `peer` : l'adresse du client qui les envoie, pour le journal du moteur seulement.
+    func requestOff(peer: String)
+    func requestOn(peer: String)
     func resync()
     /// Vrai une fois l'arrêt commencé : le moteur n'agit plus, le routeur répond 503 aux commandes.
     /// Lecture sans verrou de file ; `false` par défaut (faux moteurs des tests).
@@ -142,11 +143,11 @@ public final class Router {
             return .text("OK")
 
         case .sleep, .off:
-            engine.requestOff(source: request.peer)
+            engine.requestOff(peer: request.peer)
             return .text("OK")
 
         case .wake, .on:
-            engine.requestOn(source: request.peer)
+            engine.requestOn(peer: request.peer)
             return .text("OK")
 
         case .resync:

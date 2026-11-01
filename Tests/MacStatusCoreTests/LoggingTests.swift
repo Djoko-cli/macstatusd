@@ -32,6 +32,39 @@ final class LoggingTests: XCTestCase {
         XCTAssertEqual(capture.lines.map { $0.1 }, ["capté"], "rien n'est capté une fois le récepteur retiré")
     }
 
+    /// F71 : coupé (niveau au-dessus de DEBUG), `logDebug` ne construit même pas son message : une ligne de faits ou une
+    /// liste d'écrans ne coûte rien. Vrai par défaut, pour que les récepteurs des tests voient tout.
+    func test_logDebug_nEvaluePasLeMessageSiCoupe() {
+        let capture = CaptureLog()
+        CoreLog.sink = capture
+        let ancien = CoreLog.debugEnabled
+        defer { CoreLog.debugEnabled = ancien }
+        XCTAssertTrue(ancien, "vrai par défaut")
+
+        var evaluations = 0
+        func message() -> String {
+            evaluations += 1
+            return "construit"
+        }
+
+        CoreLog.debugEnabled = false
+        logDebug(message())
+        XCTAssertEqual(evaluations, 0, "coupé : le message n'est pas construit")
+        XCTAssertTrue(capture.lines.isEmpty)
+        logInfo("i"); logWarn("w"); logError("e")
+        XCTAssertEqual(capture.lines.map { $0.1 }, ["i", "w", "e"], "les autres niveaux n'en dépendent pas")
+
+        CoreLog.debugEnabled = true
+        logDebug(message())
+        XCTAssertEqual(evaluations, 1)
+        XCTAssertEqual(capture.lines.last?.0, .debug)
+        XCTAssertEqual(capture.lines.last?.1, "construit")
+
+        CoreLog.sink = nil
+        logDebug(message())
+        XCTAssertEqual(evaluations, 1, "sans récepteur, il n'est pas construit non plus")
+    }
+
     /// `off_command` / `wake_command` au journal : l'exécutable (échappé) et le nombre d'arguments,
     /// jamais les arguments (ils peuvent porter un jeton ou une adresse).
     func test_resumeDeCommande_executableEtNombreDArgumentsSeulement() {

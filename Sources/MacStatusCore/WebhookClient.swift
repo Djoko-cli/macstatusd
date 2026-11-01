@@ -629,11 +629,15 @@ public final class WebhookClient: StatePublisher {
 
     // MARK: - Diagnostic
 
+    /// Un seul formateur pour les heures de `/status` : en créer un coûte cher, et `statusDictionary` n'est lu que
+    /// depuis la file du moteur.
+    private static let isoFormatter = ISO8601DateFormatter()
+
     /// Diagnostic pour /status. À appeler depuis la file du moteur. Une entrée par cible sous
     /// `targets`, l'URL masquée, jamais les en-têtes. Les clés communes (`confirmed`, `detail`…)
     /// résument les cibles : `confirmed` n'y figure que si toutes ont confirmé le même état.
     public var statusDictionary: [String: Any] {
-        let formatter = ISO8601DateFormatter()
+        let formatter = Self.isoFormatter
         let now = clock.monotonic()
         var dict: [String: Any] = [
             "enabled": enabled,

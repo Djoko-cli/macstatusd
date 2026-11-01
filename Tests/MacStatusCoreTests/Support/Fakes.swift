@@ -474,7 +474,7 @@ final class FakeEngine: EngineFacade {
         return instantane
     }
 
-    func requestOff(source: String) { appels.append(.off(source)) }
-    func requestOn(source: String) { appels.append(.on(source)) }
+    func requestOff(peer: String) { appels.append(.off(peer)) }
+    func requestOn(peer: String) { appels.append(.on(peer)) }
     func resync() { appels.append(.resync) }
 }
