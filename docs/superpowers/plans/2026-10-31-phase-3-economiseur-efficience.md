@@ -484,7 +484,7 @@ F76, F78 ; F75 est fait à la tâche 1. Objectif de la spec : tick écran allum�
 - [x] **Étape 2 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : échecs.
 - [x] **Étape 3 : mettre en œuvre.**
 - [x] **Étape 4 : `swift test --scratch-path /private/tmp/macstatusd-plan3/build`** — attendu : OK.
-- [ ] **Étape 5 : mesurer.**
+- [x] **Étape 5 : mesurer.** (banc 2, 06/11 : tête 0,143 % d'un cœur écran allumé, base 0,617 % ; écran éteint 0,095 % contre 0,168 %)
   - Deux binaires en release :
     - la base du plan, le commit noté au registre avant la tâche 1, construit dans un worktree sous
       `/private/tmp/macstatusd-plan3/base` ;
