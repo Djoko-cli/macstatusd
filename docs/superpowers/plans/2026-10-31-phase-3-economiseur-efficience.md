@@ -586,8 +586,8 @@ Contrôles :
     corrigée si besoin, avec son test, dans un commit à part.
 11. En option, la nuit : coût du tick écran éteint, même méthode qu'à la tâche 6.
 
-- [ ] **Étape 1 :** protocole écrit, et lu par Djoko.
-- [ ] **Étape 2 :** banc mené. Remise en état : Djoko remet ses réglages ; le contrôleur arrête la sonde,
+- [x] **Étape 1 :** protocole écrit, et lu par Djoko.
+- [x] **Étape 2 :** banc mené (06/11 et 07/11 : M, A, A bis, B, C ; C réussi au 3e essai, le récepteur des deux premiers étant mort avec la session). Remise en état : Djoko remet ses réglages ; le contrôleur arrête la sonde,
   l'instance et le récepteur par leur PID, puis vérifie `/health` de l'instance réelle et que les ports
   19400 et 19401 sont libres.
 - [ ] **Étape 3 :** résultats dans `.superpowers/banc/banc-2-<date>/resultats.md`, et décisions au
