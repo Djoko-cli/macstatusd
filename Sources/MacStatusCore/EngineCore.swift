@@ -46,6 +46,9 @@ public final class EngineCore {
 
     private struct SleepSpan {
         let start: Double
+        /// Le même instant sur l'horloge hors veille (`Clock.awake()`), seule comparable à `now − hidIdle` :
+        /// `HIDIdleTime` ne compte pas la veille (R87). La durée de la veille, elle, se mesure sur `start`.
+        let awakeStart: Double
         var end: Double?
     }
 
@@ -696,7 +699,7 @@ public final class EngineCore {
         systemAsleep = true
         // Deux avis de veille sans réveil entre eux : le début reste celui du premier.
         if lastSleep == nil || lastSleep?.end != nil {
-            lastSleep = SleepSpan(start: clock.monotonic())
+            lastSleep = SleepSpan(start: clock.monotonic(), awakeStart: clock.awake())
         }
         // Chaque annonce repart de zéro : la lecture ci-dessous dit si la session est verrouillée.
         sleepSawLocked = false
@@ -839,7 +842,7 @@ public final class EngineCore {
     /// le daemon resterait OFF (`system-asleep`) alors que l'utilisateur est là. Deux faits y mettent fin sans
     /// attendre son avis, pendant une veille en cours seulement :
     /// - une frappe ou un mouvement qui suit l'annonce de plus de `sleepAbortInputMargin` s
-    ///   (`now − hidIdle > début + marge`) : le clic qui a demandé la veille, lui, ne compte pas. Une inactivité
+    ///   (`now − hidIdle > début + marge`, sur l'horloge hors veille : `HIDIdleTime` ne compte pas la veille) : le clic qui a demandé la veille, lui, ne compte pas. Une inactivité
     ///   illisible (< 0) ne prouve rien ;
     /// - la session, vue verrouillée depuis l'annonce (`sleepSawLocked`), relue déverrouillée.
     ///
@@ -850,10 +853,11 @@ public final class EngineCore {
     private func endAbortedSleep() {
         guard sleepInProgress, let sleep = lastSleep else { return }
         let now = clock.monotonic()
+        let awakeNow = clock.awake()
         let cause: String
         if facts.hidIdleSeconds >= 0,
-           now - facts.hidIdleSeconds > sleep.start + Self.sleepAbortInputMargin {
-            let after = now - facts.hidIdleSeconds - sleep.start
+           awakeNow - facts.hidIdleSeconds > sleep.awakeStart + Self.sleepAbortInputMargin {
+            let after = awakeNow - facts.hidIdleSeconds - sleep.awakeStart
             cause = "activité \(String(format: "%.1f", after)) s après l'annonce"
         } else if sleepSawLocked, !facts.sessionLocked {
             cause = "session déverrouillée"

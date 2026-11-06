@@ -3136,6 +3136,32 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertTrue(finDeVeilleJournalisee("activité 2.5 s après l'annonce"), "\(journal.lines)")
     }
 
+    /// R87 (R68 M3) : `HIDIdleTime` ne compte pas la veille. Clic « Suspendre » (inactivité de 1 s à l'annonce), puis
+    /// une vraie veille de 8 s sans frappe : à la première scrutation, avant l'avis IOKit, `now − hidIdle` est
+    /// reculé par la veille, mais aucune activité ne suit l'annonce. La veille n'est pas close comme avortée.
+    func test_veilleReelleSansFrappe_neMetPasFinALaVeilleAvortee() {
+        signaux.inactiviteHID = 1
+        let (core, _) = moteurEnVeille()
+        horloge.dormir(8)
+        signaux.inactiviteHID = 2        // 1 s éveillé depuis le clic : la veille n'est pas comptée
+        horloge.advance(1)
+        core.tick()
+        XCTAssertEqual(veilleSignalee(core), true, "\(journal.lines)")
+        XCTAssertFalse(journalContient("fin de la veille"), "\(journal.lines)")
+    }
+
+    /// Témoin de R87 : même départ sans veille réelle (les deux horloges avancent ensemble), avec une vraie frappe
+    /// 3 s après l'annonce : la veille est close comme avortée, avec le libellé d'avant.
+    func test_frappeSansVeilleReelle_metFinALaVeilleAvortee_memeLibelle() {
+        signaux.inactiviteHID = 1
+        let (core, _) = moteurEnVeille()
+        horloge.advance(3)
+        signaux.inactiviteHID = 0
+        core.tick()
+        XCTAssertEqual(veilleSignalee(core), false, "\(journal.lines)")
+        XCTAssertTrue(finDeVeilleJournalisee("activité 3.0 s après l'annonce"), "\(journal.lines)")
+    }
+
     /// Une inactivité illisible (−1) ne prouve aucune frappe : elle ne met jamais fin à la veille (sans cette
     /// garde, `now + 1` passerait pour une activité postérieure à l'annonce).
     func test_inactiviteIllisible_neMetPasFinALaVeille() {
