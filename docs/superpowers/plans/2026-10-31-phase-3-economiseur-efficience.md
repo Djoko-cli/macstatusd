@@ -590,8 +590,9 @@ Contrôles :
 - [x] **Étape 2 :** banc mené (06/11 et 07/11 : M, A, A bis, B, C ; C réussi au 3e essai, le récepteur des deux premiers étant mort avec la session). Remise en état : Djoko remet ses réglages ; le contrôleur arrête la sonde,
   l'instance et le récepteur par leur PID, puis vérifie `/health` de l'instance réelle et que les ports
   19400 et 19401 sont libres.
-- [ ] **Étape 3 :** résultats dans `.superpowers/banc/banc-2-<date>/resultats.md`, et décisions au
-  registre. Chaque correction : un test, puis un commit.
+- [x] **Étape 3 :** résultats dans `.superpowers/banc/banc-2-<date>/resultats.md`, et décisions au
+  registre. Chaque correction : un test, puis un commit. (07/11 : R78 à R88 ; corrections f33c2d4, 3126de6,
+  fc0af0f, d3a4130 ; scission des tests c61140d.)
 
 ---
 
@@ -599,7 +600,8 @@ Contrôles :
 
 - [x] Relecture de toute la branche par Opus, avant le report sur `main` : concurrence, faux ON et faux OFF,
   appels de login.framework.
-- [ ] Vérification finale :
+- [x] Vérification finale (07/11, tête c61140d : 524/524 ; selftest écran allumé 92 OK, écran éteint 88 OK, 0 échec ;
+  `--once` 12 faits sur 13 identiques, écart `hid_idle` de 0,3 s) :
   - `swift test --scratch-path /private/tmp/macstatusd-plan3/build` → tout OK ;
   - selftest des contraintes globales, écran allumé puis écran éteint → aucun échec ;
   - `--once` sur le vrai Mac → des faits cohérents avec ceux de l'instance réelle.
