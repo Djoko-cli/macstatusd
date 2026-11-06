@@ -22,17 +22,28 @@ final class CaptureLog: LogSink {
 final class TestClock: Clock {
     var t: Double
     var date: Date
+    /// Instant « éveillé » : n'avance pas pendant une veille simulée.
+    var awakeT: Double
 
     init(t: Double = 0, date: Date = Date(timeIntervalSince1970: 1_000_000)) {
         self.t = t
+        self.awakeT = t
         self.date = date
     }
 
     func monotonic() -> Double { t }
+    func awake() -> Double { awakeT }
     func wall() -> Date { date }
 
     /// Avance les deux horloges de la même durée.
     func advance(_ s: Double) {
+        t += s
+        awakeT += s
+        date = date.addingTimeInterval(s)
+    }
+
+    /// Veille simulée : `monotonic` et l'heure murale avancent, pas `awake`.
+    func dormir(_ s: Double) {
         t += s
         date = date.addingTimeInterval(s)
     }

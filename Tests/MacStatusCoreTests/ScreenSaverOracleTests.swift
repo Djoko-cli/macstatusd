@@ -678,4 +678,37 @@ final class ScreenSaverOracleTests: XCTestCase {
         XCTAssertEqual(signaux.lecturesHotes, 0, "aucune attente : les hôtes ne sont pas lus")
         XCTAssertEqual(lignes(contenant: "didstart non corroboré"), 0, "oubliée, l'attente n'expire pas")
     }
+
+    // MARK: - Horloge hors veille (R82)
+
+    /// Les instants de l'oracle suivent `Clock.awake()`, comme `HIDIdleTime` : une veille n'y compte pas.
+    func test_veilleSansFrappe_horlogeHorsVeille_neDateRienDeRecent() {
+        let horloge = TestClock(t: t0)
+        let oracle = nouvelOracle()
+        signaux.drapeauSAC = true
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 30)
+        horloge.advance(10)
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 40)
+        horloge.dormir(49)
+        horloge.advance(0.5)
+        let verdict = oracle.verdict(now: horloge.awake(), hidIdle: 40.5)
+        XCTAssertTrue(verdict.active)
+        XCTAssertFalse(verdict.dismissed)
+        XCTAssertEqual(verdict.evidence, "sac")
+    }
+
+    /// Témoin : même scénario, avec une vraie frappe après le réveil.
+    func test_veilleAvecFrappe_horlogeHorsVeille_ecarte() {
+        let horloge = TestClock(t: t0)
+        let oracle = nouvelOracle()
+        signaux.drapeauSAC = true
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 30)
+        horloge.advance(10)
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 40)
+        horloge.dormir(49)
+        horloge.advance(0.5)
+        let verdict = oracle.verdict(now: horloge.awake(), hidIdle: 0.2)
+        XCTAssertTrue(verdict.dismissed)
+        XCTAssertEqual(verdict.evidence, "sac+écarté-par-activité")
+    }
 }

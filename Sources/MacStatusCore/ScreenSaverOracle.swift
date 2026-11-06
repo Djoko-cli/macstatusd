@@ -37,7 +37,7 @@ import Foundation
 /// La preuve (`Verdict.evidence`) nomme la source, suivie de `écarté-par-activité`,
 /// `écarté-par-commande` ou `réaffiché` ; `none` hors session.
 ///
-/// Les instants sont des secondes monotones (`Clock.monotonic()`), pas des dates.
+/// Les instants sont des secondes de fonctionnement hors veille (`Clock.awake()`), comme `HIDIdleTime`, pas des dates.
 /// À n'utiliser que depuis la file série du moteur d'état.
 public final class ScreenSaverOracle {
     public struct Verdict {
@@ -139,7 +139,7 @@ public final class ScreenSaverOracle {
 
     // MARK: - Verdict
 
-    /// `now` est un instant monotone en secondes ; `hidIdle`, les secondes depuis la dernière activité
+    /// `now` est un instant `Clock.awake()` en secondes ; `hidIdle`, les secondes depuis la dernière activité
     /// matérielle, -1 si elles sont illisibles.
     public func verdict(now: Double, hidIdle: Double) -> Verdict {
         if hidIdle >= 0 { lastKnownInput = now - hidIdle }

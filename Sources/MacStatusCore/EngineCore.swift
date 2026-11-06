@@ -416,7 +416,7 @@ public final class EngineCore {
             next.screenSaverActive = false
             next.screenSaverEvidence = "non-évalué"
         } else {
-            let verdict = saver.verdict(now: clock.monotonic(), hidIdle: next.hidIdleSeconds)
+            let verdict = saver.verdict(now: clock.awake(), hidIdle: next.hidIdleSeconds)
             next.screenSaverActive = verdict.active
             next.screenSaverRunning = verdict.running
             next.screenSaverDismissed = verdict.dismissed
@@ -572,7 +572,7 @@ public final class EngineCore {
         }
         if facts.screenSaverActive && config.stopScreensaverOnWake {
             logWarn("commande \(intent.source) sans effet observé → escalade: écartement de l'économiseur")
-            dismissSaver(now: clock.monotonic())
+            dismissSaver()
             return
         }
         logWarn("commande \(intent.source) sans effet observé → escalade: nouvelle tentative de réveil")
@@ -618,12 +618,12 @@ public final class EngineCore {
     /// suivante confirme alors l'ON (preuve `écarté-par-commande`). Le repli `killall` n'écarte rien sous
     /// macOS 27 : rien n'est supposé, la confirmation attend les faits.
     /// Appelé seulement avec `stop_screensaver_on_wake` vrai.
-    private func dismissSaver(now: Double) {
+    private func dismissSaver() {
         let means = actions.screenSaverDismissal
         actions.dismissScreenSaver()
         switch means {
         case .native:
-            saver.noteDismissed(now: now)
+            saver.noteDismissed(now: clock.awake())
             logInfo("économiseur : écartement demandé (\(means.rawValue))")
         case .processKill:
             logInfo("économiseur : écartement demandé (\(means.rawValue)) : aucun effet supposé, les faits décideront")
@@ -766,14 +766,14 @@ public final class EngineCore {
             evaluate(immediate: false)
         case .screenSaverDidStart:
             let now = clock.monotonic()
-            saver.noteDidStart(now: now)
+            saver.noteDidStart(now: clock.awake())
             // R55 : l'indice précède toute relecture, et le filtre de 250 ms, pour que la relecture cherche
             // le process tout neuf ; un scan que le filtre retarde est fait à la scrutation suivante.
             signals.saverProcessHint()
             refreshAfterNotification(now: now)
         case .screenSaverDidStop:
             let now = clock.monotonic()
-            saver.noteDidStop(now: now)
+            saver.noteDidStop(now: clock.awake())
             signals.saverProcessHint()
             refreshAfterNotification(now: now)
         case .saverProcessChanged:
@@ -1026,7 +1026,7 @@ public final class EngineCore {
                 // macOS a pu revenir à l'économiseur, que le panneau supposé visible ne montre plus : l'arrêt
                 // natif le fait reparaître pour `saver_redisplay_idle_seconds` de plus.
                 if config.stopScreensaverOnWake {
-                    dismissSaver(now: clock.monotonic())
+                    dismissSaver()
                 }
             } else {
                 logInfo("commande ON (\(peer)) → déjà ON (\(factual.reason)) : réveil léger, sans intention")
@@ -1053,7 +1053,7 @@ public final class EngineCore {
         // Un économiseur seul à l'écran ne s'arrête pas sur simple activité déclarée : on l'écarte dans le
         // même geste, comme le ferait une frappe clavier. Les faits ne le verront qu'à la relecture suivante.
         if facts.screenSaverActive && config.stopScreensaverOnWake {
-            dismissSaver(now: clock.monotonic())
+            dismissSaver()
         }
         evaluate(immediate: true)
     }

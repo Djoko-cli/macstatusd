@@ -2236,6 +2236,49 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertFalse(publieur.publications.dropFirst().contains { $0.etat }, "aucun ON après l'état initial")
     }
 
+    /// R82 (banc 2, B6) : `HIDIdleTime` ne compte pas la veille. Après une veille de 49 s sans frappe, l'oracle
+    /// ne doit pas dater la dernière frappe comme récente : l'économiseur reste seul à l'écran, OFF.
+    func test_veilleSansFrappe_neFaitPasCroireAUneActiviteRecente() {
+        let core = moteur()
+        core.start()
+        signaux.drapeauSAC = true
+        core.handle(.screenSaverDidStart)
+        scruterSansActivite(core, 0.5)
+        scruterSansActivite(core, 0.5)
+        XCTAssertFalse(core.currentState)
+
+        core.willSleep {}
+        horloge.dormir(49)
+        core.handle(.systemDidWake)
+        for _ in 0..<10 {
+            scruterSansActivite(core, 0.5)
+        }
+        XCTAssertFalse(core.currentState)
+        let lecture = core.inspect()
+        XCTAssertEqual(lecture.facts.screenSaverEvidence, "sac")
+        XCTAssertFalse(lecture.facts.screenSaverDismissed, "la frappe d'avant la veille reste ancienne")
+        XCTAssertFalse(publieur.publications.dropFirst().contains { $0.etat }, "aucun ON après l'état initial")
+    }
+
+    /// Témoin de R82 : une vraie frappe après le réveil écarte toujours l'économiseur.
+    func test_veilleAvecFrappeApresLeReveil_ecarteLEconomiseur() {
+        let core = moteur()
+        core.start()
+        signaux.drapeauSAC = true
+        core.handle(.screenSaverDidStart)
+        scruterSansActivite(core, 0.5)
+        scruterSansActivite(core, 0.5)
+
+        core.willSleep {}
+        horloge.dormir(49)
+        core.handle(.systemDidWake)
+        scruterSansActivite(core, 0.5)
+        signaux.inactiviteHID = 0.1
+        scruter(core, 0.5)
+        XCTAssertTrue(core.inspect().facts.screenSaverDismissed)
+        XCTAssertEqual(core.inspect().facts.screenSaverEvidence, "sac+écarté-par-activité")
+    }
+
     /// Au réveil (avis IOKit, fin de veille sans avis, rattrapages du trou couvert et du réveil perdu), au trou de
     /// scrutation et à la resynchronisation, le moteur fait oublier à l'oracle le `didstart` en attente (repli sans
     /// SAC) : un hôte apparu ensuite n'ouvre pas de session, et l'attente oubliée n'expire pas.
