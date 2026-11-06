@@ -2283,6 +2283,64 @@ final class EngineCoreTests: XCTestCase {
         XCTAssertEqual(core.inspect().facts.screenSaverEvidence, "sac+écarté-par-activité")
     }
 
+    // MARK: - Horloge hors veille : les trois notifications de l'oracle (banc 2, R87)
+
+    /// Économiseur lancé à la main (SAC à 1), session ouverte, puis une veille réelle de 600 s qui ne bouge que
+    /// `monotonic`, réveil traité. Sert aux trois tests qui suivent : l'événement testé arrive APRÈS la veille.
+    private func moteurApresUneVeilleSousEconomiseur() -> EngineCore {
+        signaux.inactiviteHID = 5
+        signaux.drapeauSAC = true
+        let core = moteur()
+        core.start()
+        scruterSansActivite(core, 0.5)
+        scruterSansActivite(core, 0.5)
+        core.willSleep {}
+        horloge.dormir(600)
+        core.handle(.systemDidWake)
+        scruterSansActivite(core, 0.5)
+        return core
+    }
+
+    /// R87 : l'arrêt natif est daté sur l'horloge hors veille. Daté en `monotonic` après 600 s de veille, il serait
+    /// « postérieur » à tout instant éveillé de la session : le panneau resterait écarté pour toujours au lieu de
+    /// laisser revenir l'économiseur après `saver_redisplay_idle_seconds` (30 s) sans activité.
+    func test_ecartementApresUneVeille_leLaisseRevenirApresLeDelaiDeReaffichage() {
+        let core = moteurApresUneVeilleSousEconomiseur()
+        core.requestOn(peer: "essai")
+        scruterSansActivite(core, 0.5)
+        XCTAssertEqual(preuveEconomiseur(core), "sac+écarté-par-commande")
+        XCTAssertTrue(core.inspect().facts.screenSaverDismissed)
+
+        for _ in 0..<62 { scruterSansActivite(core, 0.5) }   // 31 s éveillé, sans aucune activité
+        XCTAssertFalse(core.inspect().facts.screenSaverDismissed, "l'économiseur est revenu : \(journal.lines)")
+    }
+
+    /// R87 : le `didstart` est daté sur l'horloge hors veille. Daté en `monotonic` après la veille, son attente
+    /// de corroboration (5 s) ne s'écoulerait jamais : l'avertissement « non corroboré » n'arriverait pas.
+    func test_didstartApresUneVeille_expireSansCorroboration() {
+        signaux.drapeauSAC = nil
+        let core = moteur()
+        core.start()
+        scruterSansActivite(core, 0.5)
+        core.willSleep {}
+        horloge.dormir(600)
+        core.handle(.systemDidWake)
+        scruterSansActivite(core, 0.5)
+
+        core.handle(.screenSaverDidStart)
+        for _ in 0..<14 { scruterSansActivite(core, 0.5) }   // 7 s éveillé, aucun hôte ni process
+        XCTAssertTrue(journalContient("didstart non corroboré"), "\(journal.lines)")
+    }
+
+    /// R87 : le `didstop` est daté sur l'horloge hors veille. Daté en `monotonic` après la veille, l'attente de
+    /// SAC (2 s) ne s'écoulerait jamais : l'avertissement « didstop incohérent » n'arriverait pas.
+    func test_didstopApresUneVeille_sacResteA1_signaleLIncoherence() {
+        let core = moteurApresUneVeilleSousEconomiseur()
+        core.handle(.screenSaverDidStop)
+        for _ in 0..<8 { scruterSansActivite(core, 0.5) }   // 4 s éveillé, SAC reste à 1
+        XCTAssertTrue(journalContient("didstop reçu, mais SACScreenSaverIsRunning"), "\(journal.lines)")
+    }
+
     /// Au réveil (avis IOKit, fin de veille sans avis, rattrapages du trou couvert et du réveil perdu), au trou de
     /// scrutation et à la resynchronisation, le moteur fait oublier à l'oracle le `didstart` en attente (repli sans
     /// SAC) : un hôte apparu ensuite n'ouvre pas de session, et l'attente oubliée n'expire pas.
