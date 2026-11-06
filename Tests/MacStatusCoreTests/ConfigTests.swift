@@ -629,7 +629,8 @@ final class ConfigOriginTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let exemple = racine.appendingPathComponent("config.example.json")
         guard let data = try? Data(contentsOf: exemple) else {
-            throw XCTSkip("config.example.json introuvable à la racine du dépôt (\(exemple.path))")
+            XCTFail("config.example.json introuvable à la racine du dépôt (\(exemple.path)) : le test ne doit pas se taire")
+            return
         }
         let lue = Config.parse(data: data).config
         let defauts = Config()

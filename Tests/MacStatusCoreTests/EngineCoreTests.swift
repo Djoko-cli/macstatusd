@@ -2241,6 +2241,8 @@ final class EngineCoreTests: XCTestCase {
     func test_veilleSansFrappe_neFaitPasCroireAUneActiviteRecente() {
         let core = moteur()
         core.start()
+        // Économiseur lancé à la main, 5 s après la dernière frappe : cette frappe précède la session.
+        signaux.inactiviteHID = 5
         signaux.drapeauSAC = true
         core.handle(.screenSaverDidStart)
         scruterSansActivite(core, 0.5)
@@ -2264,6 +2266,8 @@ final class EngineCoreTests: XCTestCase {
     func test_veilleAvecFrappeApresLeReveil_ecarteLEconomiseur() {
         let core = moteur()
         core.start()
+        // Économiseur lancé à la main, 5 s après la dernière frappe : cette frappe précède la session.
+        signaux.inactiviteHID = 5
         signaux.drapeauSAC = true
         core.handle(.screenSaverDidStart)
         scruterSansActivite(core, 0.5)

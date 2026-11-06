@@ -131,10 +131,11 @@ public final class ScreenSaverOracle {
         nativeStopAt = now
     }
 
-    /// Réveil du système : l'attente d'un `didstart` est oubliée. Une session établie reste ; ses sources
-    /// sont relues au verdict suivant.
+    /// Réveil du système : l'attente d'un `didstart` et celle d'un `didstop` sont oubliées. Une session
+    /// établie reste ; ses sources sont relues au verdict suivant.
     public func noteSystemWake() {
         pendingDidStartAt = nil
+        didStopAt = nil
     }
 
     // MARK: - Verdict

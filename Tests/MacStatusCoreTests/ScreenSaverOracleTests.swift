@@ -679,6 +679,34 @@ final class ScreenSaverOracleTests: XCTestCase {
         XCTAssertEqual(lignes(contenant: "didstart non corroboré"), 0, "oubliée, l'attente n'expire pas")
     }
 
+    // MARK: - Résidus R76
+
+    /// R76 (a) : une source autre que SAC (ici le process) consomme le `didstop` en attente, sans effet ni
+    /// avertissement : la lecture sans source qui suit n'est alors que la première, la session reste ouverte.
+    func test_didstopEtSourceProcess_estConsommeSansEffet() {
+        let oracle = nouvelOracle()
+        demarrer(oracle)
+        oracle.noteDidStop(now: t0 + 2)
+        XCTAssertTrue(oracle.verdict(now: t0 + 3, hidIdle: 5).running, "le process vit : la session reste")
+        signaux.pidEconomiseur = 0
+        XCTAssertTrue(oracle.verdict(now: t0 + 4, hidIdle: 6).running,
+                      "didstop déjà consommé : une seule lecture sans source ne ferme rien")
+        XCTAssertFalse(oracle.verdict(now: t0 + 5, hidIdle: 7).running, "deux lectures de suite la ferment")
+        XCTAssertEqual(lignes(.warn, contenant: "didstop"), 0)
+    }
+
+    /// R76 (d) : le réveil du système fait aussi oublier le `didstop` en attente.
+    func test_reveilSysteme_oublieLeDidstopEnAttente() {
+        let oracle = nouvelOracle()
+        panneauSAC(oracle)
+        oracle.noteDidStop(now: t0 + 20)
+        oracle.noteSystemWake()
+        signaux.drapeauSAC = false
+        XCTAssertTrue(oracle.verdict(now: t0 + 21, hidIdle: 0.5).running,
+                      "didstop oublié : la première lecture sans source ne ferme rien")
+        XCTAssertFalse(oracle.verdict(now: t0 + 22, hidIdle: 1.5).running)
+    }
+
     // MARK: - Horloge hors veille (R82)
 
     /// Les instants de l'oracle suivent `Clock.awake()`, comme `HIDIdleTime` : une veille n'y compte pas.
@@ -686,12 +714,12 @@ final class ScreenSaverOracleTests: XCTestCase {
         let horloge = TestClock(t: t0)
         let oracle = nouvelOracle()
         signaux.drapeauSAC = true
-        _ = oracle.verdict(now: horloge.awake(), hidIdle: 30)
-        horloge.advance(10)
-        _ = oracle.verdict(now: horloge.awake(), hidIdle: 40)
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 5)
+        horloge.advance(1)
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 6)
         horloge.dormir(49)
-        horloge.advance(0.5)
-        let verdict = oracle.verdict(now: horloge.awake(), hidIdle: 40.5)
+        horloge.advance(5)
+        let verdict = oracle.verdict(now: horloge.awake(), hidIdle: 11)
         XCTAssertTrue(verdict.active)
         XCTAssertFalse(verdict.dismissed)
         XCTAssertEqual(verdict.evidence, "sac")
@@ -702,11 +730,11 @@ final class ScreenSaverOracleTests: XCTestCase {
         let horloge = TestClock(t: t0)
         let oracle = nouvelOracle()
         signaux.drapeauSAC = true
-        _ = oracle.verdict(now: horloge.awake(), hidIdle: 30)
-        horloge.advance(10)
-        _ = oracle.verdict(now: horloge.awake(), hidIdle: 40)
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 5)
+        horloge.advance(1)
+        _ = oracle.verdict(now: horloge.awake(), hidIdle: 6)
         horloge.dormir(49)
-        horloge.advance(0.5)
+        horloge.advance(5)
         let verdict = oracle.verdict(now: horloge.awake(), hidIdle: 0.2)
         XCTAssertTrue(verdict.dismissed)
         XCTAssertEqual(verdict.evidence, "sac+écarté-par-activité")

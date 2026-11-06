@@ -178,6 +178,8 @@ if options.once {
     if let configError { output["config_error"] = configError }
     let data = (try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     print(String(data: data, encoding: .utf8) ?? "{}")
+    // `exit` ne laisse pas la file du journal finir : on la vide d'abord, sinon les dernières lignes se perdent.
+    Log.shared.flush()
     exit(0)
 }
 
