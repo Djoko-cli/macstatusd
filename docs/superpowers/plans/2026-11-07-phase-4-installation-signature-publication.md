@@ -332,7 +332,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
   - Figer le test `test_veilleApresDidstart_attenteOubliee_hoteAncienNeCorroborePas`, s'il n'existe pas déjà
     sous un autre nom. La recherche se fait par `grep -n 'noteSystemWake' Tests/`.
   - Le test se prouve par mutation : retirer l'oubli dans `noteSystemWake()`.
-- [ ] **Étape 3 : R86.**
+- [x] **Étape 3 : R86.**
   - `réaffiché` absent de la ligne INFO de la transition : test sur une transition causée par le retour de
     l'économiseur, la ligne doit contenir « réaffiché ».
   - Mineurs m4, m5 et m8 de `task-3-review.md`, section « Mineur (8) ».
@@ -340,7 +340,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
     retrouver par `grep`.
 
   Chacun est corrigé, ou écarté avec sa raison au rapport.
-- [ ] **Étape 4 :** suite complète. Un commit par point (M6, R88, R86).
+- [x] **Étape 4 :** suite complète. Un commit par point (M6, R88, R86).
 
 ---
 

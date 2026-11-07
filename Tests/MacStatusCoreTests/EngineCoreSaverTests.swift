@@ -267,25 +267,7 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
     func test_reveilEtResynchronisation_oublientLeDidstartEnAttente() {
         let declencheurs: [(String, (EngineCore) -> Void)] = [
             ("avis de réveil", { $0.handle(.systemDidWake) }),
-            // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
-            ("fin de veille sans avis", { core in
-                core.willSleep {}
-                self.horloge.advance(3)
-                self.signaux.inactiviteHID = 0.3
-                core.tick()
-            }),
-            // Les deux rattrapages de `tick()` : plus de 5 s ont passé depuis le `didstart`, l'attente non oubliée
-            // expirerait avec un avertissement.
-            ("trou de scrutation couvert par la veille", { core in
-                core.willSleep {}
-                self.horloge.advance(15)
-                core.tick()
-            }),
-            ("réveil perdu", { core in
-                core.willSleep {}
-                for _ in 0..<241 { self.scruterSansActivite(core, 0.5) }   // 120,5 s sans avis de réveil ni activité
-            }),
-        ]
+        ] + declencheursDeReveil
         for (nom, declencher) in declencheurs {
             journal.lines = []
             signaux = Self.signauxDeBureau()
@@ -481,7 +463,9 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
     /// à l'économiseur, le panneau reparaît pour 30 s de plus. Le réveil léger (R49) reste pour les cas sans
     /// session d'économiseur.
     func test_onSurMacDejaON_economiseurEnMarche_ecarteAussi() {
-        let core = moteur()
+        var config = Config()
+        config.saverRedisplayIdleSeconds = 30   // le défaut peut changer sans déplacer ce test en silence
+        let core = moteur(config)
         mettreLePanneauSurUnEconomiseurSAC(core)
 
         core.requestOn(peer: "essai")
@@ -501,6 +485,53 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
         XCTAssertFalse(core.currentState)
         XCTAssertEqual(preuveEconomiseur(core), "sac")
         XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
+    }
+
+    /// R65 m5 : un ON qui remplace un OFF en cours n'écarte l'économiseur que s'il est seul à l'écran
+    /// (`screenSaverActive`), pas quand le panneau le recouvre déjà (`screenSaverRunning` seul) : un appel natif de
+    /// trop ferait reparaître l'économiseur.
+    func test_onRemplacantUnOff_panneauDejaSurLEconomiseur_n_ecartePas() {
+        let core = moteur()
+        mettreLePanneauSurUnEconomiseurSAC(core)
+        core.requestOff(peer: "essai")
+        XCTAssertNotNil(commandeEnAttente(core), "un OFF est en cours")
+        XCTAssertFalse(core.inspect().facts.screenSaverActive)
+        XCTAssertTrue(core.inspect().facts.screenSaverRunning)
+
+        core.requestOn(peer: "essai")
+        XCTAssertFalse(actions.appels.contains(.dismissScreenSaver), "\(actions.appels)")
+    }
+
+    /// R86 : la transition causée par le retour de l'économiseur le dit dans sa ligne INFO. Le lissage de l'OFF
+    /// (800 ms) laisse passer le verdict « réaffiché » : les faits de la ligne ne disent déjà plus que `sac`.
+    func test_transitionCauseeParLeRetourDeLEconomiseur_ligneInfoDitReaffiche() {
+        var config = Config()
+        config.saverRedisplayIdleSeconds = 30   // le défaut peut changer sans déplacer ce test en silence
+        let core = moteur(config)
+        mettreLePanneauSurUnEconomiseurSAC(core)
+        for _ in 0..<70 { scruterSansActivite(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+        let lignes = journal.lines.filter { $0.0 == .info && $0.1.hasPrefix("état ON → OFF") }
+        XCTAssertEqual(lignes.count, 1, "\(journal.lines)")
+        XCTAssertTrue(lignes.first?.1.contains("réaffiché") ?? false, "\(lignes)")
+    }
+
+    /// Une transition qui n'a rien à voir avec l'économiseur ne parle pas de réaffichage, même après un retour
+    /// d'économiseur antérieur et écarté depuis.
+    func test_transitionSansRetourDeLEconomiseur_ligneInfoNeDitPasReaffiche() {
+        var config = Config()
+        config.saverRedisplayIdleSeconds = 30   // le défaut peut changer sans déplacer ce test en silence
+        let core = moteur(config)
+        mettreLePanneauSurUnEconomiseurSAC(core)
+        for _ in 0..<70 { scruterSansActivite(core, 0.5) }   // retour de l'économiseur : OFF
+        signaux.inactiviteHID = 0                              // une frappe l'écarte : ON
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }
+        XCTAssertTrue(core.currentState)
+        signaux.drapeauSAC = false                             // l'économiseur s'arrête, puis le Mac s'éteint
+        core.willSleep {}
+        let lignes = journal.lines.filter { $0.0 == .info && $0.1.hasPrefix("état ON → OFF") }
+        XCTAssertEqual(lignes.count, 2, "\(journal.lines)")
+        XCTAssertFalse(lignes.last?.1.contains("réaffiché") ?? true, "\(lignes)")
     }
 
     /// L'escalade d'un ON (2,5 s) dont l'économiseur est encore seul à l'écran l'écarte de nouveau, au lieu de
@@ -592,6 +623,36 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
             + "sans effet sous macOS 27 sur l'économiseur d'inactivité"
         XCTAssertEqual(journal.lines.filter { $0.0 == .warn && $0.1 == avertissement }.count, 1)
         XCTAssertFalse(journal.lines.contains { $0.0 == .info && $0.1.contains("SACScreenSaverStopNow") })
+    }
+
+    /// R65 m4 : avec `stop_screensaver_on_wake` à faux, le journal de démarrage ne laisse pas croire qu'un ON
+    /// écartera l'économiseur, et le repli n'émet aucun avertissement.
+    func test_demarrage_stopDesactive_dit_desactive_sansAvertissement() {
+        var config = Config()
+        config.stopScreensaverOnWake = false
+        for moyen in [ScreenSaverDismissal.native, .processKill] {
+            journal.lines = []
+            actions.moyenEcartement = moyen
+            moteur(config).start()
+            let lignes = journal.lines.filter { $0.1.contains("écartement") }
+            XCTAssertEqual(lignes.count, 1, "\(moyen) : \(journal.lines)")
+            XCTAssertEqual(lignes.first?.0, .info, "\(moyen)")
+            XCTAssertTrue(lignes.first?.1.contains("désactivé par stop_screensaver_on_wake") ?? false, "\(moyen)")
+            XCTAssertFalse(journal.lines.contains { $0.0 == .warn && $0.1.contains("SACScreenSaverStopNow") })
+        }
+    }
+
+    /// R65 m8 : la ligne « écartement demandé » part avant l'appel du système (un journal écrit après dirait
+    /// faux si le process tombait dedans).
+    func test_ecartement_journaliseAvantLAppel() {
+        var journalAvantAppel: Bool?
+        actions.surDismiss = { [self] in journalAvantAppel = journalContient("écartement demandé") }
+        signaux.drapeauSAC = true
+        let core = moteur()
+        core.start()
+        core.requestOn(peer: "essai")
+        XCTAssertEqual(actions.appels, [.wake, .dismissScreenSaver])
+        XCTAssertEqual(journalAvantAppel, true, "la ligne doit déjà être écrite à l'instant de l'appel")
     }
 
     /// `/status` dit par quel moyen l'économiseur est écarté : la commande du système, ou le repli.
@@ -790,24 +851,7 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
         let effaceurs: [(String, (EngineCore) -> Void)] = [
             ("réveil des écrans", { $0.handle(.screensDidWake) }),
             ("réveil du système", { $0.handle(.systemDidWake) }),
-            // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
-            ("fin de veille sans avis", { core in
-                core.willSleep {}
-                self.horloge.advance(3)
-                self.signaux.inactiviteHID = 0.3
-                core.tick()
-            }),
-            // Les deux rattrapages de `tick()` font la même tenue de compte que l'avis IOKit.
-            ("trou de scrutation couvert par la veille", { core in
-                core.willSleep {}
-                self.horloge.advance(15)
-                core.tick()
-            }),
-            ("réveil perdu", { core in
-                core.willSleep {}
-                for _ in 0..<241 { self.scruterSansActivite(core, 0.5) }   // 120,5 s sans avis de réveil ni activité
-            }),
-        ]
+        ] + declencheursDeReveil
         for (nom, effacer) in effaceurs {
             signaux = Self.signauxDeBureau()
             signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))

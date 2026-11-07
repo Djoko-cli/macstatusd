@@ -93,6 +93,9 @@ public final class EngineCore {
     /// réveil du système, à la resynchronisation, et dès qu'une énumération réussie ne montre plus aucun écran
     /// physique endormi (une énumération ratée ne prouve rien : elle le laisse).
     private var screensAsleepNotified = false
+    /// Le dernier verdict de l'économiseur a vu son retour (`réaffiché`) sans qu'une activité l'ait écarté depuis.
+    /// Le lissage de l'OFF laisse passer ce verdict : sans cette mémoire, la ligne INFO de la transition ne le dit pas.
+    private var saverRedisplayed = false
     /// Ce qui distingue deux topologies pour le journal : l'ensemble des écrans, le principal, la présence du
     /// fantôme. L'état de veille n'en fait pas partie.
     private struct DisplayLayout: Equatable {
@@ -202,12 +205,18 @@ public final class EngineCore {
     // MARK: - Cycle de vie
 
     /// Premier relevé des faits et publication forcée de l'état initial. Le moyen d'écarter l'économiseur est
-    /// journalisé une fois (INFO s'il est natif, WARN pour le repli), et, sans `SACScreenSaverIsRunning`, un
+    /// journalisé une fois (INFO s'il est natif, WARN pour le repli ; INFO « désactivé » dans les deux cas quand
+    /// `stop_screensaver_on_wake` est faux, le repli n'ayant alors rien à signaler), et, sans `SACScreenSaverIsRunning`, un
     /// avertissement unique annonce le repli de l'oracle de l'économiseur.
     public func start() {
         switch actions.screenSaverDismissal {
+        case .native where !config.stopScreensaverOnWake:
+            logInfo("économiseur : moyen d'écartement SACScreenSaverStopNow (commande du système), "
+                    + "désactivé par stop_screensaver_on_wake")
         case .native:
             logInfo("économiseur : moyen d'écartement SACScreenSaverStopNow (commande du système)")
+        case .processKill where !config.stopScreensaverOnWake:
+            logInfo("économiseur : écartement désactivé par stop_screensaver_on_wake")
         case .processKill:
             logWarn("SACScreenSaverStopNow indisponible → repli killall ScreenSaverEngine, "
                     + "sans effet sous macOS 27 sur l'économiseur d'inactivité")
@@ -436,6 +445,11 @@ public final class EngineCore {
             next.screenSaverRunning = verdict.running
             next.screenSaverDismissed = verdict.dismissed
             next.screenSaverEvidence = verdict.evidence
+            if verdict.evidence.hasSuffix("+réaffiché") {
+                saverRedisplayed = true
+            } else if verdict.dismissed || !verdict.running {
+                saverRedisplayed = false
+            }
         }
 
         next.secureInputActive = slowCalls.measure("saisie_securisee") { signals.secureInputActive() }
@@ -544,8 +558,10 @@ public final class EngineCore {
             publishedReason = resolved.reason
             transitions += 1
             lastTransitionAt = clock.wall()
+            let retour = !resolved.state && saverRedisplayed ? " — économiseur réaffiché" : ""
+            saverRedisplayed = false
             logInfo("état \(previous.map { $0 ? "ON" : "OFF" } ?? "—") → "
-                    + "\(resolved.state ? "ON" : "OFF") (\(resolved.reason)) — faits: \(factsSummary())")
+                    + "\(resolved.state ? "ON" : "OFF") (\(resolved.reason))\(retour) — faits: \(factsSummary())")
             emit(resolved.state, force: false)
             return true
         }
@@ -635,13 +651,17 @@ public final class EngineCore {
     /// Appelé seulement avec `stop_screensaver_on_wake` vrai.
     private func dismissSaver() {
         let means = actions.screenSaverDismissal
-        actions.dismissScreenSaver()
+        // Journalisé avant l'appel : si le process tombait dedans, le journal dirait où l'on s'est arrêté.
         switch means {
         case .native:
-            saver.noteDismissed(now: clock.awake())
             logInfo("économiseur : écartement demandé (\(means.rawValue))")
         case .processKill:
-            logInfo("économiseur : écartement demandé (\(means.rawValue)) : aucun effet supposé, les faits décideront")
+            logInfo("économiseur : écartement demandé (\(means.rawValue)) : "
+                    + "aucun effet supposé, les faits décideront")
+        }
+        actions.dismissScreenSaver()
+        if means == .native {
+            saver.noteDismissed(now: clock.awake())
         }
     }
 

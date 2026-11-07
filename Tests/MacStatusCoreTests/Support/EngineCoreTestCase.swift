@@ -84,6 +84,32 @@ class EngineCoreTestCase: XCTestCase {
 
     typealias Publication = FakePublisher.Publication
 
+    /// Les trois chemins de réveil que le moteur rattrape sans avis IOKit (M4, R68) : un cinquième chemin
+    /// s'ajoute ici, une fois, et entre dans chaque test qui énumère les réveils. Chaque déclencheur part d'un
+    /// moteur démarré.
+    var declencheursDeReveil: [(String, (EngineCore) -> Void)] {
+        [
+            // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
+            ("fin de veille sans avis", { core in
+                core.willSleep {}
+                self.horloge.advance(3)
+                self.signaux.inactiviteHID = 0.3
+                core.tick()
+            }),
+            // Les deux rattrapages de `tick()` : plus de 5 s ont passé depuis le `didstart`, l'attente non oubliée
+            // expirerait avec un avertissement ; ils tiennent la même comptabilité que l'avis IOKit.
+            ("trou de scrutation couvert par la veille", { core in
+                core.willSleep {}
+                self.horloge.advance(15)
+                core.tick()
+            }),
+            ("réveil perdu", { core in
+                core.willSleep {}
+                for _ in 0..<241 { self.scruterSansActivite(core, 0.5) }   // 120,5 s sans avis de réveil ni activité
+            }),
+        ]
+    }
+
     var publicationsForcees: Int { publieur.publications.filter { $0.force }.count }
 
     /// Écran éteint de bout en bout : l'état reste OFF à travers la veille, aucune transition

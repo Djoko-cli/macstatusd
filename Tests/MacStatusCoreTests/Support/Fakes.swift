@@ -242,7 +242,12 @@ final class FakeActions: CommandActions {
     func runOff(_ action: OffAction) { appels.append(.runOff(action)) }
     func displaySleep() { appels.append(.displaySleep) }
     func wake() { appels.append(.wake) }
-    func dismissScreenSaver() { appels.append(.dismissScreenSaver) }
+    /// Appelé à l'instant de l'écartement, pour observer l'état du moteur (journal) au moment de l'appel.
+    var surDismiss: (() -> Void)?
+    func dismissScreenSaver() {
+        appels.append(.dismissScreenSaver)
+        surDismiss?()
+    }
 
     /// Appels de la tâche 17, tenus à part de `appels` pour ne pas toucher aux assertions
     /// existantes : relâchement du réveil, pose (`seconds > 0`) ou levée (`seconds <= 0`) de la retenue.
