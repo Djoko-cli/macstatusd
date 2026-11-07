@@ -9,6 +9,7 @@
 #                        préfixe : son nom complet porte le nom légal du titulaire, il n'est écrit nulle part ici) ;
 #   NOTARISER            1 par défaut ;
 #   PROFIL_NOTARISATION  djoko-notarisation par défaut (le profil de notarytool store-credentials).
+# Hors --repetition, refus aussi si CODESIGN, SECURITY, OPENSSL, DITTO, XCRUN, SPCTL ou GARDE_LISTE est posée.
 # Le cliquet : hors --repetition, refus si IDENTITE_SIGNATURE n'est pas « Developer ID Application » ou si
 # NOTARISER n'est pas 1. Refus aussi sur un clone superficiel (le numéro de version traçable compte les commits).
 # --repetition : identité com.djoko.macstatusd.repetition, produits dans build/repetition/X.Y.Z/ ; elle seule peut
@@ -47,6 +48,17 @@ if [[ $repetition -eq 0 ]] && { [[ "$IDENTITE_SIGNATURE" != "Developer ID Applic
   exit 1
 fi
 
+# Les outils s'appellent par chemin absolu, et seule la répétition peut les remplacer ou donner une autre liste de
+# garde : une variable de remplacement oubliée dans un shell ne fabrique pas une « publication » avec de faux outils.
+if [[ $repetition -eq 0 ]]; then
+  for v in CODESIGN SECURITY OPENSSL DITTO XCRUN SPCTL GARDE_LISTE; do
+    if [[ -n "${!v+x}" ]]; then
+      echo "publier.sh : hors --repetition, aucun outil ni liste de la garde ne se remplace ($v est posée)" >&2
+      exit 1
+    fi
+  done
+fi
+
 # Le numéro de build compte les commits : un clone superficiel en donnerait un faux.
 if [[ "$(git rev-parse --is-shallow-repository 2> /dev/null)" != "false" ]]; then
   echo "publier.sh : clone superficiel (ou hors git) ; publier depuis un clone complet" >&2
@@ -54,10 +66,21 @@ if [[ "$(git rev-parse --is-shallow-repository 2> /dev/null)" != "false" ]]; the
 fi
 
 # Les tests de l'outil, dans un environnement neutre, avant toute suite.
-env -i PATH=/usr/bin:/bin HOME="$HOME" python3 -m unittest discover -s outils/tests -p 'test_publication.py'
+# Le journal est gardé dans une variable (jamais derrière un tube : le code de sortie est celui des tests).
+journal=$(env -i PATH=/usr/bin:/bin HOME="$HOME" python3 -m unittest discover -s outils/tests -p 'test_publication.py' 2>&1)
 code=$?
+printf '%s\n' "$journal"
 if [[ $code -ne 0 ]]; then
   echo "publier.sh : tests en échec (code $code) ; rien n'est signé" >&2
+  exit 1
+fi
+# Une porte vide ne passe pas : unittest rend 0 quand il ne trouve aucun test (un fichier renommé, par exemple).
+nombre=0
+if [[ "$journal" =~ Ran\ ([0-9]+)\ test ]]; then
+  nombre=${BASH_REMATCH[1]}
+fi
+if [[ $nombre -le 0 ]]; then
+  echo "publier.sh : aucun test lancé (« Ran N tests » absent ou N = 0) ; rien n'est signé" >&2
   exit 1
 fi
 

@@ -5,9 +5,12 @@
 #
 # Le script copie outils/publier.sh dans un petit dépôt d'essai, sous /private/tmp/macstatusd-plan4/, où les tests
 # et publication.py sont remplacés par des bouchons qui notent seulement qu'ils ont été lancés. Aucun vrai outil de
-# signature n'est appelé, rien n'est signé, rien n'est envoyé. Cas : refus pour IDENTITE_SIGNATURE=-, pour
-# NOTARISER=0 sans --repetition, pour un clone superficiel, pour des tests en échec ; acceptation de --repetition
-# jusqu'aux tests ; exportations par défaut. Code de sortie : 0 si tous les cas passent, 1 sinon.
+# signature n'est appelé, rien n'est signé, rien n'est envoyé : le banc tourne avec un HOME d'essai, et de faux
+# codesign, security, xcrun, spctl, ditto et openssl en tête du PATH, qui notent « vrai outil appelé » (le banc échoue
+# s'il en trouve une trace). Cas : refus pour IDENTITE_SIGNATURE=-, pour NOTARISER=0 sans --repetition, pour une
+# variable de remplacement d'outil ou de liste hors --repetition, pour un clone superficiel, pour des tests en échec,
+# pour une porte des tests vide ; acceptation de --repetition jusqu'aux tests ; exportations par défaut.
+# Code de sortie : 0 si tous les cas passent, 1 sinon.
 
 set -u
 
@@ -17,6 +20,20 @@ racine="/private/tmp/macstatusd-plan4/banc-publier"
 
 rm -rf "$racine"
 mkdir -p "$racine" || { echo "ÉCHEC préparation : $racine" >&2; exit 1; }
+
+# --- Le HOME d'essai, et les faux outils de signature en tête du PATH ----------------------------------------------
+home_essai="$racine/home"
+faux_outils="$racine/faux-outils"
+marqueur_outils="$racine/vrai-outil-appele.txt"
+mkdir -p "$home_essai" "$faux_outils" || { echo "ÉCHEC préparation : HOME d'essai" >&2; exit 1; }
+for outil in codesign security xcrun spctl ditto openssl; do
+  cat > "$faux_outils/$outil" <<FIN_FAUX
+#!/bin/bash
+echo "vrai outil appelé : $outil \$*" >> "$marqueur_outils"
+exit 1
+FIN_FAUX
+  chmod +x "$faux_outils/$outil"
+done
 
 echec=0
 ok() { echo "OK    $1"; }
@@ -70,7 +87,8 @@ lancer() {
   if [[ "$vars" != "-" ]]; then
     read -r -a env_cas <<< "$vars"
   fi
-  env -u IDENTITE_SIGNATURE -u NOTARISER -u PROFIL_NOTARISATION "${env_cas[@]+"${env_cas[@]}"}" bash "$clone/outils/publier.sh" "$@" > "$sortie" 2>&1
+  env -u IDENTITE_SIGNATURE -u NOTARISER -u PROFIL_NOTARISATION -u CODESIGN -u SECURITY -u OPENSSL -u DITTO -u XCRUN \
+    -u SPCTL -u GARDE_LISTE HOME="$home_essai" PATH="$faux_outils:$PATH" "${env_cas[@]+"${env_cas[@]}"}" bash "$clone/outils/publier.sh" "$@" > "$sortie" 2>&1
   code=$?
 }
 
@@ -87,12 +105,24 @@ refus() { # nom clone vars motif args...
   ok "$nom"
 }
 
+# Le piège lui-même : un faux outil lancé laisse son marqueur (sinon l'alarme finale ne prouverait rien).
+PATH="$faux_outils:$PATH" codesign --version > /dev/null 2>&1
+if [[ -s "$marqueur_outils" ]]; then
+  ok "le faux outil laisse bien son marqueur (l'alarme fonctionne)"
+  rm -f "$marqueur_outils"
+else
+  ko "alarme des faux outils" "un faux codesign en tête du PATH n'a laissé aucun marqueur"
+fi
+
 # --- Les refus du cliquet ---------------------------------------------------------------------------------------
 refus "cliquet : IDENTITE_SIGNATURE=- refusée" "$complet" "IDENTITE_SIGNATURE=-" "Developer ID" 0.6.0
 refus "cliquet : IDENTITE_SIGNATURE autre refusée" "$complet" "IDENTITE_SIGNATURE=Autre" "Developer ID" 0.6.0
 refus "cliquet : NOTARISER=0 sans --repetition refusé" "$complet" "NOTARISER=0" "notarisée" 0.6.0
 refus "cliquet : NOTARISER vide sans --repetition refusé" "$complet" "NOTARISER=" "notarisée" 0.6.0
 refus "clone superficiel refusé" "$superficiel" "-" "superficiel" 0.6.0
+for nom in CODESIGN SECURITY OPENSSL DITTO XCRUN SPCTL GARDE_LISTE; do
+  refus "remplacement : $nom posée sans --repetition refusée" "$complet" "$nom=/usr/bin/true" "$nom" 0.6.0
+done
 code_attendu=2
 refus "version absente refusée" "$complet" "-" "Usage"
 refus "version mal formée refusée" "$complet" "-" "Usage" 0.6
@@ -115,6 +145,19 @@ if [[ $code -eq 1 ]] && [[ -e "$complet/.marqueur-tests" ]] && [[ ! -e "$complet
   ok "tests en échec : publication.py non lancé"
 else
   ko "tests en échec" "code $code, marqueur tests $([[ -e "$complet/.marqueur-tests" ]] && echo oui || echo non), publication $([[ -e "$complet/.marqueur-publication" ]] && echo lancée || echo non lancée)"
+fi
+cp "$racine/test_publication.ok" "$complet/outils/tests/test_publication.py"
+
+# --- Une porte des tests vide ne passe pas ------------------------------------------------------------------------
+cat > "$complet/outils/tests/test_publication.py" <<'FIN_VIDE'
+import unittest
+FIN_VIDE
+lancer "$complet" "-" 0.6.0
+if [[ $code -eq 1 ]] && [[ ! -e "$complet/.marqueur-publication" ]] \
+  && /usr/bin/grep -q -E "aucun test lancé|tests en échec" "$sortie"; then
+  ok "porte des tests vide (Ran 0 tests) : publication.py non lancé"
+else
+  ko "porte des tests vide" "code $code, publication $([[ -e "$complet/.marqueur-publication" ]] && echo lancée || echo non lancée)"
 fi
 cp "$racine/test_publication.ok" "$complet/outils/tests/test_publication.py"
 
@@ -142,6 +185,14 @@ else
   ko "--repetition" "code $code (sortie : $(tail -n 3 "$sortie" | tr '\n' '|'))"
 fi
 
+# --repetition : les variables de remplacement sont admises (elles sont réservées à la répétition).
+lancer "$complet" "IDENTITE_SIGNATURE=- NOTARISER=0 XCRUN=/usr/bin/true GARDE_LISTE=/essai/liste" --repetition 0.6.0
+if [[ $code -eq 0 ]] && [[ -e "$complet/.marqueur-publication" ]]; then
+  ok "--repetition accepté avec des variables de remplacement"
+else
+  ko "--repetition avec remplacements" "code $code (sortie : $(tail -n 3 "$sortie" | tr '\n' '|'))"
+fi
+
 # --repetition accepté aussi dans l'autre ordre, et sur un clone superficiel il reste refusé.
 lancer "$complet" "-" 0.6.0 --repetition
 if [[ $code -eq 0 ]] && [[ "$(head -n 1 "$complet/.marqueur-publication")" == "args=--repetition 0.6.0" ]]; then
@@ -156,6 +207,13 @@ if /usr/bin/grep -q -F "env -i PATH=/usr/bin:/bin" "$depot/outils/publier.sh"; t
   ok "les tests sont lancés dans l'environnement neutre (env -i)"
 else
   ko "environnement neutre" "« env -i PATH=/usr/bin:/bin » absent de publier.sh"
+fi
+
+# L'alarme : aucun vrai outil de signature n'a été appelé pendant tout le banc.
+if [[ -s "$marqueur_outils" ]]; then
+  ko "vrai outil appelé" "$(tr '\n' '|' < "$marqueur_outils")"
+else
+  ok "aucun vrai outil de signature appelé pendant le banc"
 fi
 
 if [[ $echec -eq 0 ]]; then

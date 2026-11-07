@@ -10,21 +10,25 @@ Appelé par publier.sh. Dans l'ordre :
   1. l'assemblage : outils/assembler-app.sh --signer - ;
   2. la signature : d'abord le binaire, puis le paquet, runtime renforcé et horodatage, sans --deep et sans fichier
      de droits (une exception ne s'ajoute qu'après la preuve, au banc 3, qu'elle manque) ;
-  3. codesign --verify --strict -R <exigence> (l'exigence de signature est écrite dans build/) ;
-  4. l'archive (ditto -c -k --keepParent), puis notarytool submit --keychain-profile <profil> --wait ;
+  3. codesign --verify --strict -R <exigence> (l'exigence de signature est écrite dans le dossier de travail) ;
+  4. l'archive (ditto -c -k --norsrc --noextattr --keepParent), puis notarytool submit --keychain-profile <profil>
+     --wait --output-format json (le statut « Accepted » est lu dans le JSON) ;
   5. stapler staple sur l'app, une nouvelle archive, spctl -a -vv -t exec et stapler validate ;
-  6. la garde de l'archive finale, sur une copie dépouillée de ses signatures (codesign --remove-signature) : les
-     chemins personnels et les motifs de garde.local.txt, dans tout le contenu ; les droits de l'app se contrôlent à
-     part.
+  6. la garde de l'archive finale : aucune entrée AppleDouble (« ._* », « __MACOSX/ ») dans le zip ; puis, sur une
+     copie dépouillée de ses signatures (codesign --remove-signature), les chemins personnels et les motifs de
+     garde.local.txt, dans tout le contenu ; les droits de l'app se contrôlent à part.
 
-Produits dans build/publication/<version>/ : macstatusd-<version>.zip et SHA256SUMS (le travail intermédiaire dans
-travail/). Avec --repetition : identité com.djoko.macstatusd.repetition, nom de support macstatusd-repetition,
-dossier build/repetition/<version>/.
+Tout le travail (assemblage, signatures, archives, copie de la garde, certificats, exigence) se fait sous
+~/Library/Caches/macstatusd-build/<publication|repetition>/<version>/ : hors de ~/Documents (File Provider) et hors
+des produits. Seuls macstatusd-<version>.zip et SHA256SUMS sont copiés dans build/<publication|repetition>/<version>/,
+et seulement après une garde réussie. Avec --repetition : identité com.djoko.macstatusd.repetition, nom de support
+macstatusd-repetition, dossiers build/repetition/<version>/ et .../repetition/<version>/.
 
 L'environnement : IDENTITE_SIGNATURE (« Developer ID Application » par défaut ; « - » seulement en répétition, sans
-notarisation), NOTARISER (1 pour notariser), PROFIL_NOTARISATION (le profil de notarytool store-credentials), et
-GARDE_LISTE (chemin de la liste locale, par défaut garde.local.txt à la racine du dépôt). Les commandes externes se
-remplacent pour les tests : CODESIGN, SECURITY, OPENSSL, DITTO, XCRUN, SPCTL.
+notarisation), NOTARISER (1 pour notariser), PROFIL_NOTARISATION (le profil de notarytool store-credentials). Les
+outils s'appellent par chemin absolu (/usr/bin/codesign, etc.). Seule la répétition peut les remplacer (CODESIGN,
+SECURITY, OPENSSL, DITTO, XCRUN, SPCTL) et donner une autre liste locale (GARDE_LISTE, par défaut garde.local.txt à la
+racine du dépôt) : hors répétition, une de ces variables donne un refus avant le premier appel.
 
 Le nom légal du titulaire et l'équipe d'un Developer ID ne vont que dans la signature : tout ce que ce module affiche
 passe par masquer_identite (dire, et le message d'erreur de main). Aucun identifiant n'est écrit ici : l'empreinte est
@@ -32,6 +36,7 @@ lue dans le trousseau au moment de publier.
 """
 import argparse
 import hashlib
+import json
 import os
 import plistlib
 import pwd
@@ -40,6 +45,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import zipfile
 from types import SimpleNamespace
 
 VERSION = re.compile(r'^\d+\.\d+\.\d+$')
@@ -49,6 +55,8 @@ AD_HOC = '-'
 GET_TASK_ALLOW = 'com.apple.security.get-task-allow'
 # La chaîne d'un Developer ID Application, vérifiée par codesign sur l'app signée : ancrée chez Apple, un
 # intermédiaire Developer ID, une feuille Developer ID Application.
+# Les variables qui remplacent un outil ou la liste de la garde : réservées à la répétition.
+REMPLACEMENTS = ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'GARDE_LISTE')
 EXIGENCE_DEVELOPER_ID = ('=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and '
                          'certificate leaf[field.1.2.840.113635.100.6.1.13] exists')
 
@@ -70,13 +78,29 @@ class EchecCommande(Exception):
 
 # --- ce que l'on affiche ---------------------------------------------------------------------------------------
 
+LIBELLES = r'(?:Developer ID Application|Developer ID Installer|Apple Development|Apple Distribution)'
+_VALEURS = None  # les valeurs de la liste locale, en complément (jamais affichées)
+
+
+def definir_valeurs_masquees(valeurs):
+    """Les valeurs de la liste locale déjà chargées (octets ou texte, 3 caractères au moins), masquées en complément
+    du masque par la forme, sans casse. Une liste vide efface les valeurs."""
+    global _VALEURS
+    textes = sorted({(v.decode('utf-8', 'replace') if isinstance(v, bytes) else v).strip() for v in valeurs},
+                    key=len, reverse=True)
+    textes = [t for t in textes if len(t) >= 3]
+    _VALEURS = re.compile('|'.join(re.escape(t) for t in textes), re.I) if textes else None
+
+
 def masquer_identite(texte):
     """Le nom légal, l'équipe, l'empreinte et les adresses e-mail, masqués par leur forme dans tout ce que ce module
     affiche (exigence de signature, erreurs de codesign, de spctl ou de notarytool) : ils ne vont que dans la
-    signature. Les échappements « \\= » qu'écrivent certains outils sont retirés d'abord."""
-    texte = texte.replace('\\=', '=')
+    signature. Les formes sont celles de ~/.claude/outils/masquer (libellés, équipe, empreintes de 40 et de 64
+    caractères, courriels), plus O=, OU= et UID= d'un certificat. Les échappements « \\= » qu'écrivent certains outils
+    sont retirés d'abord. Les valeurs de la liste locale se masquent en dernier, en complément."""
+    texte = texte.replace('\\=', '=').replace('\\ ', ' ')
     # Le libellé qui suit le préfixe d'une identité (titulaire, et équipe entre parenthèses).
-    prefixe = r'((?:Developer ID Application|Apple Development|Apple Distribution): )'
+    prefixe = r'(%s: )' % LIBELLES
     texte = re.sub(prefixe + r'[^\n"]*?( \()[A-Z0-9]{10}(\))', r'\1<titulaire>\2<equipe>\3', texte)
     texte = re.sub(prefixe + r'(?!<titulaire>)[^\n",;]+', r'\1<titulaire>', texte)
     texte = re.sub(r'\([A-Z0-9]{10}\)', '(<equipe>)', texte)
@@ -84,8 +108,17 @@ def masquer_identite(texte):
     texte = re.sub(r'(subject\.OU\] ?= ?)"?[A-Z0-9]{10}"?', r'\1<equipe>', texte)
     texte = re.sub(r'(\b(?:[Tt]eam ?[Ii](?:[Dd]|dentifier)|TeamIdentifier)"?\s*[=:]\s*)"?[A-Z0-9]{10}"?',
                    r'\1<equipe>', texte)
-    texte = re.sub(r'(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])', '<empreinte>', texte)
-    return re.sub(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+', '<courriel>', texte)
+    # Les champs d'un certificat (openssl -subject, -text) : le titulaire (O) et l'équipe (OU, UID).
+    texte = re.sub(r'(?<![A-Za-z0-9])(UID|OU)(\s*=\s*)[^,/\n]*', r'\1\2<equipe>', texte)
+    texte = re.sub(r'(?<![A-Za-z0-9])(O)(\s*=\s*)[^,/\n]*', r'\1\2<titulaire>', texte)
+    texte = re.sub(r'(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])', '<empreinte>', texte)
+    texte = re.sub(r'(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}:){19}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])', '<empreinte>', texte)
+    texte = re.sub(r'(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![0-9A-Fa-f])', '<empreinte>', texte)
+    texte = re.sub(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+', '<courriel>', texte)
+    texte = re.sub(r'(?<![A-Za-z0-9])(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10}(?![A-Za-z0-9])', '<equipe>', texte)
+    if _VALEURS:
+        texte = _VALEURS.sub('<masqué>', texte)
+    return texte
 
 
 def dire(texte):
@@ -96,17 +129,18 @@ def dire(texte):
 # --- les commandes externes -----------------------------------------------------------------------------------
 
 class Outils:
-    """Les commandes externes, remplaçables par l'environnement, et surtout par une sous-classe qui redéfinit
-    executer (les tests : aucune commande réelle)."""
+    """Les commandes externes, appelées par chemin absolu (jamais trouvées par le PATH). Seule la répétition
+    (remplacables=True) les laisse remplacer par l'environnement ; les tests redéfinissent executer dans une
+    sous-classe (aucune commande réelle)."""
 
-    def __init__(self, env=None):
-        e = os.environ if env is None else env
-        self.codesign = e.get('CODESIGN', 'codesign')
-        self.security = e.get('SECURITY', 'security')
+    def __init__(self, env=None, remplacables=False):
+        e = (os.environ if env is None else env) if remplacables else {}
+        self.codesign = e.get('CODESIGN', '/usr/bin/codesign')
+        self.security = e.get('SECURITY', '/usr/bin/security')
         self.openssl = e.get('OPENSSL', '/usr/bin/openssl')
-        self.ditto = e.get('DITTO', 'ditto')
-        self.xcrun = e.get('XCRUN', 'xcrun')
-        self.spctl = e.get('SPCTL', 'spctl')
+        self.ditto = e.get('DITTO', '/usr/bin/ditto')
+        self.xcrun = e.get('XCRUN', '/usr/bin/xcrun')
+        self.spctl = e.get('SPCTL', '/usr/sbin/spctl')
 
     def executer(self, cmd, entree=None):
         """Lance la commande ; rend (code, sortie, erreur) en texte. Ne lève rien pour un code non nul."""
@@ -118,6 +152,14 @@ class Outils:
         r = self.executer(cmd, entree)
         if r.code != 0:
             raise EchecCommande(cmd, r.code, r.erreur, r.sortie)
+        return r.sortie
+
+    def lancer_muet(self, cmd, quoi, entree=None):
+        """Comme lancer, pour un outil dont la sortie peut porter l'identité (security, openssl) : un échec devient un
+        Refus qui ne recopie ni la ligne de commande ni la sortie, seulement le code."""
+        r = self.executer(cmd, entree)
+        if r.code != 0:
+            raise Refus('%s a échoué (code %d) ; sa sortie n\'est pas affichée' % (quoi, r.code))
         return r.sortie
 
 
@@ -206,8 +248,9 @@ def verifier_certificat(o, nom, empreinte, pem=None, der=None, quoi='le certific
     (subjectAltName) ni « @ », et l'empreinte de l'identité. Le certificat est donné en PEM (pem) ou dans un fichier
     DER (der). Lève Refus, sans recopier le sujet."""
     base = [o.openssl, 'x509'] + (['-inform', 'DER', '-in', der] if der else []) + ['-noout']
-    tete = o.lancer(base + ['-subject', '-issuer', '-nameopt', 'RFC2253', '-fingerprint', '-sha1'], entree=pem)
-    texte = o.lancer(base + ['-text'], entree=pem)
+    tete = o.lancer_muet(base + ['-subject', '-issuer', '-nameopt', 'RFC2253', '-fingerprint', '-sha1'],
+                         'openssl x509', entree=pem)
+    texte = o.lancer_muet(base + ['-text'], 'openssl x509', entree=pem)
     sujet = re.search(r'^subject=\s*(.*?)\s*$', tete, re.M)
     emetteur = re.search(r'^issuer=\s*(.*?)\s*$', tete, re.M)
     lue = re.search(r'Fingerprint=([0-9A-Fa-f:]+)', tete)
@@ -228,8 +271,11 @@ def verifier_certificat(o, nom, empreinte, pem=None, der=None, quoi='le certific
 def identite_verifiee(o, nom):
     """L'empreinte de la seule identité à ce nom dans le trousseau, son certificat relu (sujet, émetteur, empreinte).
     Lève Refus."""
-    empreinte = empreinte_identite(o.lancer([o.security, 'find-identity', '-p', 'codesigning']), nom)
-    pem = certificat_du_trousseau(o.lancer([o.security, 'find-certificate', '-a', '-c', nom, '-Z', '-p']), empreinte)
+    empreinte = empreinte_identite(
+        o.lancer_muet([o.security, 'find-identity', '-p', 'codesigning'], 'security find-identity'), nom)
+    pem = certificat_du_trousseau(
+        o.lancer_muet([o.security, 'find-certificate', '-a', '-c', nom, '-Z', '-p'], 'security find-certificate'),
+        empreinte)
     verifier_certificat(o, nom, empreinte, pem=pem)
     return empreinte
 
@@ -274,7 +320,8 @@ def motifs_liste_locale(chemin):
 def chemins_personnels(dossier, motifs):
     """Ce qui, dans le dossier (la copie de l'archive), porte un motif : le contenu de chaque fichier ordinaire
     (binaires compris), la cible de chaque lien et chaque nom, sans tenir compte de la casse (ASCII). Rend
-    [(chemin relatif, motif)] ; le chemin relatif est tu s'il porte lui-même le motif."""
+    [(chemin relatif, motif)] ; le chemin relatif est tu dès que le nom porte l'un des motifs (même si ce n'est pas
+    celui qui a touché le contenu) : un nom de fichier ne recopie jamais une valeur de la liste."""
     trouves = []
     motifs = [(m.lower(), quoi) for m, quoi in motifs]
     for racine, dossiers, fichiers in os.walk(dossier):
@@ -290,14 +337,21 @@ def chemins_personnels(dossier, motifs):
                 contenu = b''
             contenu = contenu.lower()
             nom_bas = rel.encode().lower()
+            affiche = nom_affichable(rel, motifs)
             for motif, quoi in motifs:
-                if motif in nom_bas:
-                    trouves.append(('(un nom de fichier)', quoi))
-                    break
-                if motif in contenu:
-                    trouves.append((rel, quoi))
+                if motif in nom_bas or motif in contenu:
+                    trouves.append((affiche, quoi))
                     break
     return trouves
+
+
+NOM_TU = '(un nom de fichier)'
+
+
+def nom_affichable(rel, motifs):
+    """Le chemin relatif, ou NOM_TU s'il porte l'un des motifs (en minuscules, comparés sans casse)."""
+    bas = rel.encode().lower()
+    return NOM_TU if any(m.lower() in bas for m, _ in motifs) else rel
 
 
 def codes_de_l_app(app):
@@ -307,11 +361,12 @@ def codes_de_l_app(app):
     return [c for c in codes if os.path.isfile(c) and not os.path.islink(c)] + [app]
 
 
-def copie_sans_signatures(o, archive, dossier):
+def copie_sans_signatures(o, archive, dossier, motifs=()):
     """Une copie du contenu de l'archive pour la garde, chaque code sans sa signature (codesign --remove-signature,
     sur la copie seulement) : la signature d'un Developer ID individuel porte le nom légal du titulaire, publié dans
     la signature et nulle part ailleurs. Le reste du code, les textes et les noms restent contrôlés. Un code dont
-    codesign ne sait pas retirer la signature est refusé (Refus). Rend le dossier de la copie."""
+    codesign ne sait pas retirer la signature est refusé (Refus, sans recopier un nom qui porte un motif). Rend le
+    dossier de la copie."""
     shutil.rmtree(dossier, ignore_errors=True)
     o.lancer([o.ditto, '-x', '-k', archive, dossier])
     for nom in sorted(os.listdir(dossier)):
@@ -321,15 +376,28 @@ def copie_sans_signatures(o, archive, dossier):
                 if o.executer([o.codesign, '--remove-signature', code]).code != 0:
                     shutil.rmtree(dossier, ignore_errors=True)
                     raise Refus("la signature de %s ne se retire pas de la copie contrôlée : rien n'est publié"
-                                % os.path.relpath(code, dossier))
+                                % nom_affichable(os.path.relpath(code, dossier), motifs))
     return dossier
+
+
+def entrees_appledouble(archive):
+    """Le nombre d'entrées de l'archive qui sont des attributs étendus ou des ressources (AppleDouble : un composant
+    « ._* », ou un dossier « __MACOSX »). ditto les range ainsi ; extraites, elles redeviennent des attributs
+    que la garde ne lit pas. Les noms ne sont pas rendus."""
+    with zipfile.ZipFile(archive) as z:
+        return sum(1 for n in z.namelist()
+                   if any(c.startswith('._') or c == '__MACOSX' for c in n.split('/')))
 
 
 def garder_archive(o, archive, dossier, motifs):
     """La garde de l'archive finale : chemins personnels et valeurs de la liste locale, dans tout le contenu d'une
     copie dépouillée de ses signatures. Lève Refus en nommant les fichiers (et ce qu'ils portent, jamais la
     valeur)."""
-    copie = copie_sans_signatures(o, archive, dossier)
+    entrees = entrees_appledouble(archive)
+    if entrees:
+        raise Refus("l'archive porte %d entrée(s) AppleDouble (« ._* » ou « __MACOSX/ », des attributs étendus que "
+                    "la garde ne lit pas) ; rien n'est publié" % entrees)
+    copie = copie_sans_signatures(o, archive, dossier, motifs)
     try:
         trouves = chemins_personnels(copie, motifs)
     finally:
@@ -379,9 +447,11 @@ def signer(o, identite, chemin, horodatage):
 
 
 def archiver(o, app, archive):
+    """L'archive d'une app : sans ressources ni attributs étendus (--norsrc --noextattr), pour qu'aucune entrée
+    AppleDouble « ._* » n'emporte un attribut (URL de téléchargement, nom d'appareil) que la garde ne lit pas."""
     if os.path.exists(archive):
         os.remove(archive)
-    o.lancer([o.ditto, '-c', '-k', '--keepParent', app, archive])
+    o.lancer([o.ditto, '-c', '-k', '--norsrc', '--noextattr', '--keepParent', app, archive])
 
 
 def somme_sha256(chemin):
@@ -392,12 +462,34 @@ def somme_sha256(chemin):
     return h.hexdigest()
 
 
+def racine_travail_par_defaut():
+    """Le travail vit dans les caches de l'utilisateur : hors de ~/Documents (File Provider) et hors du dépôt."""
+    return os.path.join(os.path.expanduser('~'), 'Library', 'Caches', 'macstatusd-build')
+
+
+def reponse_notarisation(retour):
+    """La réponse JSON de la soumission à Apple (--output-format json), ou Refus (sans la recopier)."""
+    try:
+        reponse = json.loads(retour)
+    except ValueError:
+        reponse = None
+    if not isinstance(reponse, dict):
+        raise Refus("la réponse de l'outil de notarisation n'est pas du JSON (--output-format json) : "
+                    "rien n'est publié")
+    return reponse
+
+
 def publier(a, o=None, env=None):
-    """Les étapes dans l'ordre (voir l'en-tête). Rend le dossier des produits. a : version, repetition, depot."""
+    """Les étapes dans l'ordre (voir l'en-tête). Rend le dossier des produits. a : version, repetition, depot,
+    racine_travail (facultatif)."""
     e = dict(os.environ) if env is None else env
-    o = o or Outils(e)
     if not VERSION.match(a.version):
         raise Refus('version attendue sous la forme X.Y.Z : ' + a.version)
+    if not a.repetition:
+        remplaces = [v for v in REMPLACEMENTS if v in e]
+        if remplaces:
+            raise Refus('hors --repetition, aucun outil ni liste de la garde ne se remplace : %s' % ', '.join(remplaces))
+    o = o or Outils(e, a.repetition)
     identite = e.get('IDENTITE_SIGNATURE', DEVELOPER_ID)
     notarise = notariser(e)
     profil = e.get('PROFIL_NOTARISATION', '')
@@ -411,21 +503,27 @@ def publier(a, o=None, env=None):
     if not developer_id(identite) and identite != AD_HOC:
         raise Refus('identité de signature attendue : %s (ou « - » en répétition, sans notarisation)' % DEVELOPER_ID)
     if notarise and not profil:
-        raise Refus('NOTARISER=1 demande PROFIL_NOTARISATION, le profil de notarytool store-credentials')
+        raise Refus('NOTARISER=1 demande PROFIL_NOTARISATION, le profil du trousseau pour la notarisation')
+    # GARDE_LISTE n'arrive jusqu'ici qu'en répétition : hors répétition, elle est refusée plus haut.
     liste = e.get('GARDE_LISTE') or os.path.join(a.depot, 'garde.local.txt')
-    motifs = motifs_personnels(e) + motifs_liste_locale(liste)
+    motifs_liste = motifs_liste_locale(liste)
+    definir_valeurs_masquees([m for m, _ in motifs_liste])
+    motifs = motifs_personnels(e) + motifs_liste
     empreinte = identite_verifiee(o, identite) if developer_id(identite) else AD_HOC
     if notarise and o.executer([o.xcrun, 'notarytool', 'history', '--keychain-profile', profil]).code != 0:
         raise Refus('le profil de notarisation %s ne répond pas (notarytool history)' % profil)
 
-    # Les dossiers des produits.
-    sortie = os.path.join(a.depot, 'build', 'repetition' if a.repetition else 'publication', a.version)
-    shutil.rmtree(sortie, ignore_errors=True)
-    travail = os.path.join(sortie, 'travail')
-    os.makedirs(travail)
+    # Le travail (hors du dépôt) et les produits (le zip et SHA256SUMS, après la garde seulement).
+    genre = 'repetition' if a.repetition else 'publication'
+    racine = getattr(a, 'racine_travail', None) or racine_travail_par_defaut()
+    travail = os.path.join(racine, genre, a.version)
+    produits = os.path.join(a.depot, 'build', genre, a.version)
+    shutil.rmtree(travail, ignore_errors=True)
+    shutil.rmtree(produits, ignore_errors=True)
+    os.makedirs(travail, mode=0o700)
 
     # 1. l'assemblage (signature ad hoc, refaite à l'étape 2)
-    cmd = ['bash', os.path.join(a.depot, 'outils', 'assembler-app.sh'), '--signer', '-',
+    cmd = ['/bin/bash', os.path.join(a.depot, 'outils', 'assembler-app.sh'), '--signer', '-',
            '--sortie', os.path.join(travail, 'app')]
     if a.repetition:
         cmd += ['--identifiant', IDENTIFIANT + '.repetition', '--nom-support', 'macstatusd-repetition']
@@ -433,7 +531,7 @@ def publier(a, o=None, env=None):
     app = lignes[-1] if lignes else ''
     if not app or not os.path.isdir(app):
         raise Refus("l'assembleur n'a pas donné le chemin de l'app sur sa dernière ligne")
-    dire('app assemblée : ' + os.path.relpath(app, a.depot))
+    dire('app assemblée : ' + os.path.relpath(app, racine))
 
     # 2. la signature : le binaire, puis le paquet
     horodatage = developer_id(identite)
@@ -461,22 +559,26 @@ def publier(a, o=None, env=None):
     if notarise:
         soumission = os.path.join(travail, 'soumission.zip')
         archiver(o, app, soumission)
-        retour = o.lancer([o.xcrun, 'notarytool', 'submit', soumission, '--keychain-profile', profil, '--wait'])
+        retour = o.lancer([o.xcrun, 'notarytool', 'submit', soumission, '--keychain-profile', profil, '--wait',
+                           '--output-format', 'json'])
         os.remove(soumission)
-        if not re.search(r'^\s*status:\s*Accepted\s*$', retour, re.M):
-            raise Refus('notarisation non acceptée par Apple : ' + retour.strip()[-500:])
-        dire('notarisation acceptée')
+        reponse = reponse_notarisation(retour)
+        if reponse.get('status') != 'Accepted':
+            # Seuls id, status et message, masqués d'abord ; la coupe vient après le masque.
+            resume = 'id=%s status=%s message=%s' % (reponse.get('id'), reponse.get('status'), reponse.get('message'))
+            raise Refus('notarisation non acceptée par Apple : ' + masquer_identite(resume)[:500])
+        dire('notarisation acceptée (id %s)' % reponse.get('id'))
         # 5. l'agrafe, puis la vérification de l'app agrafée
         o.lancer([o.xcrun, 'stapler', 'staple', app])
 
-    final = os.path.join(sortie, 'macstatusd-%s.zip' % a.version)
+    final = os.path.join(travail, 'macstatusd-%s.zip' % a.version)
     archiver(o, app, final)
     if notarise:
         o.lancer([o.spctl, '-a', '-vv', '-t', 'exec', app])
         o.lancer([o.xcrun, 'stapler', 'validate', app])
         dire('app agrafée et acceptée par Gatekeeper')
 
-    # 6. la garde de l'archive finale
+    # 6. la garde de l'archive finale ; les produits ne reçoivent le zip qu'après elle
     try:
         garder_archive(o, final, os.path.join(travail, 'controle'), motifs)
     except BaseException:
@@ -484,24 +586,29 @@ def publier(a, o=None, env=None):
             os.remove(final)
         raise
     dire("garde de l'archive : aucun chemin personnel, aucune valeur de la liste locale")
-    with open(os.path.join(sortie, 'SHA256SUMS'), 'w', encoding='utf-8') as f:
-        f.write('%s  %s\n' % (somme_sha256(final), os.path.basename(final)))
-    dire('produits : ' + os.path.relpath(sortie, a.depot))
-    return sortie
+    os.makedirs(produits)
+    livre = os.path.join(produits, os.path.basename(final))
+    shutil.copyfile(final, livre)
+    with open(os.path.join(produits, 'SHA256SUMS'), 'w', encoding='utf-8') as f:
+        f.write('%s  %s\n' % (somme_sha256(livre), os.path.basename(livre)))
+    dire('produits : ' + os.path.relpath(produits, a.depot))
+    return produits
 
 
-def arguments(argv, depot=None):
+def arguments(argv, depot=None, racine_travail=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('version', help='X.Y.Z')
     p.add_argument('--repetition', action='store_true',
                    help='identité com.djoko.macstatusd.repetition, dossier build/repetition/<version>/')
     a = p.parse_args(argv)
     a.depot = depot or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    a.racine_travail = racine_travail or racine_travail_par_defaut()
     return a
 
 
-def main(argv=None, o=None, env=None, depot=None):
-    a = arguments(sys.argv[1:] if argv is None else argv, depot)
+def main(argv=None, o=None, env=None, depot=None, racine_travail=None):
+    a = arguments(sys.argv[1:] if argv is None else argv, depot, racine_travail)
+    definir_valeurs_masquees([])  # publier y met les valeurs de la liste locale, dès qu'il les a lues
     try:
         publier(a, o, env)
     except Refus as e:
@@ -513,6 +620,9 @@ def main(argv=None, o=None, env=None, depot=None):
         return 1
     except OSError as e:
         print(masquer_identite('échec : %s' % e), file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 - une erreur imprévue n'affiche que son type, jamais sa trace ni son texte
+        print(masquer_identite('échec imprévu : %s' % type(e).__name__), file=sys.stderr)
         return 1
     return 0
 

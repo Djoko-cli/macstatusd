@@ -11,8 +11,10 @@ Toutes les identités sont inventées. Les valeurs « interdites » plantées (c
 import contextlib
 import hashlib
 import io
+import json
 import os
 import plistlib
+import re
 import shutil
 import sys
 import tempfile
@@ -35,6 +37,7 @@ CHEMIN_PERSO = '/Us' + 'ers/Essai/Dev/macstatusd'
 NOM_COMPLET = 'Developer ID Application: %s (%s)' % (TITULAIRE, EQUIPE)
 SUJET = 'UID=%s,CN=%s,OU=%s,O=%s,C=FR' % (EQUIPE, NOM_COMPLET, EQUIPE, TITULAIRE)
 EMETTEUR = 'CN=Developer ID Certification Authority,OU=G2,O=Apple Inc.,C=US'
+NOTARISATION_ACCEPTEE = json.dumps({'id': 'essai', 'status': 'Accepted', 'message': 'Processing complete'})
 PLANTE = ('%s ; %s.com.djoko.macstatusd ; %s ; %s ; Apple Development: Autre Nom (ZZZZZ99999)'
           % (NOM_COMPLET, EQUIPE, EMPREINTE.lower(), COURRIEL))
 
@@ -54,8 +57,8 @@ class FauxOutils(publication.Outils):
     """Les outils externes, sans aucune commande réelle. Les appels sont notés dans self.appels."""
 
     def __init__(self, env=None, identites=None, emetteur=EMETTEUR, retrait_rate=False, ressources=None,
-                 signature=b'signature', notarisation='  id: essai\n  status: Accepted\n', echec_signature=None,
-                 droits=''):
+                 signature=b'signature', notarisation=NOTARISATION_ACCEPTEE, echec_signature=None,
+                 droits='', echecs=None, entrees_zip=None):
         super().__init__(env)
         self.appels = []
         self.identites = [(EMPREINTE, NOM_COMPLET)] if identites is None else identites
@@ -66,10 +69,16 @@ class FauxOutils(publication.Outils):
         self.notarisation = notarisation
         self.echec_signature = echec_signature
         self.droits = droits
+        self.echecs = echecs or {}          # nom d'outil -> (code, sortie, erreur) : l'outil échoue toujours
+        self.entrees_zip = entrees_zip or {}  # entrées plantées dans chaque archive créée (nom -> contenu)
 
     def executer(self, cmd, entree=None):
         self.appels.append(list(cmd))
         nom = os.path.basename(cmd[0])
+        for cle, echec in self.echecs.items():
+            # la clé est un nom d'outil, ou (nom d'outil, argument) pour ne faire échouer qu'un de ses appels
+            if cle == nom or (isinstance(cle, tuple) and cle[0] == nom and cle[1] in cmd):
+                return self.rendre(*echec)
         if nom == 'bash':
             return self._assembler(cmd)
         if nom == 'security':
@@ -156,6 +165,8 @@ class FauxOutils(publication.Outils):
                     for n in fichiers:
                         p = os.path.join(racine, n)
                         z.write(p, os.path.relpath(p, parent))
+                for entree, contenu in self.entrees_zip.items():
+                    z.writestr(entree, contenu)
         else:
             with zipfile.ZipFile(cmd[-2]) as z:
                 z.extractall(cmd[-1])
@@ -199,19 +210,24 @@ class Base(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.depot = os.path.join(self.tmp, 'depot')
         os.makedirs(self.depot)
-        self.liste = os.path.join(self.tmp, 'liste.txt')
+        self.cache = os.path.join(self.tmp, 'cache')  # la racine du travail (hors du dépôt)
+        self.liste = os.path.join(self.depot, 'garde.local.txt')
+        self.ecrire_liste(TITULAIRE, EQUIPE)
+        self.addCleanup(publication.definir_valeurs_masquees, [])
+
+    def ecrire_liste(self, *valeurs):
         with open(self.liste, 'w', encoding='utf-8') as f:
-            f.write('# valeurs d\'essai\n%s\n%s\n' % (TITULAIRE, EQUIPE))
+            f.write('# valeurs d\'essai\n%s\n' % '\n'.join(valeurs))
 
     def env(self, **plus):
         """L'environnement neutre, recalculé à chaque appel."""
         e = {'PATH': '/usr/bin:/bin', 'HOME': '/home/exemple', 'NOTARISER': '1',
-             'PROFIL_NOTARISATION': 'djoko-notarisation', 'GARDE_LISTE': self.liste}
+             'PROFIL_NOTARISATION': 'djoko-notarisation'}
         e.update(plus)
         return e
 
     def args(self, repetition=False):
-        return SimpleNamespace(version='0.6.0', repetition=repetition, depot=self.depot)
+        return SimpleNamespace(version='0.6.0', repetition=repetition, depot=self.depot, racine_travail=self.cache)
 
     def publier(self, o=None, repetition=False, **env):
         e = self.env(**env)
@@ -236,7 +252,7 @@ class TestMasque(Base):
         o = FauxOutils(self.env(), echec_signature=PLANTE)
         sortie, erreur = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(sortie), contextlib.redirect_stderr(erreur):
-            code = publication.main(['0.6.0'], o, self.env(), self.depot)
+            code = publication.main(['0.6.0'], o, self.env(), self.depot, self.cache)
         self.assertEqual(1, code)
         self.assertEqual([], vu(erreur.getvalue() + sortie.getvalue()), erreur.getvalue())
         self.assertIn('<equipe>', erreur.getvalue())
@@ -244,13 +260,13 @@ class TestMasque(Base):
         erreur = io.StringIO()
         with mock.patch.object(publication, 'publier', side_effect=publication.Refus(PLANTE)), \
                 contextlib.redirect_stderr(erreur):
-            self.assertEqual(1, publication.main(['0.6.0'], None, self.env(), self.depot))
+            self.assertEqual(1, publication.main(['0.6.0'], None, self.env(), self.depot, self.cache))
         self.assertEqual([], vu(erreur.getvalue()), erreur.getvalue())
         # Une erreur du système (OSError) : même masque.
         erreur = io.StringIO()
         with mock.patch.object(publication, 'publier', side_effect=OSError(PLANTE)), \
                 contextlib.redirect_stderr(erreur):
-            self.assertEqual(1, publication.main(['0.6.0'], None, self.env(), self.depot))
+            self.assertEqual(1, publication.main(['0.6.0'], None, self.env(), self.depot, self.cache))
         self.assertEqual([], vu(erreur.getvalue()), erreur.getvalue())
 
     def test_dire_masque(self):
@@ -320,7 +336,8 @@ class TestIdentite(Base):
             publication.publier(self.args(), FauxOutils(e), e)
 
     def test_liste_locale_absente_refus(self):
-        e = self.env(GARDE_LISTE=os.path.join(self.tmp, 'absente.txt'))
+        os.remove(self.liste)
+        e = self.env()
         o = FauxOutils(e)
         with sans_bruit(), self.assertRaises(publication.Refus):
             publication.publier(self.args(), o, e)
@@ -408,34 +425,39 @@ class TestDeroulement(Base):
         for c in o.appels:
             self.assertNotIn('--deep', c)
 
-    def test_verification_par_exigence_ecrite_dans_build(self):
+    def test_verification_par_exigence_ecrite_dans_le_travail(self):
         o, sortie = self.publier()
         verif = [c for c in o.appels if '--verify' in c]
         self.assertEqual(1, len(verif))
         self.assertIn('--strict', verif[0])
         self.assertTrue(any(x.startswith('-R=anchor apple generic') for x in verif[0]))
-        exigence = os.path.join(sortie, 'travail', 'exigence.txt')
+        # Le travail est hors des produits et hors du dépôt : l'exigence (l'équipe) n'est pas dans build/.
+        exigence = os.path.join(self.cache, 'publication', '0.6.0', 'exigence.txt')
         self.assertTrue(os.path.isfile(exigence))
-        self.assertIn(os.path.join(self.depot, 'build') + os.sep, exigence)
+        self.assertFalse(os.path.exists(os.path.join(sortie, 'exigence.txt')))
 
     def test_notarisation_par_le_profil_et_archive_avant_agrafe(self):
         o, _ = self.publier()
         soumission = [c for c in o.appels if c[1:3] == ['notarytool', 'submit']][0]
-        self.assertEqual(['--keychain-profile', 'djoko-notarisation', '--wait'], soumission[-3:])
+        self.assertEqual(['--keychain-profile', 'djoko-notarisation', '--wait', '--output-format', 'json'],
+                         soumission[-5:])
         self.assertTrue(soumission[3].endswith('.zip'))
         ditto = [c for c in o.appels if os.path.basename(c[0]) == 'ditto' and '-c' in c]
         self.assertEqual(2, len(ditto))
         for c in ditto:
-            self.assertEqual(['-c', '-k', '--keepParent'], c[1:4])
+            # C2 : ni ressources ni attributs étendus (entrées AppleDouble « ._* ») dans l'archive.
+            self.assertEqual(['-c', '-k', '--norsrc', '--noextattr', '--keepParent'], c[1:6])
         evaluer = [c for c in o.appels if os.path.basename(c[0]) == 'spctl'][0]
         self.assertEqual(['-a', '-vv', '-t', 'exec'], evaluer[1:5])
 
     def test_notarisation_refusee_par_apple_refus(self):
         e = self.env()
-        o = FauxOutils(e, notarisation='  id: essai\n  status: Invalid\n')
-        with sans_bruit(), self.assertRaises(publication.Refus):
+        o = FauxOutils(e, notarisation=json.dumps({'id': 'essai', 'status': 'Invalid', 'message': 'refusée'}))
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
             publication.publier(self.args(), o, e)
         self.assertNotIn('agrafer', o.etapes())
+        self.assertIn('Invalid', str(r.exception))
+        self.assertIn('essai', str(r.exception))
 
     def test_produits_de_la_publication(self):
         o, sortie = self.publier()
@@ -445,7 +467,9 @@ class TestDeroulement(Base):
             somme = hashlib.sha256(f.read()).hexdigest()
         with open(os.path.join(sortie, 'SHA256SUMS'), encoding='utf-8') as f:
             self.assertEqual('%s  macstatusd-0.6.0.zip\n' % somme, f.read())
-        self.assertEqual(['SHA256SUMS', 'macstatusd-0.6.0.zip', 'travail'], sorted(os.listdir(sortie)))
+        # Seuls l'archive et la somme sont des produits : le travail (app signée, certificats, exigence) est ailleurs.
+        self.assertEqual(['SHA256SUMS', 'macstatusd-0.6.0.zip'], sorted(os.listdir(sortie)))
+        self.assertTrue(os.path.isdir(os.path.join(self.cache, 'publication', '0.6.0', 'app')))
         assembleur = [c for c in o.appels if os.path.basename(c[0]) == 'bash'][0]
         self.assertEqual(['--signer', '-'], assembleur[2:4])
         self.assertNotIn('--identifiant', assembleur)
@@ -484,6 +508,284 @@ class TestDeroulement(Base):
         self.assertEqual(('0.6.0', True), (a.version, a.repetition))
         a = publication.arguments(['0.6.0'], self.depot)
         self.assertEqual(('0.6.0', False), (a.version, a.repetition))
+
+
+# --- Correction 1 de la relecture de la tâche 8 -----------------------------------------------------------------------
+
+SANS_CHIFFRE = 'ABCDEFGHIJ'  # une équipe sans chiffre : seule la règle de sa forme la masque
+
+
+class TestFormesDuMasque(Base):
+    """Un échantillon par forme, testé seul (I4, I5) : une règle supprimée du masque fait échouer son test. Les
+    échantillons des formes « équipe » n'ont aucun chiffre, pour que la règle de l'équipe isolée ne masque pas à
+    leur place."""
+
+    def masque(self, texte):
+        return publication.masquer_identite(texte)
+
+    def assertMasque(self, texte, valeur, marque):
+        sortie = self.masque(texte)
+        self.assertEqual(0, sortie.count(valeur), 'la valeur survit dans : ' + sortie)
+        self.assertIn(marque, sortie)
+
+    def test_forme_equipe_seule_entre_parentheses(self):
+        self.assertEqual('(<equipe>)', self.masque('(%s)' % SANS_CHIFFRE))
+
+    def test_forme_equipe_en_tete_d_un_identifiant(self):
+        self.assertEqual('<equipe>.com.djoko.x', self.masque(SANS_CHIFFRE + '.com.djoko.x'))
+
+    def test_forme_equipe_isolee_avec_chiffre(self):
+        self.assertEqual('equipe <equipe> seule', self.masque('equipe %s seule' % EQUIPE))
+
+    def test_forme_libelle_sans_equipe_pour_chaque_prefixe(self):
+        for prefixe in ('Developer ID Application', 'Developer ID Installer', 'Apple Development',
+                        'Apple Distribution'):
+            with self.subTest(prefixe):
+                self.assertEqual('%s: <titulaire>' % prefixe, self.masque('%s: %s' % (prefixe, TITULAIRE)))
+
+    def test_forme_libelle_avec_equipe_pour_chaque_prefixe(self):
+        for prefixe in ('Developer ID Application', 'Developer ID Installer', 'Apple Development',
+                        'Apple Distribution'):
+            with self.subTest(prefixe):
+                self.assertEqual('%s: <titulaire> (<equipe>)' % prefixe,
+                                 self.masque('%s: %s (%s)' % (prefixe, TITULAIRE, EQUIPE)))
+
+    def test_forme_team_identifier(self):
+        for texte in ('TeamIdentifier=%s', 'TeamIdentifier = %s', '"teamId": "%s"', 'teamID=%s', 'Team ID: %s',
+                      'certificate leaf[subject.OU] = %s'):
+            with self.subTest(texte):
+                self.assertMasque(texte % SANS_CHIFFRE, SANS_CHIFFRE, '<equipe>')
+
+    def test_forme_echappement_retire_avant_les_motifs(self):
+        self.assertEqual('X=Y', self.masque('X\\=Y'))
+        self.assertMasque('TeamIdentifier\\=%s' % SANS_CHIFFRE, SANS_CHIFFRE, 'TeamIdentifier=<equipe>')
+
+    def test_forme_champs_o_ou_uid_d_un_certificat(self):
+        self.assertMasque('subject=UID=%s,OU=%s,O=%s,C=FR' % (SANS_CHIFFRE, SANS_CHIFFRE, TITULAIRE),
+                          TITULAIRE, 'C=FR')
+        self.assertEqual(0, self.masque('UID=%s' % SANS_CHIFFRE).count(SANS_CHIFFRE))
+        self.assertEqual(0, self.masque('OU=%s' % SANS_CHIFFRE).count(SANS_CHIFFRE))
+        self.assertEqual(0, self.masque('O=%s' % TITULAIRE).count(TITULAIRE))
+        self.assertEqual(0, self.masque('Subject: O = %s, C = FR' % TITULAIRE).count(TITULAIRE))
+
+    def test_forme_empreintes_de_40_et_de_64_caracteres(self):
+        sha1, sha256 = EMPREINTE, EMPREINTE + EMPREINTE[:24]
+        for hexa in (sha1, sha1.lower(), sha256, sha256.lower()):
+            with self.subTest(len(hexa)):
+                self.assertEqual('empreinte <empreinte> fin', self.masque('empreinte %s fin' % hexa))
+        deux_points = ':'.join(sha1[i:i + 2] for i in range(0, 40, 2))
+        self.assertEqual('<empreinte>', self.masque(deux_points))
+
+    def test_forme_courriel(self):
+        self.assertEqual('ecrire a <courriel> svp', self.masque('ecrire a %s svp' % COURRIEL))
+
+    def test_un_texte_ordinaire_reste_intact(self):
+        texte = 'app assemblée : macstatusd-repetition.app (12 fichiers) version 0.6.0 sha256 abc123'
+        self.assertEqual(texte, self.masque(texte))
+
+    def test_valeurs_de_la_liste_masquees_en_complement(self):
+        publication.definir_valeurs_masquees([b'ZQXMOTIF', b'ab'])  # « ab » est trop court pour être masqué
+        sortie = self.masque('le zqxmotif-dossier et ab restent : ZQXMOTIF')
+        self.assertEqual(0, sortie.lower().count('zqxmotif'))
+        self.assertIn('<masqué>', sortie)
+        self.assertIn(' ab ', sortie)
+        publication.definir_valeurs_masquees([])
+        self.assertEqual('ZQXMOTIF', self.masque('ZQXMOTIF'))
+
+    def test_publier_charge_les_valeurs_de_la_liste_dans_le_masque(self):
+        self.ecrire_liste('ZQXMOTIF')
+        e = self.env()
+        o = FauxOutils(e, echecs={'codesign': (1, '', 'echec avec ZQXMOTIF dedans')})
+        erreur = io.StringIO()
+        with sans_bruit(), contextlib.redirect_stderr(erreur):
+            self.assertEqual(1, publication.main(['0.6.0'], o, e, self.depot, self.cache))
+        self.assertEqual(0, erreur.getvalue().lower().count('zqxmotif'))
+        self.assertIn('<masqué>', erreur.getvalue())
+
+    def test_exception_imprevue_n_affiche_que_son_type(self):
+        erreur = io.StringIO()
+        with mock.patch.object(publication, 'publier', side_effect=RuntimeError('SORTIEBRUTE ' + PLANTE)), \
+                contextlib.redirect_stderr(erreur):
+            self.assertEqual(1, publication.main(['0.6.0'], None, self.env(), self.depot, self.cache))
+        self.assertIn('RuntimeError', erreur.getvalue())
+        self.assertEqual(0, erreur.getvalue().count('SORTIEBRUTE'))
+        self.assertEqual([], vu(erreur.getvalue()))
+        self.assertNotIn('Traceback', erreur.getvalue())
+
+    def test_echec_d_openssl_ou_de_security_est_un_refus_sans_leur_sortie(self):
+        for outil in ('security', 'openssl', ('security', 'find-identity'), ('security', 'find-certificate'),
+                      ('openssl', '-subject'), ('openssl', '-text')):
+            with self.subTest(outil):
+                e = self.env()
+                o = FauxOutils(e, echecs={outil: (1, 'SORTIEBRUTE ' + PLANTE, 'SORTIEBRUTE ' + PLANTE)})
+                with sans_bruit(), self.assertRaises(publication.Refus) as r:
+                    publication.publier(self.args(), o, e)
+                self.assertEqual(0, str(r.exception).count('SORTIEBRUTE'))
+                self.assertEqual([], vu(str(r.exception)))
+                self.assertNotIn('assembler', o.etapes())
+
+
+class TestGardeCorrection1(Base):
+    def test_garde_une_valeur_de_la_liste_dans_un_nom_n_est_jamais_recopiee(self):
+        # C1 : le contenu porte un chemin personnel (motif testé en premier), le nom porte une valeur de la liste.
+        self.ecrire_liste('ZQXMOTIF')
+        ressources = {'Contents/Resources/notes-ZQXMOTIF.txt': CHEMIN_PERSO.encode(),
+                      'Contents/Resources/ZQXMOTIF-dossier/y.txt': CHEMIN_PERSO.encode()}
+        e = self.env()
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), FauxOutils(e, ressources=ressources), e)
+        self.assertEqual(0, str(r.exception).lower().count('zqxmotif'), 'une valeur de la liste est recopiée')
+        self.assertIn('(un nom de fichier)', str(r.exception))
+
+    def test_garde_chemins_personnels_un_nom_qui_porte_une_valeur_est_tu(self):
+        dossier = os.path.join(self.tmp, 'copie')
+        os.makedirs(os.path.join(dossier, 'ZQXMOTIF-dossier'))
+        with open(os.path.join(dossier, 'ZQXMOTIF-dossier', 'y.txt'), 'w') as f:
+            f.write(CHEMIN_PERSO)
+        motifs = [(b'/Us' + b'ers/', 'un chemin personnel'), (b'ZQXMOTIF', 'une valeur (ligne 2)')]
+        trouves = publication.chemins_personnels(dossier, motifs)
+        self.assertEqual(2, len(trouves))  # le dossier (son nom) et le fichier (le nom du dossier dans son chemin)
+        for rel, quoi in trouves:
+            self.assertEqual(0, (rel + quoi).lower().count('zqxmotif'))
+
+    def test_garde_retrait_rate_ne_recopie_pas_une_valeur_de_la_liste(self):
+        self.ecrire_liste('ZQXMOTIF')
+        e = self.env()
+        o = FauxOutils(e, retrait_rate=True, ressources={'Contents/MacOS/ZQXMOTIF-outil': b'x'})
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertIn('ne se retire pas', str(r.exception))
+        self.assertEqual(0, str(r.exception).lower().count('zqxmotif'))
+
+    def test_garde_entree_appledouble_dans_l_archive_refus(self):
+        # C2 : les attributs étendus d'une copie extraite ne se lisent pas ; l'archive finale ne doit pas en porter.
+        for entree in ('macstatusd.app/Contents/Resources/._icone.icns', '__MACOSX/macstatusd.app/x', '._a'):
+            with self.subTest(entree):
+                e = self.env()
+                o = FauxOutils(e, entrees_zip={entree: b'attributs'})
+                with sans_bruit(), self.assertRaises(publication.Refus) as r:
+                    publication.publier(self.args(), o, e)
+                self.assertIn('AppleDouble', str(r.exception))
+                self.assertFalse(os.path.exists(os.path.join(self.depot, 'build', 'publication', '0.6.0')))
+
+    def test_garde_une_archive_sans_appledouble_passe(self):
+        _, sortie = self.publier(FauxOutils(self.env(), entrees_zip={'macstatusd.app/Contents/Resources/a._b': b'x'}))
+        self.assertTrue(os.path.isfile(os.path.join(sortie, 'macstatusd-0.6.0.zip')))
+
+
+class TestNotarisationJson(Base):
+    def refuse(self, notarisation):
+        e = self.env()
+        o = FauxOutils(e, notarisation=notarisation)
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertNotIn('agrafer', o.etapes())
+        return str(r.exception)
+
+    def test_statut_invalid_refus(self):
+        texte = self.refuse(json.dumps({'id': 'abc-123', 'status': 'Invalid', 'message': 'Archive rejetée'}))
+        for fragment in ('abc-123', 'Invalid', 'Archive rejetée'):
+            self.assertIn(fragment, texte)
+
+    def test_message_avec_un_faux_titulaire_sort_masque_avant_toute_coupe(self):
+        # L'empreinte chevauche la limite de 500 caractères : coupée avant le masque, il en resterait un morceau.
+        message = 'x' * 455 + ' ' + EMPREINTE.lower() + ' ' + NOM_COMPLET + ' ' + COURRIEL
+        texte = self.refuse(json.dumps({'id': 'abc', 'status': 'Invalid', 'message': message}))
+        self.assertEqual([], vu(texte), texte)
+        self.assertIsNone(re.search(r'[0-9a-fA-F]{10}', texte), 'un morceau d\'empreinte survit : ' + texte)
+        self.assertIn('<empreinte>', texte)
+        self.assertLessEqual(len(texte), 700)
+
+    def test_sortie_qui_n_est_pas_du_json_refus_sans_la_recopier(self):
+        texte = self.refuse('  status: Accepted\n SORTIEBRUTE ' + PLANTE)
+        self.assertEqual(0, texte.count('SORTIEBRUTE'))
+        self.assertEqual([], vu(texte))
+
+    def test_statut_absent_ou_different_refus(self):
+        for brut in (json.dumps({'id': 'a'}), json.dumps({'id': 'a', 'status': 'accepted'}), json.dumps([1])):
+            with self.subTest(brut):
+                self.refuse(brut)
+
+
+class TestProduitsEtTravail(Base):
+    def test_evaluation_en_echec_aucune_archive_dans_les_produits(self):
+        # I2 : spctl refuse l'app ; l'archive n'a pas passé la garde, elle ne doit pas être dans les produits.
+        e = self.env()
+        o = FauxOutils(e, echecs={'spctl': (3, '', 'rejected')})
+        with sans_bruit(), self.assertRaises(publication.EchecCommande):
+            publication.publier(self.args(), o, e)
+        produits = os.path.join(self.depot, 'build', 'publication', '0.6.0')
+        self.assertEqual([], [n for n in (os.listdir(produits) if os.path.isdir(produits) else [])])
+        self.assertNotIn('garder', o.etapes())
+
+    def test_garde_refusee_rien_dans_les_produits(self):
+        o = FauxOutils(self.env(), ressources={'Contents/Resources/r.json': CHEMIN_PERSO.encode()})
+        e = self.env()
+        with sans_bruit(), self.assertRaises(publication.Refus):
+            publication.publier(self.args(), o, e)
+        self.assertFalse(os.path.exists(os.path.join(self.depot, 'build', 'publication', '0.6.0')))
+
+    def test_tout_le_travail_est_sous_la_racine_injectee(self):
+        o, sortie = self.publier()
+        travail = os.path.join(self.cache, 'publication', '0.6.0')
+        assembleur = [c for c in o.appels if os.path.basename(c[0]) == 'bash'][0]
+        self.assertTrue(assembleur[assembleur.index('--sortie') + 1].startswith(travail + os.sep))
+        for c in o.appels:
+            if os.path.basename(c[0]) in ('ditto', 'codesign'):
+                for x in c[1:]:
+                    if x.startswith(self.depot):
+                        self.fail('un outil travaille dans le dépôt : ' + os.path.basename(c[0]))
+        self.assertEqual([], [n for n in os.listdir(sortie) if n not in ('SHA256SUMS', 'macstatusd-0.6.0.zip')])
+
+    def test_repetition_travail_et_produits_separes(self):
+        o, sortie = self.publier(repetition=True)
+        self.assertTrue(os.path.isdir(os.path.join(self.cache, 'repetition', '0.6.0', 'app')))
+        self.assertEqual(['SHA256SUMS', 'macstatusd-0.6.0.zip'], sorted(os.listdir(sortie)))
+
+    def test_la_racine_du_travail_par_defaut_est_dans_les_caches_de_l_utilisateur(self):
+        a = publication.arguments(['0.6.0'], self.depot)
+        self.assertTrue(a.racine_travail.endswith(os.path.join('Library', 'Caches', 'macstatusd-build')))
+        a = publication.arguments(['0.6.0'], self.depot, self.cache)
+        self.assertEqual(self.cache, a.racine_travail)
+
+
+class TestOutilsNonRemplacables(Base):
+    def test_hors_repetition_une_variable_de_remplacement_est_refusee_avant_tout_appel(self):
+        for nom in ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'GARDE_LISTE'):
+            with self.subTest(nom):
+                e = self.env(**{nom: '/usr/bin/true'})
+                o = FauxOutils(e)
+                with sans_bruit(), self.assertRaises(publication.Refus) as r:
+                    publication.publier(self.args(), o, e)
+                self.assertIn(nom, str(r.exception))
+                self.assertEqual([], o.appels)
+
+    def test_les_outils_s_appellent_par_chemin_absolu(self):
+        o = publication.Outils({})
+        attendus = {'codesign': '/usr/bin/codesign', 'security': '/usr/bin/security', 'ditto': '/usr/bin/ditto',
+                    'xcrun': '/usr/bin/xcrun', 'spctl': '/usr/sbin/spctl', 'openssl': '/usr/bin/openssl'}
+        for attribut, chemin in attendus.items():
+            self.assertEqual(chemin, getattr(o, attribut))
+            self.assertTrue(os.path.isfile(chemin), chemin)  # présent sur la machine (jamais lancé ici)
+
+    def test_les_variables_ne_remplacent_les_outils_qu_en_repetition(self):
+        e = {'XCRUN': '/essai/xcrun', 'GARDE_LISTE': '/essai/liste'}
+        self.assertEqual('/usr/bin/xcrun', publication.Outils(e).xcrun)
+        self.assertEqual('/essai/xcrun', publication.Outils(e, remplacables=True).xcrun)
+
+    def test_l_assembleur_s_appelle_par_chemin_absolu(self):
+        o, _ = self.publier()
+        self.assertEqual('/bin/bash', [c for c in o.appels if c[1].endswith('assembler-app.sh')][0][0])
+
+    def test_en_repetition_la_liste_de_remplacement_est_honoree(self):
+        autre = os.path.join(self.tmp, 'autre-liste.txt')
+        with open(autre, 'w', encoding='utf-8') as f:
+            f.write('ZQXMOTIF\n')
+        e = self.env(GARDE_LISTE=autre, IDENTITE_SIGNATURE='-', NOTARISER='0')
+        o = FauxOutils(e, ressources={'Contents/Resources/n.txt': b'avec zqxmotif'})
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(True), o, e)
+        self.assertIn('ligne 1', str(r.exception))
 
 
 if __name__ == '__main__':
