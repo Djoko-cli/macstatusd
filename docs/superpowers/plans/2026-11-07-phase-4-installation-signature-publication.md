@@ -213,7 +213,7 @@ Ordre : tâches 1 à 11, dans l'ordre. Djoko est requis :
   comportement avec la commande native se vérifie au banc 3.
 - [x] **Étape 4 :** suite complète (`swift test --scratch-path /private/tmp/macstatusd-plan4/build`). Attendu : tout
   vert, 524 tests et plus.
-- [ ] **Étape 5 :** registre du plan 4, rubrique « Pour le README » : moyen de démarrage, champ `saver_start`,
+- [x] **Étape 5 :** registre du plan 4, rubrique « Pour le README » : moyen de démarrage, champ `saver_start`,
   messages. Puis commit « Plan 4 : OFF par SACScreenSaverStartNow, repli open -a (R84) ».
 
 **Contrôle du relecteur :** lire `startScreenSaver()` en entier, avec ses trois sorties (code 0, code ≠ 0, symbole
