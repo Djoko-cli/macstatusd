@@ -106,6 +106,8 @@ Sources locales, ignorées par git. Elles portent des mesures réelles : n'en re
   Config d'essai préparée par le contrôleur avant la tâche 1 : `.superpowers/banc/config-essai-plan4.json` (hors
   de `/private/tmp`, que le système purge).
 - Jamais de `pkill`, `killall` ni `kill` par motif de nom.
+- Un process lancé par launchd ne lit ni n'écrit rien sous `~/Documents` (TCC) : un agent de banc range son
+  binaire, sa config et son journal sous `~/Library/Application Support/<nom du banc>`.
 - Selftest toujours ainsi, `/health` de l'instance réelle contrôlé avant et après, jamais avec
   `SELFTEST_FAUX_ECONOMISEUR=1` :
   `SELFTEST_IGNORER_VERROU=1 SWIFT_SCRATCH=/private/tmp/macstatusd-plan4/selftest bash scripts/selftest.sh`.
