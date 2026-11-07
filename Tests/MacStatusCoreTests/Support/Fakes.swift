@@ -191,7 +191,13 @@ final class FakeSignals: SystemSignals {
         lecturesSession += 1
         return etatSession
     }
-    func displaySnapshot() -> DisplaySnapshot { ecrans }
+    /// Appelé au début de chaque `displaySnapshot()` : un test y fait avancer l'horloge d'essai pour simuler une
+    /// lecture lente des écrans.
+    var surLectureEcrans: (() -> Void)?
+    func displaySnapshot() -> DisplaySnapshot {
+        surLectureEcrans?()
+        return ecrans
+    }
     func hidIdleSeconds() -> Double {
         lecturesHID += 1
         return inactiviteHID

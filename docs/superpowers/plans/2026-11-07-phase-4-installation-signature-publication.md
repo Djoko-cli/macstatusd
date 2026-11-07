@@ -261,7 +261,7 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
     telles quelles.
   - `SystemEvent.signalsRefreshed` donne, dans le moteur, `refreshFacts()` puis `evaluate(immediate: false)`.
 
-- [ ] **Étape 1 : mesure des lectures, tests rouges puis verts**
+- [x] **Étape 1 : mesure des lectures, tests rouges puis verts**
   - `test_appelLent_auDelaDuSeuil_avertitAvecSonNomEtSaDuree` : le faux `displaySnapshot` avance l'horloge
     d'essai de 7 s. Attendu : un WARN qui contient « appel lent : ecrans 7.0 s », et `slow_calls.ecrans.count`
     vaut 1.

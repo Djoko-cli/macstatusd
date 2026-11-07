@@ -35,6 +35,8 @@ public final class EngineCore {
     private let saver: ScreenSaverOracle
     private let actions: CommandActions
     private let publisher: StatePublisher
+    /// Durée de chaque lecture du système de `refreshFacts()` (R85) : `/status` publie celles qui ont dépassé le seuil.
+    private let slowCalls: SlowCallMonitor
 
     private var facts = Facts()
     private var systemAsleep = false
@@ -190,6 +192,7 @@ public final class EngineCore {
         self.saver = oracle
         self.actions = actions
         self.publisher = publisher
+        self.slowCalls = SlowCallMonitor(clock: clock)
         let now = clock.monotonic()
         candidateSince = now
         lastTickAt = now
@@ -386,7 +389,7 @@ public final class EngineCore {
         var next = Facts()
         next.systemAsleep = systemAsleep
 
-        let session = signals.session()
+        let session = slowCalls.measure("session") { signals.session() }
         next.sessionLocked = session.locked
         next.consoleUserLoggedIn = session.loggedIn
         next.onConsole = session.onConsole
@@ -394,7 +397,8 @@ public final class EngineCore {
         // Session vue verrouillée pendant la veille en cours : relue déverrouillée, elle y met fin.
         if sleepInProgress, session.locked { sleepSawLocked = true }
 
-        let display = DisplayTopology.state(signals.displaySnapshot(), screensAsleepNotified: screensAsleepNotified)
+        let display = DisplayTopology.state(slowCalls.measure("ecrans") { signals.displaySnapshot() },
+                                            screensAsleepNotified: screensAsleepNotified)
         if screensAsleepNotified, display.enumerationOK,
            !display.displays.contains(where: { !$0.isPlaceholder && $0.asleep }) {
             screensAsleepNotified = false
@@ -416,7 +420,7 @@ public final class EngineCore {
         // ne l'est pas. Hors de ces cas, la lire coûte un appel au registre pour rien : −1, comme une valeur illisible
         // (`/status` la relit à chaque appel).
         if oracleEvaluated || sleepInProgress {
-            next.hidIdleSeconds = signals.hidIdleSeconds()
+            next.hidIdleSeconds = slowCalls.measure("inactivite_hid") { signals.hidIdleSeconds() }
         } else {
             next.hidIdleSeconds = -1
         }
@@ -425,14 +429,16 @@ public final class EngineCore {
             next.screenSaverActive = false
             next.screenSaverEvidence = "non-évalué"
         } else {
-            let verdict = saver.verdict(now: clock.awake(), hidIdle: next.hidIdleSeconds)
+            let verdict = slowCalls.measure("economiseur") {
+                saver.verdict(now: clock.awake(), hidIdle: next.hidIdleSeconds)
+            }
             next.screenSaverActive = verdict.active
             next.screenSaverRunning = verdict.running
             next.screenSaverDismissed = verdict.dismissed
             next.screenSaverEvidence = verdict.evidence
         }
 
-        next.secureInputActive = signals.secureInputActive()
+        next.secureInputActive = slowCalls.measure("saisie_securisee") { signals.secureInputActive() }
 
         // L'inactivité change à chaque lecture sans décider de rien : seule la décision fait écrire la ligne.
         if !next.sameDecision(as: facts) {
@@ -1146,6 +1152,7 @@ public final class EngineCore {
             "saver_detection": saverDetection,
             "saver_dismissal": actions.screenSaverDismissal.rawValue,
             "saver_start": actions.screenSaverStart.rawValue,
+            "slow_calls": slowCalls.snapshot,
             "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
             "display_list": facts.displays.map { display -> [String: Any] in
                 ["id": display.idText, "main": display.isMain, "asleep": display.asleep,
