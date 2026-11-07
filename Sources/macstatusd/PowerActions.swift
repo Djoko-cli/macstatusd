@@ -290,7 +290,8 @@ final class PowerActions: CommandActions {
     // MARK: - Exécution
 
     /// Lance sans attendre et sans tuyau : ne peut ni bloquer ni fuir. `masked` (commandes de la
-    /// config) : le journal ne montre que l'exécutable et le nombre d'arguments.
+    /// config) : le journal ne montre que l'exécutable et le nombre d'arguments. À la fin du process, le code de
+    /// sortie est journalisé : INFO s'il vaut 0, WARN sinon (une commande qui échoue ne passe plus inaperçue).
     private func launch(_ argv: [String], label: String, masked: Bool = false) {
         queue.async {
             guard let executable = argv.first else { return }
@@ -300,6 +301,16 @@ final class PowerActions: CommandActions {
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
+            process.terminationHandler = { finished in
+                let code = finished.terminationStatus
+                if finished.terminationReason == .uncaughtSignal {
+                    logWarn("\(label) terminé par le signal \(code)")
+                } else if code == 0 {
+                    logInfo("\(label) terminé (code 0)")
+                } else {
+                    logWarn("\(label) terminé (code \(code))")
+                }
+            }
             do {
                 try process.run()
                 let shown = masked ? commandSummaryForLog(argv) : argv.joined(separator: " ")

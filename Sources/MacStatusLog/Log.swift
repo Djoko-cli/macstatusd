@@ -86,14 +86,10 @@ public final class Log: LogSink {
 
     init() {}
 
-    /// Choisit le chemin de log : explicite, sinon /opt/macstatusd/logs pour root,
-    /// sinon ~/Library/Logs/macstatusd.
+    /// Chemin du journal quand la config n'en donne pas : `~/Library/Logs/<nom>/macstatusd.log`
+    /// (`SupportPaths.logs`).
     public static func defaultLogFile() -> URL {
-        if getuid() == 0 {
-            return URL(fileURLWithPath: "/opt/macstatusd/logs/macstatusd.log")
-        }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent("Library/Logs/macstatusd/macstatusd.log")
+        URL(fileURLWithPath: SupportPaths.current().logs + "/macstatusd.log")
     }
 
     /// Faut-il écrire aussi le journal sur la sortie ? Oui dans un terminal ou avec `--foreground`. `--debug` seul n'y

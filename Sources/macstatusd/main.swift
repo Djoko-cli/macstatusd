@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CryptoKit
 import MacStatusCore
 import MacStatusLog
 
@@ -13,7 +14,7 @@ CoreLog.sink = Log.shared
 // MARK: - Arguments
 
 struct Options {
-    var configPath = macstatusdConfigPath
+    var configPath = SupportPaths.current().config
     var portOverride: UInt16?
     var debug = false
     var foreground = false
@@ -60,22 +61,23 @@ func parseOptions() -> Options {
         case "--no-webhook":
             options.disableWebhook = true
         case "--version", "-v":
-            print("macstatusd \(macstatusdVersion)")
+            print(BuildInfo.current().versionLine)
             exit(0)
         case "--help", "-h":
+            let paths = SupportPaths.current()
             print("""
             macstatusd \(macstatusdVersion) — état ON/OFF du Mac pour Homebridge / HomeKit
 
             Usage: macstatusd [options]
 
-              --config <chemin>   configuration JSON (défaut: \(macstatusdConfigPath))
+              --config <chemin>   configuration JSON (défaut: \(paths.config))
               --port <n>          surcharge le port HTTP (1 à 65535)
               --debug             journalisation détaillée
               --foreground, -f    écrit aussi sur la sortie standard
               --once              affiche l'état et les faits en JSON, puis quitte
               --watch             affiche l'état en continu (diagnostic)
               --no-webhook        n'envoie aucun webhook (tests)
-              --version, -v       version
+              --version, -v       version et provenance du binaire (git, date)
               --help, -h          cette aide
 
             Endpoints HTTP:
@@ -103,6 +105,13 @@ func parseOptions() -> Options {
 }
 
 let options = parseOptions()
+
+/// Empreinte SHA-256 du binaire en cours d'exécution (64 chiffres hexadécimaux), ou `nil` s'il est illisible :
+/// elle relie un journal à l'exécutable exact qui l'a écrit.
+func executableDigest() -> String? {
+    guard let url = Bundle.main.executableURL, let data = try? Data(contentsOf: url) else { return nil }
+    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
 
 // Sortie ligne par ligne même quand elle est redirigée (journaux launchd, pipes).
 setvbuf(stdout, nil, _IOLBF, 0)
@@ -158,7 +167,8 @@ if diagnosticMode {
 }
 
 let actions = PowerActions(config: config)
-let engine = EngineRunner(config: config, actions: actions)
+let buildInfo = BuildInfo.current()
+let engine = EngineRunner(config: config, actions: actions, buildInfo: buildInfo)
 
 if options.once {
     let snapshot = engine.inspect()
@@ -176,6 +186,7 @@ if options.once {
     output["saver_start"] = status["saver_start"]
     output["main_display"] = status["main_display"]
     output["display_list"] = status["display_list"]
+    output["build"] = status["build"]
     output["version"] = macstatusdVersion
     if let configError { output["config_error"] = configError }
     let data = (try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])) ?? Data()
@@ -242,6 +253,10 @@ if !isAquaSession() {
             + "peuvent être indétectables. Installer macstatusd comme LaunchAgent (session Aqua).")
 }
 if let path = Log.shared.currentLogPath { logInfo("journal: \(path)") }
+logInfo("binaire : sha256 \(executableDigest() ?? "illisible")")
+if !buildInfo.version.isEmpty, buildInfo.version != macstatusdVersion {
+    logWarn("build-info.json annonce la version \(escapeForLog(buildInfo.version, limit: 32))")
+}
 
 let powerWatcher = PowerWatcher(queue: engine.queue)
 engine.attach(to: powerWatcher)

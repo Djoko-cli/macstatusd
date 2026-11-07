@@ -380,25 +380,25 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
   - un `argv[0]` relatif ou non exécutable donne `[]` et l'avertissement « off_command ignoré : <chemin échappé>
     n'est pas un chemin absolu exécutable » (ou « wake_command … »).
 
-- [ ] **Étape 1 : tests rouges**
+- [x] **Étape 1 : tests rouges**
   - `test_cheminsParDefaut_sousLeDossierPersonnel`, `test_variableDeSupport_lEmporte`,
     `test_nomDuPaquet_donneLesDossiers` (`macstatusd-essai`) et `test_nomInvalide_retombeSurMacstatusd` (`../x`,
     `a/b`, `""`) ;
   - `test_buildInfo_valide`, `test_buildInfo_absent_compilationInconnue`, `test_buildInfo_illisible_compilationInconnue` ;
   - `test_offCommandRelatif_ignoreAvecAvertissement`, `test_offCommandNonExecutable_ignore`,
     `test_offCommandAbsoluExecutable_garde` (`/usr/bin/true`).
-- [ ] **Étape 2 :** mise en œuvre.
+- [x] **Étape 2 :** mise en œuvre.
   - Le chemin de config par défaut devient `SupportPaths.config`. Le marqueur et le journal suivent `SupportPaths`.
     `--help` montre le chemin résolu.
   - `--version` imprime `versionLine`.
   - Au démarrage, une ligne INFO « binaire : sha256 <64 hex> » (CryptoKit, sur `Bundle.main.executableURL`).
   - Dans `PowerActions.launch`, un `terminationHandler` journalise le code de sortie : INFO « <libellé> terminé
     (code 0) », WARN si le code est différent. Stdout et stderr restent jetés.
-- [ ] **Étape 3 : contrôles par `grep`**
+- [x] **Étape 3 : contrôles par `grep`**
   - F29 côté config : aucune sortie d'`install.sh`, de `--once` ou du journal de démarrage ne montre une URL de
     webhook.
   - F36 : `grep -rn '/tmp/' scripts diagnostics outils` ne trouve que des `mktemp`.
-- [ ] **Étape 4 :** suite complète, selftest (le chemin par défaut a changé, et le selftest passe `--config` à
+- [x] **Étape 4 :** suite complète, selftest (le chemin par défaut a changé, et le selftest passe `--config` à
   chaque instance), registre. Commit « Plan 4 : chemins de l'espace utilisateur, version traçable, commandes de
   remplacement vérifiées (C2, F22, F83) ».
 

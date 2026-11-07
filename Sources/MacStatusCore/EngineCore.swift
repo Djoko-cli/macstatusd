@@ -37,6 +37,8 @@ public final class EngineCore {
     private let publisher: StatePublisher
     /// Durée de chaque lecture du système de `refreshFacts()` (R85) : `/status` publie celles qui ont dépassé le seuil.
     private let slowCalls: SlowCallMonitor
+    /// Provenance du binaire, pour `/status` (champ `build`).
+    private let buildInfo: BuildInfo
 
     private var facts = Facts()
     private var systemAsleep = false
@@ -188,7 +190,9 @@ public final class EngineCore {
                 signals: SystemSignals,
                 oracle: ScreenSaverOracle,
                 actions: CommandActions,
-                publisher: StatePublisher) {
+                publisher: StatePublisher,
+                buildInfo: BuildInfo = .unknown) {
+        self.buildInfo = buildInfo
         self.config = config
         self.clock = clock
         self.signals = signals
@@ -1174,6 +1178,7 @@ public final class EngineCore {
             "saver_dismissal": actions.screenSaverDismissal.rawValue,
             "saver_start": actions.screenSaverStart.rawValue,
             "slow_calls": slowCalls.snapshot,
+            "build": buildInfo.statusDictionary,
             "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
             "display_list": facts.displays.map { display -> [String: Any] in
                 ["id": display.idText, "main": display.isMain, "asleep": display.asleep,

@@ -125,17 +125,15 @@ private struct JSONBag {
         raw[key] as? [String]
     }
 
-    /// Commande : tableau argv, ou chaîne passée à `/bin/sh -c`. Un `argv[0]` qui n'est pas un
-    /// chemin absolu est gardé, avec un avertissement : `Process` ne cherche pas dans le `PATH`.
+    /// Commande : tableau argv, ou chaîne passée à `/bin/sh -c`. Un `argv[0]` qui n'est pas un chemin absolu
+    /// exécutable est écarté (`[]`), avec un avertissement : `Process` ne cherche pas dans le `PATH`.
     mutating func command(_ key: String, _ fallback: [String]) -> [String] {
         guard let value = raw[key] else { return fallback }
         switch value {
         case let argv as [String]:
-            if let first = argv.first, !first.hasPrefix("/") {
-                warn("\(key) : argv[0]=\"\(escapeForLog(first, limit: 64))\" n'est pas un chemin absolu "
-                     + "(le PATH n'est pas consulté, la commande échouera sans doute)")
-            }
-            return argv
+            let checked = CommandOverride.validate(argv, label: key, isExecutable: CommandOverride.isExecutableFile)
+            if let warning = checked.warning { warn(warning) }
+            return checked.argv
         case let text as String:
             return text.isEmpty ? fallback : ["/bin/sh", "-c", text]
         default:
@@ -249,7 +247,7 @@ public struct Config {
 
     // --- Journalisation ---
     public var logLevel = "info"
-    /// "" = automatique (/opt/macstatusd/logs si root, ~/Library/Logs sinon).
+    /// "" = automatique (~/Library/Logs/<nom>/macstatusd.log).
     public var logFile = ""
 
     // --- Durées en secondes (calculées une fois ici, au lieu d'un `Double(…MS) / 1000` à chaque emploi) ---

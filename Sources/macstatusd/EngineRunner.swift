@@ -27,7 +27,7 @@ final class EngineRunner: EngineFacade {
     private let shuttingDownLock = NSLock()
     private var shuttingDown = false
 
-    init(config: Config, actions: PowerActions) {
+    init(config: Config, actions: PowerActions, buildInfo: BuildInfo) {
         self.config = config
         // Le client webhook vit sur la file du moteur : transport et délais y rappellent.
         let clock = SystemClock()
@@ -44,7 +44,7 @@ final class EngineRunner: EngineFacade {
             signals: signals
         )
         core = EngineCore(config: config, clock: clock, signals: signals, oracle: oracle,
-                          actions: actions, publisher: webhook)
+                          actions: actions, publisher: webhook, buildInfo: buildInfo)
     }
 
     // MARK: - Cycle de vie

@@ -39,13 +39,13 @@ class EngineCoreTestCase: XCTestCase {
     /// Moteur câblé comme l'exécuteur le câble, mais sur les faux. `ecoute` : ce que le serveur HTTP
     /// a annoncé de son port (`.ready` : détenu, `.portBusy` : occupé, `nil` : rien encore). Sans port
     /// détenu, le moteur ne publie rien (tâche 16).
-    func moteur(_ config: Config = Config(), ecoute: ListenerStatus? = .ready) -> EngineCore {
-        let core = moteurBrut(config)
+    func moteur(_ config: Config = Config(), ecoute: ListenerStatus? = .ready, build: BuildInfo = .unknown) -> EngineCore {
+        let core = moteurBrut(config, build: build)
         if let ecoute { core.setListenerStatus(ecoute) }
         return core
     }
 
-    func moteurBrut(_ config: Config = Config()) -> EngineCore {
+    func moteurBrut(_ config: Config = Config(), build: BuildInfo = .unknown) -> EngineCore {
         let oracle = ScreenSaverOracle(
             dismissOnInput: config.saverDismissOnInput,
             dismissGrace: config.saverDismissGrace,
@@ -53,7 +53,7 @@ class EngineCoreTestCase: XCTestCase {
             signals: signaux
         )
         return EngineCore(config: config, clock: horloge, signals: signaux, oracle: oracle,
-                          actions: actions, publisher: publieur)
+                          actions: actions, publisher: publieur, buildInfo: build)
     }
 
     func scruter(_ core: EngineCore, _ secondes: Double) {

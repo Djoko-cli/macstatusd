@@ -12,7 +12,7 @@ public enum RestartMarker {
     /// Âge au-delà duquel un marqueur est périmé : 10 minutes.
     public static let maxAge: TimeInterval = 600
     /// Variable d'environnement qui remplace le dossier de support (tests, essais hors installation).
-    public static let supportDirectoryVariable = "MACSTATUSD_SUPPORT_DIR"
+    public static let supportDirectoryVariable = SupportPaths.supportDirectoryVariable
 
     public enum Outcome: Equatable {
         /// Aucun marqueur (ou autre chose qu'un fichier ordinaire : jamais touché).
@@ -23,12 +23,12 @@ public enum RestartMarker {
         case stale(ageSeconds: Int)
     }
 
-    /// Dossier de support : `MACSTATUSD_SUPPORT_DIR` s'il est défini et non vide, sinon
-    /// `~/Library/Application Support/macstatusd`.
+    /// Dossier de support (`SupportPaths.support`) : `MACSTATUSD_SUPPORT_DIR` s'il est défini et non vide, sinon
+    /// `~/Library/Application Support/<nom>`, où `<nom>` est celui du paquet (`macstatusd` par défaut).
     public static func supportDirectory(environment: [String: String] = ProcessInfo.processInfo.environment,
-                                        home: String = NSHomeDirectory()) -> String {
-        if let override = environment[supportDirectoryVariable], !override.isEmpty { return override }
-        return home + "/Library/Application Support/macstatusd"
+                                        home: String = NSHomeDirectory(),
+                                        bundleSupportName: String? = SupportPaths.bundleSupportName) -> String {
+        SupportPaths.resolve(environment: environment, bundleSupportName: bundleSupportName, home: home).support
     }
 
     /// Lit le marqueur de `directory` et le supprime s'il existe (récent ou périmé).

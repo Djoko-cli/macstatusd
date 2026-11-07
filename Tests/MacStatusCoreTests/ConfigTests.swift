@@ -360,15 +360,62 @@ final class ConfigOriginTests: XCTestCase {
         }
     }
 
+    /// F83 : une commande de remplacement relative est écartée (`Process` ne consulte pas le PATH), avec un
+    /// avertissement qui nomme la clé et le chemin. Une chaîne (`/bin/sh -c`) reste valable.
     func test_commandeRelative_avertit() {
         let r = Config.parse(data: Data(#"{"off_command": ["pmset", "displaysleepnow"], "wake_command": ["caffeinate", "-u"]}"#.utf8))
-        XCTAssertEqual(r.config.offCommand, ["pmset", "displaysleepnow"])
-        XCTAssertTrue(r.warnings.contains { $0.hasPrefix("off_command") && $0.contains("absolu") }, "\(r.warnings)")
-        XCTAssertTrue(r.warnings.contains { $0.hasPrefix("wake_command") && $0.contains("absolu") }, "\(r.warnings)")
+        XCTAssertEqual(r.config.offCommand, [])
+        XCTAssertEqual(r.config.wakeCommand, [])
+        XCTAssertTrue(r.warnings.contains("off_command ignoré : pmset n'est pas un chemin absolu exécutable"), "\(r.warnings)")
+        XCTAssertTrue(r.warnings.contains("wake_command ignoré : caffeinate n'est pas un chemin absolu exécutable"), "\(r.warnings)")
 
         let ok = Config.parse(data: Data(#"{"off_command": ["/usr/bin/true"], "wake_command": "echo essai"}"#.utf8))
+        XCTAssertEqual(ok.config.offCommand, ["/usr/bin/true"])
         XCTAssertEqual(ok.config.wakeCommand, ["/bin/sh", "-c", "echo essai"])
         XCTAssertTrue(ok.warnings.isEmpty, "\(ok.warnings)")
+    }
+
+    func test_offCommandRelatif_ignoreAvecAvertissement() {
+        let (argv, avertissement) = CommandOverride.validate(["pmset", "displaysleepnow"], label: "off_command",
+                                                             isExecutable: { _ in true })
+        XCTAssertEqual(argv, [])
+        XCTAssertEqual(avertissement, "off_command ignoré : pmset n'est pas un chemin absolu exécutable")
+    }
+
+    func test_offCommandNonExecutable_ignore() {
+        let (argv, avertissement) = CommandOverride.validate(["/private/tmp/inexistant", "x"], label: "wake_command",
+                                                             isExecutable: { _ in false })
+        XCTAssertEqual(argv, [])
+        XCTAssertEqual(avertissement, "wake_command ignoré : /private/tmp/inexistant n'est pas un chemin absolu exécutable")
+
+        // Un chemin inexistant, par la vraie lecture du système de fichiers (un dossier ne s'exécute pas non plus).
+        for chemin in ["/private/tmp/macstatusd-inexistant-essai", "/usr/bin"] {
+            let r = Config.parse(data: Data(#"{"off_command": ["\#(chemin)"]}"#.utf8))
+            XCTAssertEqual(r.config.offCommand, [], chemin)
+            XCTAssertTrue(r.warnings.contains { $0.hasPrefix("off_command ignoré") }, "\(chemin) : \(r.warnings)")
+        }
+    }
+
+    func test_offCommandAbsoluExecutable_garde() {
+        let (argv, avertissement) = CommandOverride.validate(["/usr/bin/true", "-x"], label: "off_command",
+                                                             isExecutable: { $0 == "/usr/bin/true" })
+        XCTAssertEqual(argv, ["/usr/bin/true", "-x"])
+        XCTAssertNil(avertissement)
+        let reel = CommandOverride.validate(["/usr/bin/true"], label: "off_command", isExecutable: CommandOverride.isExecutableFile)
+        XCTAssertEqual(reel.argv, ["/usr/bin/true"])
+        XCTAssertNil(reel.warning)
+    }
+
+    func test_commandeVide_resteVideSansAvertissement() {
+        let (argv, avertissement) = CommandOverride.validate([], label: "off_command", isExecutable: { _ in false })
+        XCTAssertEqual(argv, [])
+        XCTAssertNil(avertissement)
+    }
+
+    /// L'avertissement montre le chemin échappé, pas des caractères de contrôle bruts.
+    func test_commandeAvecCaractereDeControle_avertissementEchappe() {
+        let (_, avertissement) = CommandOverride.validate(["x\u{1B}[31m"], label: "off_command", isExecutable: { _ in false })
+        XCTAssertEqual(avertissement, "off_command ignoré : x\\u{1B}[31m n'est pas un chemin absolu exécutable")
     }
 
     func test_bindAddressInvalide_repliFermeSurBoucleLocale() {   // Ruling R32
