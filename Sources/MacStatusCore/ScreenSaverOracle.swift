@@ -184,6 +184,9 @@ public final class ScreenSaverOracle {
     /// `didstart`, ou pour vérifier que l'hôte retenu vit encore. Seul un hôte nouvellement retenu
     /// corrobore le `didstart` ; l'hôte d'une session déjà ouverte ne prouve pas qu'un autre est né.
     private func hostSource(now: Double) -> Source? {
+        // Invariant (R88) : `launchedSecondsAgo` est un âge mural, `now` et `pendingDidStartAt` sont sur l'horloge hors
+        // veille. Leur différence n'est juste que si l'attente (5 s) ne traverse aucune veille ; `noteSystemWake()`
+        // oublie l'attente au réveil, ce qui garantit cette condition.
         let waitingSince = pendingDidStartAt.flatMap { now - $0 < Self.corroborationWindow ? $0 : nil }
         guard waitingSince != nil || retainedHostPID != nil else { return nil }
         let hosts = signals.saverHosts()

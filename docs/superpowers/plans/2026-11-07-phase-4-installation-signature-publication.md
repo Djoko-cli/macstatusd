@@ -325,7 +325,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
   - Correctif : retirer `screensAsleepNotified = false` de `resync()`. `refreshFacts()` l'efface déjà quand aucun
     écran physique n'est éteint.
   - Mutation : remettre la ligne. Le test échoue.
-- [ ] **Étape 2 : R88.** À `ScreenSaverOracle.swift`, vers la ligne 192, l'âge mural d'un hôte se compare à un
+- [x] **Étape 2 : R88.** À `ScreenSaverOracle.swift`, vers la ligne 192, l'âge mural d'un hôte se compare à un
   instant hors veille. C'est juste tant que l'attente d'un `didstart` (5 s) ne traverse aucune veille, et
   `noteSystemWake()` l'oublie.
   - Écrire cet invariant en commentaire à cette ligne.

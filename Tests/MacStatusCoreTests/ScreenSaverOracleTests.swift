@@ -679,6 +679,21 @@ final class ScreenSaverOracleTests: XCTestCase {
         XCTAssertEqual(lignes(contenant: "didstart non corroboré"), 0, "oubliée, l'attente n'expire pas")
     }
 
+    /// R88 : l'âge d'un hôte est mural, l'attente d'un `didstart` est sur l'horloge hors veille. Une veille entre
+    /// les deux fausserait la comparaison ; le réveil oublie donc l'attente. L'hôte qui paraît ancien (la veille
+    /// compte dans son âge) ne corrobore rien, et l'attente oubliée n'expire pas.
+    func test_veilleApresDidstart_attenteOubliee_hoteAncienNeCorroborePas() {
+        signaux.drapeauSAC = nil
+        let oracle = nouvelOracle()
+        oracle.noteDidStart(now: t0)
+        oracle.noteSystemWake()
+        signaux.hotes = [SaverHost(pid: 4242, launchedSecondsAgo: 3600.2)]
+        XCTAssertFalse(oracle.verdict(now: t0 + 0.45, hidIdle: 300).running)
+        XCTAssertFalse(oracle.verdict(now: t0 + 6, hidIdle: 306).running)
+        XCTAssertEqual(signaux.lecturesHotes, 0, "aucune attente : les hôtes ne sont pas lus")
+        XCTAssertEqual(lignes(contenant: "didstart non corroboré"), 0, "oubliée, l'attente n'expire pas")
+    }
+
     // MARK: - Résidus R76
 
     /// R76 (a) : une source autre que SAC (ici le process) consomme le `didstop` en attente, sans effet ni
