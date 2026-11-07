@@ -267,7 +267,6 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
     func test_reveilEtResynchronisation_oublientLeDidstartEnAttente() {
         let declencheurs: [(String, (EngineCore) -> Void)] = [
             ("avis de réveil", { $0.handle(.systemDidWake) }),
-            ("resynchronisation", { $0.resync() }),
             // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
             ("fin de veille sans avis", { core in
                 core.willSleep {}
@@ -784,14 +783,13 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
         XCTAssertEqual(core.inspect().facts.displayEvidence, "awake")
     }
 
-    /// L'avis s'efface aussi sur le réveil des écrans, sur le réveil du système (avis IOKit, fin de veille sans avis,
-    /// ou l'un des deux rattrapages de `tick()` : trou couvert par la veille, réveil perdu) et à la
-    /// resynchronisation, même si un écran physique dort encore : l'avis dit alors une chose périmée.
-    func test_avisEcransEteints_effaceParLesReveilsEtLaResynchronisation() {
+    /// L'avis s'efface aussi sur le réveil des écrans et sur le réveil du système (avis IOKit, fin de veille sans
+    /// avis, ou l'un des deux rattrapages de `tick()` : trou couvert par la veille, réveil perdu), même si un écran
+    /// physique dort encore : l'avis dit alors une chose périmée. La resynchronisation, elle, le garde (M6).
+    func test_avisEcransEteints_effaceParLesReveils() {
         let effaceurs: [(String, (EngineCore) -> Void)] = [
             ("réveil des écrans", { $0.handle(.screensDidWake) }),
             ("réveil du système", { $0.handle(.systemDidWake) }),
-            ("resynchronisation", { $0.resync() }),
             // Plan 3, tâche 5 : la veille annoncée n'aboutit pas, une frappe y met fin (2,7 s après l'annonce).
             ("fin de veille sans avis", { core in
                 core.willSleep {}
@@ -822,6 +820,26 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
             effacer(core)
             XCTAssertEqual(core.inspect().facts.displayEvidence, "awake", "\(nom) : l'avis est effacé")
         }
+    }
+
+    /// M6 (R75) : `/resync` ne relit que les faits, il n'est pas un réveil. L'avis d'extinction (écrans physiques
+    /// éteints, virtuel principal éveillé) survit : l'OFF `display-asleep` tient, et aucun ON n'est publié de force.
+    func test_resync_gardeLAvisDExtinction_avecEcranVirtuelEveille() {
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        let core = moteur()
+        core.start()
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        core.handle(.screensDidSleep)
+        scruter(core, 0.5)
+        scruter(core, 0.5)
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "display-asleep")
+
+        core.resync()
+        XCTAssertEqual(core.inspect().facts.displayEvidence, "screensDidSleep", "l'avis a survécu à /resync")
+        XCTAssertFalse(core.currentState)
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "display-asleep")
+        XCTAssertEqual(publieur.publications.filter { $0.force && $0.etat }.count, 0, "\(publieur.publications)")
     }
 
     /// Une énumération qui échoue ne prouve rien (décision 2 de la tâche 4) : elle n'efface pas l'avis

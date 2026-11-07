@@ -316,7 +316,7 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
 **Fichiers :** `Sources/MacStatusCore/EngineCore.swift`, `Sources/MacStatusCore/ScreenSaverOracle.swift`, tests du
 moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
 
-- [ ] **Étape 1 : M6 (R75), `/resync` ne doit plus effacer l'avis d'extinction**
+- [x] **Étape 1 : M6 (R75), `/resync` ne doit plus effacer l'avis d'extinction**
   - Test rouge `test_resync_gardeLAvisDExtinction_avecEcranVirtuelEveille` :
     - avis `screensDidSleep`, écrans physiques éteints, fantôme éveillé ;
     - puis `resync()`.

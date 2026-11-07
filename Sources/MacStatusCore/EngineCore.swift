@@ -1076,7 +1076,8 @@ public final class EngineCore {
 
     public func resync() {
         guard !isShutDown else { return }
-        screensAsleepNotified = false
+        // L'avis d'extinction des écrans survit : `/resync` ne relit que les faits, et `refreshFacts()` l'efface
+        // déjà quand plus aucun écran physique ne dort (M6).
         if sleepInProgress {
             // Une veille annoncée sans réveil : le Mac s'endort, `system_asleep` reste vrai.
             logDebug("resynchronisation pendant une veille annoncée : veille gardée")
