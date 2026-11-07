@@ -38,8 +38,16 @@ final class PowerActions: CommandActions {
     /// Code rendu par `SACScreenSaverStopNow` quand l'agent de session ne répond pas (EINVAL).
     private static let noSessionAgentReplyCode: Int32 = 22
 
+    /// `SACScreenSaverStartNow` (login.framework) : démarre l'économiseur comme le système à l'inactivité, sans
+    /// argument. Rend 0 (mesuré au banc 2). Résolue une fois à la création ; `nil` si le cadre ou le symbole manquent.
+    private typealias SACStartNow = @convention(c) () -> Int32
+    private let sacStartNow: SACStartNow?
+
     /// Connu dès la création : natif si la fonction est résolue, sinon le repli `killall`.
     let screenSaverDismissal: ScreenSaverDismissal
+
+    /// Connu dès la création : natif si la fonction est résolue, sinon le repli `open -a`.
+    let screenSaverStart: ScreenSaverStart
 
     init(config: Config) {
         offCommandOverride = config.offCommand
@@ -47,6 +55,15 @@ final class PowerActions: CommandActions {
         let stopNow = Self.resolveSACStopNow()
         sacStopNow = stopNow
         screenSaverDismissal = stopNow == nil ? .processKill : .native
+        let startNow = Self.resolveSACStartNow()
+        sacStartNow = startNow
+        screenSaverStart = startNow == nil ? .openApp : .native
+    }
+
+    /// Résout la fonction, sans l'appeler (voir `resolveSACStopNow`) ; le moteur annonce le repli au démarrage.
+    private static func resolveSACStartNow() -> SACStartNow? {
+        guard let symbol = LoginFramework.symbol("SACScreenSaverStartNow") else { return nil }
+        return unsafeBitCast(symbol, to: SACStartNow.self)
     }
 
     /// Résout la fonction, sans l'appeler. login.framework s'ouvre une seule fois pour tout le process
@@ -73,7 +90,26 @@ final class PowerActions: CommandActions {
         }
     }
 
+    /// Démarre l'économiseur (OFF). Natif : `SACScreenSaverStartNow` sur la file des actions, jamais sur celle du
+    /// moteur ; code 0 attendu. Code non nul : repli `open -a` juste après le WARN. Symbole absent : `open -a`.
     func startScreenSaver() {
+        guard let startNow = sacStartNow else {
+            launchScreenSaverApp()
+            return
+        }
+        queue.async { [self] in
+            let code = startNow()
+            if code == 0 {
+                logInfo("économiseur: SACScreenSaverStartNow appelé (code 0)")
+            } else {
+                logWarn("économiseur: SACScreenSaverStartNow a rendu le code \(code) → repli open -a ScreenSaverEngine")
+                launchScreenSaverApp()
+            }
+        }
+    }
+
+    /// Repli : lance l'app de l'économiseur (`open -a`), sur la file des actions.
+    private func launchScreenSaverApp() {
         launch(["/usr/bin/open", "-a", screenSaverAppPath], label: "démarrage économiseur")
     }
 

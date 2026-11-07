@@ -167,11 +167,13 @@ if options.once {
     output["reason"] = snapshot.reason
     output["session_context"] = isAquaSession() ? "aqua" : "headless"
     // Comme dans /status : raison des faits, économiseur détecté par SAC, ou par l'hôte apparu après didstart
-    // (repli), moyen de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall), et topologie des écrans.
+    // (repli), moyen de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall), moyen de le démarrer lors d'un OFF (SACScreenSaverStartNow, ou
+    // le repli open -a), et topologie des écrans.
     let status = engine.statusSnapshot()
     output["facts_reason"] = status["facts_reason"]
     output["saver_detection"] = status["saver_detection"]
     output["saver_dismissal"] = status["saver_dismissal"]
+    output["saver_start"] = status["saver_start"]
     output["main_display"] = status["main_display"]
     output["display_list"] = status["display_list"]
     output["version"] = macstatusdVersion

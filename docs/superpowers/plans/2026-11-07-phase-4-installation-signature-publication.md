@@ -190,16 +190,16 @@ Ordre : tâches 1 à 11, dans l'ordre. Djoko est requis :
 `.superpowers/banc/outils/saver-ctl.swift demarrage` l'a appelée et a obtenu 0. Ont suivi un `didstart` avec
 `runFromPref`, puis le verrou, comme après l'inactivité.
 
-- [ ] **Étape 1 : tests rouges**
+- [x] **Étape 1 : tests rouges**
   - `test_demarrage_annonceLeMoyenDeDemarrage_natif` : `FakeActions.screenSaverStart = .native`. Attendu :
     - le journal contient l'INFO « économiseur : moyen de démarrage SACScreenSaverStartNow (commande du système) » ;
     - `statusSnapshot()["saver_start"]` vaut `"SACScreenSaverStartNow"`.
   - `test_demarrage_sansStartNow_annonceLeRepli` : `.openApp`. Attendu :
     - le WARN « SACScreenSaverStartNow indisponible → repli open -a ScreenSaverEngine » ;
     - `saver_start` vaut `"open -a ScreenSaverEngine"`.
-- [ ] **Étape 2 :** `swift test --scratch-path /private/tmp/macstatusd-plan4/build --filter EngineCoreSaverTests`.
+- [x] **Étape 2 :** `swift test --scratch-path /private/tmp/macstatusd-plan4/build --filter EngineCoreSaverTests`.
   Attendu : échec de compilation, `screenSaverStart` inconnu.
-- [ ] **Étape 3 : mise en œuvre**
+- [x] **Étape 3 : mise en œuvre**
   - Dans le moteur, l'annonce de démarrage s'écrit à côté de celle du moyen d'écartement
     (`EngineCore.swift`, vers la ligne 207). Elle s'ajoute aussi à `statusSnapshot()` et à `--once`.
   - Dans `PowerActions`, le symbole se résout une fois, à la création, par `LoginFramework.symbol`, comme
@@ -211,7 +211,7 @@ Ordre : tâches 1 à 11, dans l'ordre. Djoko est requis :
 
   La règle « session déjà verrouillée → extinction de l'écran » de `requestOff` reste telle quelle. Son
   comportement avec la commande native se vérifie au banc 3.
-- [ ] **Étape 4 :** suite complète (`swift test --scratch-path /private/tmp/macstatusd-plan4/build`). Attendu : tout
+- [x] **Étape 4 :** suite complète (`swift test --scratch-path /private/tmp/macstatusd-plan4/build`). Attendu : tout
   vert, 524 tests et plus.
 - [ ] **Étape 5 :** registre du plan 4, rubrique « Pour le README » : moyen de démarrage, champ `saver_start`,
   messages. Puis commit « Plan 4 : OFF par SACScreenSaverStartNow, repli open -a (R84) ».

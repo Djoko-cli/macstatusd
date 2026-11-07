@@ -607,6 +607,27 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
         XCTAssertEqual(repli.statusSnapshot()["saver_dismissal"] as? String, "killall ScreenSaverEngine")
     }
 
+    /// R84 : le moyen de démarrage de l'économiseur (OFF) est annoncé au démarrage et publié dans `/status`.
+    func test_demarrage_annonceLeMoyenDeDemarrage_natif() {
+        actions.screenSaverStart = .native
+        let core = moteur()
+        core.start()
+        let annonce = "économiseur : moyen de démarrage SACScreenSaverStartNow (commande du système)"
+        XCTAssertEqual(journal.lines.filter { $0.0 == .info && $0.1 == annonce }.count, 1)
+        XCTAssertFalse(journal.lines.contains { $0.0 == .warn && $0.1.contains("SACScreenSaverStartNow") })
+        XCTAssertEqual(core.statusSnapshot()["saver_start"] as? String, "SACScreenSaverStartNow")
+    }
+
+    func test_demarrage_sansStartNow_annonceLeRepli() {
+        actions.screenSaverStart = .openApp
+        let core = moteur()
+        core.start()
+        let avertissement = "SACScreenSaverStartNow indisponible → repli open -a ScreenSaverEngine"
+        XCTAssertEqual(journal.lines.filter { $0.0 == .warn && $0.1 == avertissement }.count, 1)
+        XCTAssertFalse(journal.lines.contains { $0.0 == .info && $0.1.contains("SACScreenSaverStartNow") })
+        XCTAssertEqual(core.statusSnapshot()["saver_start"] as? String, "open -a ScreenSaverEngine")
+    }
+
     // MARK: - Écrans : fantôme, extinction, topologie (plan 3, tâche 4)
 
     /// Instantané d'une énumération réussie.

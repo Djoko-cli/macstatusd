@@ -209,6 +209,12 @@ public final class EngineCore {
             logWarn("SACScreenSaverStopNow indisponible → repli killall ScreenSaverEngine, "
                     + "sans effet sous macOS 27 sur l'économiseur d'inactivité")
         }
+        switch actions.screenSaverStart {
+        case .native:
+            logInfo("économiseur : moyen de démarrage SACScreenSaverStartNow (commande du système)")
+        case .openApp:
+            logWarn("SACScreenSaverStartNow indisponible → repli open -a ScreenSaverEngine")
+        }
         if signals.saverSessionFlag() == nil {
             logWarn("économiseur : SACScreenSaverIsRunning indisponible → repli sur l'hôte apparu après didstart ; "
                     + "les paysages aériens ne seront pas détectés")
@@ -1139,6 +1145,7 @@ public final class EngineCore {
             "publishing_reason": authorizationVerdict().reason,
             "saver_detection": saverDetection,
             "saver_dismissal": actions.screenSaverDismissal.rawValue,
+            "saver_start": actions.screenSaverStart.rawValue,
             "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
             "display_list": facts.displays.map { display -> [String: Any] in
                 ["id": display.idText, "main": display.isMain, "asleep": display.asleep,

@@ -33,6 +33,18 @@ public protocol CommandActions: AnyObject {
     /// l'oracle (`noteDismissed`) : l'ordre y compte lui-même comme preuve (`écarté-par-commande`). Ne bloque
     /// jamais : l'appelant est la file du moteur.
     func dismissScreenSaver()
+    /// Moyen par lequel le OFF (`startScreenSaver()`) démarre l'économiseur. Connu dès la création des actions :
+    /// le moteur le journalise au démarrage et le publie dans `/status` (`saver_start`).
+    var screenSaverStart: ScreenSaverStart { get }
+}
+
+/// Moyen de démarrer l'économiseur lors d'un OFF. La valeur brute sert au journal et à `/status`.
+public enum ScreenSaverStart: String {
+    /// `SACScreenSaverStartNow` (login.framework, sans argument) : la commande que le système emploie lui-même
+    /// pour l'inactivité. Au banc 2 : code 0, puis `didstart` avec `runFromPref`, puis le verrou.
+    case native = "SACScreenSaverStartNow"
+    /// Repli quand la fonction manque, ou rend un code non nul : `open -a ScreenSaverEngine`.
+    case openApp = "open -a ScreenSaverEngine"
 }
 
 /// Moyen d'écarter l'économiseur lors d'un ON. La valeur brute sert au journal et à `/status`.

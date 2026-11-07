@@ -229,6 +229,8 @@ final class FakeActions: CommandActions {
     /// `.processKill` quand la fonction manque. Les tests le changent avant de créer le moteur.
     var moyenEcartement: ScreenSaverDismissal = .native
     var screenSaverDismissal: ScreenSaverDismissal { moyenEcartement }
+    /// Moyen de démarrage annoncé : `.native` (`SACScreenSaverStartNow`) ou le repli `.openApp`.
+    var screenSaverStart: ScreenSaverStart = .native
     private(set) var appels: [Appel] = []
 
     func runOff(_ action: OffAction) { appels.append(.runOff(action)) }
