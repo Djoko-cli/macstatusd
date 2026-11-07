@@ -27,8 +27,9 @@ macstatusd-repetition, dossiers build/repetition/<version>/ et .../repetition/<v
 L'environnement : IDENTITE_SIGNATURE (« Developer ID Application » par défaut ; « - » seulement en répétition, sans
 notarisation), NOTARISER (1 pour notariser), PROFIL_NOTARISATION (le profil de notarytool store-credentials). Les
 outils s'appellent par chemin absolu (/usr/bin/codesign, etc.). Seule la répétition peut les remplacer (CODESIGN,
-SECURITY, OPENSSL, DITTO, XCRUN, SPCTL) et donner une autre liste locale (GARDE_LISTE, par défaut garde.local.txt à la
-racine du dépôt) : hors répétition, une de ces variables donne un refus avant le premier appel.
+SECURITY, OPENSSL, DITTO, XCRUN, SPCTL), donner une autre liste locale (GARDE_LISTE, par défaut garde.local.txt à la
+racine du dépôt) et un autre dossier de développeur (DEVELOPER_DIR, que les relais xcselect de /usr/bin suivent) :
+hors répétition, une de ces variables donne un refus avant le premier appel.
 
 Le nom légal du titulaire et l'équipe d'un Developer ID ne vont que dans la signature : tout ce que ce module affiche
 passe par masquer_identite (dire, et le message d'erreur de main). Aucun identifiant n'est écrit ici : l'empreinte est
@@ -55,8 +56,8 @@ AD_HOC = '-'
 GET_TASK_ALLOW = 'com.apple.security.get-task-allow'
 # La chaîne d'un Developer ID Application, vérifiée par codesign sur l'app signée : ancrée chez Apple, un
 # intermédiaire Developer ID, une feuille Developer ID Application.
-# Les variables qui remplacent un outil ou la liste de la garde : réservées à la répétition.
-REMPLACEMENTS = ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'GARDE_LISTE')
+# Les variables qui remplacent un outil, la liste de la garde ou le dossier de développeur : réservées à la répétition.
+REMPLACEMENTS = ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'GARDE_LISTE', 'DEVELOPER_DIR')
 EXIGENCE_DEVELOPER_ID = ('=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and '
                          'certificate leaf[field.1.2.840.113635.100.6.1.13] exists')
 
@@ -78,7 +79,9 @@ class EchecCommande(Exception):
 
 # --- ce que l'on affiche ---------------------------------------------------------------------------------------
 
-LIBELLES = r'(?:Developer ID Application|Developer ID Installer|Apple Development|Apple Distribution)'
+LIBELLES = (r'(?:Apple Development|Apple Distribution|Developer ID Application|Developer ID Installer'
+            r'|iPhone Developer|iPhone Distribution|Mac Developer|Mac Installer Distribution'
+            r'|3rd Party Mac Developer (?:Application|Installer))')
 _VALEURS = None  # les valeurs de la liste locale, en complément (jamais affichées)
 
 
@@ -95,14 +98,14 @@ def definir_valeurs_masquees(valeurs):
 def masquer_identite(texte):
     """Le nom légal, l'équipe, l'empreinte et les adresses e-mail, masqués par leur forme dans tout ce que ce module
     affiche (exigence de signature, erreurs de codesign, de spctl ou de notarytool) : ils ne vont que dans la
-    signature. Les formes sont celles de ~/.claude/outils/masquer (libellés, équipe, empreintes de 40 et de 64
-    caractères, courriels), plus O=, OU= et UID= d'un certificat. Les échappements « \\= » qu'écrivent certains outils
-    sont retirés d'abord. Les valeurs de la liste locale se masquent en dernier, en complément."""
+    signature. Les formes sont celles de ~/.claude/outils/masquer (les dix libellés, avec des espaces autour des
+    deux-points, équipe, empreintes de 40 et de 64 caractères, courriels), plus O=, OU= et UID= d'un
+    certificat. Les échappements « \\= » qu'écrivent certains outils sont retirés d'abord. Les valeurs de la liste locale se masquent en dernier, en complément."""
     texte = texte.replace('\\=', '=').replace('\\ ', ' ')
     # Le libellé qui suit le préfixe d'une identité (titulaire, et équipe entre parenthèses).
-    prefixe = r'(%s: )' % LIBELLES
-    texte = re.sub(prefixe + r'[^\n"]*?( \()[A-Z0-9]{10}(\))', r'\1<titulaire>\2<equipe>\3', texte)
-    texte = re.sub(prefixe + r'(?!<titulaire>)[^\n",;]+', r'\1<titulaire>', texte)
+    prefixe = r'(%s\s*:\s*)' % LIBELLES
+    texte = re.sub(prefixe + r'[^\n"]*?(\s*\()[A-Z0-9]{10}(\))', r'\1<titulaire>\2<equipe>\3', texte)
+    texte = re.sub(r'(%s\s*:)(?!\s*<titulaire>)(\s*)[^\n",;]+' % LIBELLES, r'\1\2<titulaire>', texte)
     texte = re.sub(r'\([A-Z0-9]{10}\)', '(<equipe>)', texte)
     texte = re.sub(r'(?<![A-Za-z0-9])[A-Z0-9]{10}\.(?=[A-Za-z])', '<equipe>.', texte)
     texte = re.sub(r'(subject\.OU\] ?= ?)"?[A-Z0-9]{10}"?', r'\1<equipe>', texte)
@@ -110,7 +113,7 @@ def masquer_identite(texte):
                    r'\1<equipe>', texte)
     # Les champs d'un certificat (openssl -subject, -text) : le titulaire (O) et l'équipe (OU, UID).
     texte = re.sub(r'(?<![A-Za-z0-9])(UID|OU)(\s*=\s*)[^,/\n]*', r'\1\2<equipe>', texte)
-    texte = re.sub(r'(?<![A-Za-z0-9])(O)(\s*=\s*)[^,/\n]*', r'\1\2<titulaire>', texte)
+    texte = re.sub(r'(?<![A-Za-z0-9])(O)(\s*=\s*)(?:\\.|[^,/\\\n])*', r'\1\2<titulaire>', texte)
     texte = re.sub(r'(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])', '<empreinte>', texte)
     texte = re.sub(r'(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}:){19}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])', '<empreinte>', texte)
     texte = re.sub(r'(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{40})(?![0-9A-Fa-f])', '<empreinte>', texte)

@@ -247,6 +247,45 @@ class TestMasque(Base):
         self.assertEqual([], vu(masque), masque)
         self.assertIn('X=Y', masque)
 
+    def test_masque_chaque_libelle_de_la_session_seul(self):
+        # Les dix libellés de ~/.claude/outils/masquer, chacun testé seul, avec ou sans équipe entre parenthèses.
+        libelles = ('Apple Development', 'Apple Distribution', 'Developer ID Application', 'Developer ID Installer',
+                    'iPhone Developer', 'iPhone Distribution', 'Mac Developer', 'Mac Installer Distribution',
+                    '3rd Party Mac Developer Application', '3rd Party Mac Developer Installer')
+        for libelle in libelles:
+            for echantillon in ('%s: %s (%s)', '%s: %s', '"%s: %s"'):
+                with self.subTest(libelle=libelle, forme=echantillon):
+                    texte = echantillon % ((libelle, TITULAIRE, EQUIPE) if echantillon.count('%s') == 3
+                                           else (libelle, TITULAIRE))
+                    masque = publication.masquer_identite(texte)
+                    self.assertEqual([], vu(masque), masque)
+                    self.assertIn('<titulaire>', masque)
+
+    def test_masque_les_deux_points_avec_ou_sans_espaces(self):
+        for libelle in ('Developer ID Application', 'Mac Developer', '3rd Party Mac Developer Installer'):
+            for separateur in (':', ' :', ': ', ' : ', ':  ', '\t:\t'):
+                for fin in (' (%s)' % EQUIPE, '(%s)' % EQUIPE, ''):
+                    with self.subTest(libelle=libelle, separateur=separateur, fin=fin):
+                        masque = publication.masquer_identite('%s%s%s%s' % (libelle, separateur, TITULAIRE, fin))
+                        self.assertEqual([], vu(masque), masque)
+
+    def test_masque_un_titulaire_invente_que_la_relecture_laissait_en_clair(self):
+        for ligne in ('Mac Developer: %s (%s)' % (TITULAIRE, EQUIPE),
+                      'iPhone Distribution:%s (%s)' % (TITULAIRE, EQUIPE),
+                      '3rd Party Mac Developer Application : %s' % TITULAIRE):
+            with self.subTest(ligne=ligne):
+                self.assertEqual([], vu(publication.masquer_identite(ligne)))
+
+    def test_masque_le_titulaire_d_un_O_a_virgule_echappee(self):
+        for sujet in ('O=Prénom\\, Nom', 'CN=x,O=Prénom\\, Nom,C=FR', 'O = Prénom\\, Nom\\, Fils,C=FR'):
+            with self.subTest(sujet=sujet):
+                masque = publication.masquer_identite(sujet)
+                self.assertNotIn('Prénom', masque)
+                self.assertNotIn('Nom', masque)
+                self.assertNotIn('Fils', masque)
+        self.assertEqual('CN=x,O=<titulaire>,C=FR',
+                         publication.masquer_identite('CN=x,O=Prénom\\, Nom,C=FR'))
+
     def test_masque_le_texte_d_une_exception(self):
         # Une commande qui échoue : son erreur, sa sortie et sa ligne de commande passent par le masque.
         o = FauxOutils(self.env(), echec_signature=PLANTE)
@@ -759,6 +798,16 @@ class TestOutilsNonRemplacables(Base):
                     publication.publier(self.args(), o, e)
                 self.assertIn(nom, str(r.exception))
                 self.assertEqual([], o.appels)
+
+    def test_developer_dir_est_refuse_hors_repetition_et_accepte_en_repetition(self):
+        e = self.env(DEVELOPER_DIR='/essai/Developer')
+        o = FauxOutils(e)
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertIn('DEVELOPER_DIR', str(r.exception))
+        self.assertEqual([], o.appels)
+        o, _ = self.publier(repetition=True, DEVELOPER_DIR='/essai/Developer')
+        self.assertTrue(o.appels)
 
     def test_les_outils_s_appellent_par_chemin_absolu(self):
         o = publication.Outils({})
