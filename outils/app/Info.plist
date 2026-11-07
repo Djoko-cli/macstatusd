@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>@IDENTIFIANT@</string>
+	<key>CFBundleName</key>
+	<string>macstatusd</string>
+	<key>CFBundleExecutable</key>
+	<string>macstatusd</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION_COURTE@</string>
+	<key>CFBundleVersion</key>
+	<string>@NUMERO_BUILD@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>fr</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>macstatusd sends the Mac's usage status to Home Assistant on your local network.</string>
+	<key>MacstatusdSupportName</key>
+	<string>@NOM_SUPPORT@</string>
+</dict>
+</plist>

@@ -436,7 +436,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
 - Contenu de `Contents/Resources/build-info.json` : `version`, `git` (`git describe --always --dirty`), `built_at`
   (date UTC, ISO 8601).
 
-- [ ] **Étape 1 : banc rouge `outils/tests/test-assembler-app.sh`** (bash, sortie sous
+- [x] **Étape 1 : banc rouge `outils/tests/test-assembler-app.sh`** (bash, sortie sous
   `/private/tmp/macstatusd-plan4/app-essai`). Cas :
   - `defauts` : chaque clé ci-dessus, relue par `PlistBuddy`, `build-info.json` lisible par
     `python3 -m json.tool`, puis `codesign --verify --strict` (ad hoc) ;
@@ -444,13 +444,13 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
     `macstatusd-essai.app`, le plist `com.djoko.macstatusd.essai.plist`, son `Label` et `MacstatusdSupportName` ;
   - `icone-absente` (piège) : `--icone` vers un fichier absent. Attendu : code 2 et la raison « icône absente :
     <chemin> (pas d'app sans icône) ».
-- [ ] **Étape 2 :** écrire `assembler-app.sh` et les gabarits, ajouter `build/` au `.gitignore`. Le banc passe, sauf
+- [x] **Étape 2 :** écrire `assembler-app.sh` et les gabarits, ajouter `build/` au `.gitignore`. Le banc passe, sauf
   `defauts`, qui attend l'icône.
-- [ ] **Étape 3 : calage du style**
+- [x] **Étape 3 : calage du style**
   - Rendre en PNG de 1024 px les icônes des autres apps de Djoko installées sur le Mac, par un script jetable
     dans le dossier temporaire (`NSWorkspace.shared.icon(forFile:)`).
   - Relever leur forme, leur part du carré, leurs couleurs et leur densité.
-- [ ] **Étape 4 :** `outils/icone/dessiner-icone.swift` dessine la maîtresse de 1024 px (CoreGraphics, sans fichier
+- [x] **Étape 4 :** `outils/icone/dessiner-icone.swift` dessine la maîtresse de 1024 px (CoreGraphics, sans fichier
   d'entrée). Deux ou trois variantes, rendues aussi à 32 et à 16 px, et sur un canevas plus grand pour vérifier
   qu'aucune forme n'est coupée.
 - [ ] **Étape 5 : validation par Djoko** (SendUserFile, rendu). Il choisit une variante, ou la fait reprendre. Sa
@@ -497,7 +497,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
 - Produit, `/status` : le champ `service` (`ServiceState.rawValue`), relu à chaque appel par un fournisseur que le
   moteur reçoit. Par défaut, `{ .unknown }`.
 
-- [ ] **Étape 1 : essai jetable avec Djoko** (10 min)
+- [x] **Étape 1 : essai jetable avec Djoko** (10 min)
   - App `com.djoko.macstatusd.essai`, assemblée par la tâche 5 (ad hoc), avec un binaire de travail qui sait
     `--register`.
   - Config d'essai écrite d'abord dans `~/Library/Application Support/macstatusd-essai/config.json` : port 19480,
@@ -516,16 +516,16 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
   Le résultat va dans `.superpowers/banc/banc-3-essai-smappservice.md`. Si une clé n'est pas honorée, ou si
   `XPC_SERVICE_NAME` diffère, le contrôleur décide de la correction des gabarits de la tâche 5 ou de `decide`
   avant l'étape 2.
-- [ ] **Étape 2 : tests rouges**
+- [x] **Étape 2 : tests rouges**
   - `test_etatDuService_correspondanceDesCodes`, avec 0 à 3 et 7 ;
   - `test_etatDuService_aApprouver_ditOuLeReactiver` (message et code 3) ;
   - `test_modeDeLancement_agent` (`--agent`) et `test_modeDeLancement_finder` (sans argument, variable relevée à
     l'étape 1) ;
   - `test_modeDeLancement_ligneDeCommande` (sans argument ni variable ; `--once`) ;
   - `test_status_porteLEtatDuService`.
-- [ ] **Étape 3 :** mise en œuvre. Les appels à SMAppService vivent dans `ServiceRegistry.swift`, qui n'est jamais
+- [x] **Étape 3 :** mise en œuvre. Les appels à SMAppService vivent dans `ServiceRegistry.swift`, qui n'est jamais
   appelé par un test.
-- [ ] **Étape 4 :** suite complète, registre (options de la CLI, champ `service`, messages). Commit « Plan 4 :
+- [x] **Étape 4 :** suite complète, registre (options de la CLI, champ `service`, messages). Commit « Plan 4 :
   enregistrement de l'agent par SMAppService, --register, --unregister, --status-service (C20) ».
 
 **Contrôle du relecteur :**
@@ -586,7 +586,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
    - Le port vient de la config.
    - `curl -fsS --max-time 1 http://<hôte>:<port>/health`, 20 essais à 0,5 s d'écart.
 
-- [ ] **Étape 1 : banc rouge `outils/tests/test-install.sh`** (bash, hermétique)
+- [x] **Étape 1 : banc rouge `outils/tests/test-install.sh`** (bash, hermétique)
   - Environnement : `HOME` d'essai, faux outils en tête du `PATH`. Chacun note ses appels. Le faux `sudo` échoue
     et note tout appel.
   - Ancien préfixe d'essai : sa config n'a pas de jeton et porte `webhook_base_url`. Un ancien agent d'essai
@@ -611,9 +611,9 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
     - `desinstallation` : `--unregister` appelé, app à la Corbeille, config gardée. Avec `--tout`, config et
       journaux à la Corbeille ;
     - `sans-sudo` : dans les deux scripts, aucune ligne n'appelle `sudo`, hors du texte affiché pour `/opt`.
-- [ ] **Étape 2 :** réécrire `install.sh` et `uninstall.sh`, retirer `launchd/`, modifier `config.example.json`.
+- [x] **Étape 2 :** réécrire `install.sh` et `uninstall.sh`, retirer `launchd/`, modifier `config.example.json`.
   `ConfigTests`, qui lit l'exemple, doit rester vert.
-- [ ] **Étape 3 :** banc vert, suite complète, selftest, `bash outils/tests/test-garde.sh`. Registre : options des
+- [x] **Étape 3 :** banc vert, suite complète, selftest, `bash outils/tests/test-garde.sh`. Registre : options des
   scripts, et ce que fait la migration. Commit « Plan 4 : install.sh et uninstall.sh sans sudo, migration depuis
   /opt (C2, C4, C16, F09, F10, F35, F63, F80) ».
 
@@ -663,7 +663,7 @@ deux fois de suite pour vérifier qu'il ne laisse rien hors de son dossier d'ess
   identité `com.djoko.macstatusd.repetition`, nom de support `macstatusd-repetition`, dossier
   `build/repetition/<version>/`. Toute sortie montrée passe par `masquer_identite`.
 
-- [ ] **Étape 1 : tests rouges `test_publication.py`** (`unittest`, `Outils` remplacé par de faux outils qui notent
+- [x] **Étape 1 : tests rouges `test_publication.py`** (`unittest`, `Outils` remplacé par de faux outils qui notent
   leurs appels, environnement neutre recalculé à chaque test) :
   - `test_masque_titulaire_equipe_empreinte_et_courriel` : la sortie plantée contient « Developer ID Application:
     Prénom Nom (ABCDE12345) », `ABCDE12345.com.djoko.macstatusd`, une empreinte de 40 caractères hexadécimaux et
@@ -677,10 +677,10 @@ deux fois de suite pour vérifier qu'il ne laisse rien hors de son dossier d'ess
     copie dépouillée passe ;
   - `test_garde_retraitDeSignatureRate_refus` ;
   - `test_ordre_des_gestes` : assembler, signer, vérifier, archiver, notariser, agrafer, réarchiver, évaluer, garder.
-- [ ] **Étape 2 : banc du cliquet** (`outils/tests/test-publier.sh`, bash). Refus pour `IDENTITE_SIGNATURE=-`, pour
+- [x] **Étape 2 : banc du cliquet** (`outils/tests/test-publier.sh`, bash). Refus pour `IDENTITE_SIGNATURE=-`, pour
   `NOTARISER=0` sans `--repetition`, et pour un clone superficiel. Acceptation de `--repetition` jusqu'aux tests.
   Les faux outils gardent tout le reste inerte.
-- [ ] **Étape 3 :** mise en œuvre, tous les tests verts. Commit « Plan 4 : outils de signature, de notarisation et
+- [x] **Étape 3 :** mise en œuvre, tous les tests verts. Commit « Plan 4 : outils de signature, de notarisation et
   de publication, cliquet et garde de l'archive (D9) ».
 
 **Contrôle du relecteur :**
@@ -717,7 +717,7 @@ deux fois de suite pour vérifier qu'il ne laisse rien hors de son dossier d'ess
 `NOTES-VERSIONS.md` : `## 0.6.0`, puis `## 0.5.0`. Chaque section a un bloc **English**, puis un bloc **Français**.
 La 0.6.0 dit ce qui change à la mise à jour : la liste du lot 7, que le banc 3 vérifie.
 
-- [ ] **Étape 1 : tests rouges `DocumentationTests`**
+- [x] **Étape 1 : tests rouges `DocumentationTests`**
   - `test_chaqueCleDeConfig_estDecriteDansLesDeuxReadme` : chaque clé de `Config.knownKeys`, entre accents graves ;
   - `test_chaqueChampDeStatus_estDecritDansLesDeuxReadme` : les clés du premier niveau de `statusSnapshot()`, sur
     un moteur d'essai ;
@@ -727,9 +727,9 @@ La 0.6.0 dit ce qui change à la mise à jour : la liste du lot 7, que le banc 3
   - `test_readme_lienVersLAutreLangue`.
 
   Mutation à rejouer : retirer une clé de `README.fr.md`. Le premier test échoue et nomme la clé.
-- [ ] **Étape 2 :** écrire les deux README ensemble, puis `NOTES-VERSIONS.md` et `architecture.txt`. Aucune valeur
+- [x] **Étape 2 :** écrire les deux README ensemble, puis `NOTES-VERSIONS.md` et `architecture.txt`. Aucune valeur
   réelle : adresses `192.0.2.x`, identifiants d'exemple.
-- [ ] **Étape 3 :** suite complète, et balayage de l'anonymat du diff (motifs de la garde, chemins personnels). Commit
+- [x] **Étape 3 :** suite complète, et balayage de l'anonymat du diff (motifs de la garde, chemins personnels). Commit
   « Plan 4 : README anglais et français, notes de version 0.5.0 et 0.6.0, architecture (F68) ».
 
 **Contrôle du relecteur :** suivre la section d'installation à la lettre, dans un `HOME` d'essai, avec l'app d'essai
@@ -749,7 +749,7 @@ l'étape 4 du lot 9 (plan 5).
 **Fichiers (locaux) :** `.superpowers/banc/banc-3-<date>/protocole.md`, `resultats.md` et les journaux.
 **Fichiers (suivis) :** les corrections des README et des notes de version qui découlent du banc.
 
-- [ ] **Étape 1 : préparation par le contrôleur, sans Djoko**
+- [x] **Étape 1 : préparation par le contrôleur, sans Djoko**
   - **N-1 (0.5.0)** :
     - compilé depuis `ab4626d` (`git archive ab4626d | tar -x -C /private/tmp/macstatusd-plan4/n-1`) ;
     - binaire copié dans `~/Library/Application Support/macstatusd-repetition-ancien/opt/macstatusd`, avec sa
@@ -762,7 +762,7 @@ l'étape 4 du lot 9 (plan 5).
     intercepte `dlsym` pour `SACScreenSaverStartNow`, compte les appels et rend `SAC_CODE`. Elle intercepte aussi
     `posix_spawn` pour noter `argv` sans lancer `/usr/bin/open`. Elle sert sur une instance d'essai sans runtime
     renforcé.
-- [ ] **Étape 2 : répétition, avec Djoko**
+- [x] **Étape 2 : répétition, avec Djoko**
   - L'agent N-1 tourne, et le récepteur reçoit l'état.
   - Djoko lance `./scripts/install.sh --app build/repetition/0.6.0/macstatusd-repetition.app --ancien-prefixe "$HOME/Library/Application Support/macstatusd-repetition-ancien/opt"`.
   - On relève :
@@ -774,7 +774,7 @@ l'étape 4 du lot 9 (plan 5).
   - Puis on fait viser au webhook l'adresse de réseau local du Mac, avec un récepteur à l'écoute sur toutes les
     interfaces, et l'écoute de l'app sur toutes les interfaces. On relève les invites « Réseau local » et pare-feu,
     que Djoko accepte.
-- [ ] **Étape 3 : R84.**
+- [x] **Étape 3 : R84.**
   - Un OFF par `curl`, en-tête lu dans un fichier 600 (`-H @fichier`). Attendu :
     - l'économiseur réglé de chaque écran, puis le verrou ;
     - un seul process `ScreenSaverEngine` ;
@@ -782,7 +782,7 @@ l'étape 4 du lot 9 (plan 5).
   - Puis l'interposition, sur une instance d'essai : avec `SAC_CODE=0`, un appel et aucun `open`. Avec
     `SAC_CODE=22`, un appel, un `open` noté et le WARN.
   - Enfin, sur une session déjà verrouillée, l'extinction de l'écran s'applique toujours.
-- [ ] **Étape 4 : R85.** Veille par le menu Pomme, 60 s d'attente, réveil au clavier. Attendu : « état OFF → ON »
+- [x] **Étape 4 : R85.** Veille par le menu Pomme, 60 s d'attente, réveil au clavier. Attendu : « état OFF → ON »
   moins d'1 s après les premiers faits « écrans allumés ».
 - [ ] **Étape 5 : runtime renforcé.**
   - `/status` doit dire `saver_detection` = `sac`, `saver_dismissal` = `SACScreenSaverStopNow` et `saver_start` =
@@ -807,7 +807,7 @@ faite et refaite au banc.
 
 ### Tâche 11 : relecture finale, fusion, puis publication de la 0.6.0
 
-- [ ] **Étape 1 : relecture finale de la branche par Opus**, de `6c0b992` à la tête. Risques nommés :
+- [x] **Étape 1 : relecture finale de la branche par Opus**, de `6c0b992` à la tête. Risques nommés :
   - le jeton dans `install.sh` et la publication ;
   - le masque sur tous les chemins d'erreur ;
   - la concurrence de `CachedSignals` ;
@@ -815,14 +815,14 @@ faite et refaite au banc.
   - les modes de lancement.
 
   Le paquet de relecture lui est remis avec son plan de lecture, en tranches mesurées par `wc -l`.
-- [ ] **Étape 2 :** corrections par un agent neuf, puis relecture ciblée.
-- [ ] **Étape 3 : vérification finale.**
+- [x] **Étape 2 :** corrections par un agent neuf, puis relecture ciblée.
+- [x] **Étape 3 : vérification finale.**
   - `swift test` ;
   - selftest écran allumé, puis écran éteint ;
   - `bash outils/tests/test-assembler-app.sh`, `test-install.sh`, `test-publier.sh` et `test-garde.sh` ;
   - `python3 -m unittest discover -s outils/tests -p 'test_publication.py'` ;
   - `--once` comparé à l'instance réelle.
-- [ ] **Étape 4 : version.**
+- [x] **Étape 4 : version.**
   - `grep -rn '0\.6\.0-dev' .` (hors `.build`, `.superpowers`) : classer chaque occurrence, à monter, historique à
     garder ou autre composant.
   - `macstatusdVersion` passe à `"0.6.0"`, et la date va dans `NOTES-VERSIONS.md`. Commit.

@@ -31,3 +31,6 @@ garde.local.txt
 
 # Schémas Archify (pages HTML locales) : jamais commités.
 .archify/
+
+# App assemblée par outils/assembler-app.sh (signature, équipe) : jamais commitée.
+build/
