@@ -663,7 +663,7 @@ deux fois de suite pour vérifier qu'il ne laisse rien hors de son dossier d'ess
   identité `com.djoko.macstatusd.repetition`, nom de support `macstatusd-repetition`, dossier
   `build/repetition/<version>/`. Toute sortie montrée passe par `masquer_identite`.
 
-- [ ] **Étape 1 : tests rouges `test_publication.py`** (`unittest`, `Outils` remplacé par de faux outils qui notent
+- [x] **Étape 1 : tests rouges `test_publication.py`** (`unittest`, `Outils` remplacé par de faux outils qui notent
   leurs appels, environnement neutre recalculé à chaque test) :
   - `test_masque_titulaire_equipe_empreinte_et_courriel` : la sortie plantée contient « Developer ID Application:
     Prénom Nom (ABCDE12345) », `ABCDE12345.com.djoko.macstatusd`, une empreinte de 40 caractères hexadécimaux et
@@ -677,10 +677,10 @@ deux fois de suite pour vérifier qu'il ne laisse rien hors de son dossier d'ess
     copie dépouillée passe ;
   - `test_garde_retraitDeSignatureRate_refus` ;
   - `test_ordre_des_gestes` : assembler, signer, vérifier, archiver, notariser, agrafer, réarchiver, évaluer, garder.
-- [ ] **Étape 2 : banc du cliquet** (`outils/tests/test-publier.sh`, bash). Refus pour `IDENTITE_SIGNATURE=-`, pour
+- [x] **Étape 2 : banc du cliquet** (`outils/tests/test-publier.sh`, bash). Refus pour `IDENTITE_SIGNATURE=-`, pour
   `NOTARISER=0` sans `--repetition`, et pour un clone superficiel. Acceptation de `--repetition` jusqu'aux tests.
   Les faux outils gardent tout le reste inerte.
-- [ ] **Étape 3 :** mise en œuvre, tous les tests verts. Commit « Plan 4 : outils de signature, de notarisation et
+- [x] **Étape 3 :** mise en œuvre, tous les tests verts. Commit « Plan 4 : outils de signature, de notarisation et
   de publication, cliquet et garde de l'archive (D9) ».
 
 **Contrôle du relecteur :**
