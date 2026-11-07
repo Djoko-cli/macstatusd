@@ -108,6 +108,12 @@ Sources locales, ignorées par git. Elles portent des mesures réelles : n'en re
 - Jamais de `pkill`, `killall` ni `kill` par motif de nom.
 - Un process lancé par launchd ne lit ni n'écrit rien sous `~/Documents` (TCC) : un agent de banc range son
   binaire, sa config et son journal sous `~/Library/Application Support/<nom du banc>`.
+- Aucun paquet `.app` à signer ou à vérifier ne s'assemble sous `~/Documents` : iCloud Drive (File Provider) y ajoute
+  en deux secondes `com.apple.FinderInfo` et `com.apple.fileprovider.fpfs#P`, et `codesign --verify --strict`
+  refuse alors l'app (« resource fork, Finder information, or similar detritus not allowed »). Un dossier `.nosync`
+  n'y change rien (essai du 07/11). L'assemblage, la signature et la vérification se font sous
+  `~/Library/Caches/macstatusd-build/` ; seuls des fichiers (archive, `SHA256SUMS`) reviennent sous `build/`. Une app
+  d'essai entre dans `~/Applications` par `ditto --norsrc --noextattr`.
 - Selftest toujours ainsi, `/health` de l'instance réelle contrôlé avant et après, jamais avec
   `SELFTEST_FAUX_ECONOMISEUR=1` :
   `SELFTEST_IGNORER_VERROU=1 SWIFT_SCRATCH=/private/tmp/macstatusd-plan4/selftest bash scripts/selftest.sh`.
