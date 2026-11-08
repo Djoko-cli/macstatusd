@@ -1,1 +1,1 @@
-"NSLocalNetworkUsageDescription" = "macstatusd envoie l'état d'utilisation du Mac à Home Assistant sur votre réseau local.";
+"NSLocalNetworkUsageDescription" = "macstatusd échange avec Home Assistant sur votre réseau local, pour que HomeKit sache si le Mac est utilisé.";

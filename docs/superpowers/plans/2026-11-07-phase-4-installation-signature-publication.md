@@ -459,9 +459,9 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
 - [x] **Étape 4 :** `outils/icone/dessiner-icone.swift` dessine la maîtresse de 1024 px (CoreGraphics, sans fichier
   d'entrée). Deux ou trois variantes, rendues aussi à 32 et à 16 px, et sur un canevas plus grand pour vérifier
   qu'aucune forme n'est coupée.
-- [ ] **Étape 5 : validation par Djoko** (SendUserFile, rendu). Il choisit une variante, ou la fait reprendre. Sa
+- [x] **Étape 5 : validation par Djoko** (SendUserFile, rendu). Il choisit une variante, ou la fait reprendre. Sa
   réponse va au registre.
-- [ ] **Étape 6 :** jeu d'icônes par `sips` (16 à 1024 px, en 1x et 2x), puis `iconutil -c icns`, qui donne
+- [x] **Étape 6 :** jeu d'icônes par `sips` (16 à 1024 px, en 1x et 2x), puis `iconutil -c icns`, qui donne
   `outils/icone/AppIcon.icns`. Le banc passe, cas `defauts` compris. Commit « Plan 4 : paquet macstatusd.app,
   icône validée par Djoko (C20) ».
 

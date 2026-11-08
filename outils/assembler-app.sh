@@ -7,8 +7,10 @@
 #           [--signer <identité>|-]
 #
 # Défauts : compilation « swift build -c release » (dossier .build), identifiant
-# com.djoko.macstatusd, nom de support macstatusd, sortie build/app, icône
-# outils/icone/AppIcon.icns, signature ad hoc (-).
+# com.djoko.macstatusd, nom de support macstatusd, sortie
+# $HOME/Library/Caches/macstatusd-build/app (jamais sous ~/Documents : iCloud y ajoute
+# des attributs qui font refuser l'app par codesign), icône outils/icone/AppIcon.icns,
+# signature ad hoc (-).
 # L'app s'appelle macstatusd.app, ou macstatusd-<suffixe>.app pour l'identifiant
 # com.djoko.macstatusd.<suffixe>. Le chemin de l'app est imprimé sur la dernière ligne.
 # Codes de sortie : 0 réussi, 1 échec de l'assemblage, 2 usage ou entrée absente.
@@ -21,7 +23,7 @@ depot=$(cd "$ici/.." && pwd)
 binaire=""
 identifiant="com.djoko.macstatusd"
 nom_support="macstatusd"
-sortie="$depot/build/app"
+sortie="$HOME/Library/Caches/macstatusd-build/app"
 icone="$ici/icone/AppIcon.icns"
 signer="-"
 

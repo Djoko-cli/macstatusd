@@ -51,6 +51,10 @@ verifier_cle() { # cas fichier clé attendu
   if [[ "$valeur" == "$4" ]]; then ok "$1 : $3 = $4"; else ko "$1" "$3 vaut « $valeur » au lieu de « $4 »"; fi
 }
 
+# Textes validés de l'autorisation du réseau local.
+texte_en="macstatusd talks to Home Assistant on your local network so that HomeKit knows whether the Mac is in use."
+texte_fr="macstatusd échange avec Home Assistant sur votre réseau local, pour que HomeKit sache si le Mac est utilisé."
+
 # --- Cas 1 : défauts -----------------------------------------------------------
 cas=defauts
 dossier="$sortie_essai/defauts"
@@ -77,9 +81,17 @@ else
   verifier_cle $cas "$info" CFBundleLocalizations:0 en
   verifier_cle $cas "$info" CFBundleLocalizations:1 fr
   verifier_cle $cas "$info" MacstatusdSupportName macstatusd
-  if [[ -n "$(cle "$info" NSLocalNetworkUsageDescription)" ]]; then ok "$cas : NSLocalNetworkUsageDescription présent"; else ko "$cas" "NSLocalNetworkUsageDescription absent"; fi
+  verifier_cle $cas "$info" NSLocalNetworkUsageDescription "$texte_en"
   for langue in en fr; do
-    if [[ -s "$app/Contents/Resources/$langue.lproj/InfoPlist.strings" ]]; then ok "$cas : $langue.lproj/InfoPlist.strings"; else ko "$cas" "$langue.lproj/InfoPlist.strings absent"; fi
+    strings="$app/Contents/Resources/$langue.lproj/InfoPlist.strings"
+    if [[ -s "$strings" ]]; then
+      ok "$cas : $langue.lproj/InfoPlist.strings"
+      attendu="$texte_en"; [[ "$langue" == fr ]] && attendu="$texte_fr"
+      lu=$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$strings" 2>/dev/null)
+      if [[ "$lu" == "$attendu" ]]; then ok "$cas : $langue.lproj texte du réseau local"; else ko "$cas" "$langue.lproj : texte du réseau local « $lu » au lieu de « $attendu »"; fi
+    else
+      ko "$cas" "$langue.lproj/InfoPlist.strings absent"
+    fi
   done
   [[ -s "$app/Contents/Resources/AppIcon.icns" ]] && ok "$cas : AppIcon.icns" || ko "$cas" "AppIcon.icns absent"
   [[ -x "$app/Contents/MacOS/macstatusd" ]] && ok "$cas : exécutable" || ko "$cas" "Contents/MacOS/macstatusd absent"
@@ -152,6 +164,25 @@ raison="icône absente : $absente (pas d'app sans icône)"
 if [[ $code -eq 2 ]]; then ok "$cas : code 2"; else ko "$cas" "code $code au lieu de 2"; fi
 if /usr/bin/grep -q -F -- "$raison" "$journal"; then ok "$cas : raison affichée"; else ko "$cas" "raison attendue « $raison », obtenu : $(tail -n 1 "$journal")"; fi
 if [[ -d "$dossier/macstatusd.app" ]]; then ko "$cas" "une app a été produite malgré l'icône absente"; else ok "$cas : aucune app produite"; fi
+
+# --- Cas 4 : sortie par défaut hors de ~/Documents (HOME d'essai pour l'assembleur seul) ---
+cas=sortie-par-defaut
+journal="$sortie_essai/defaut-sortie.log"
+home_essai="$sortie_essai/home-essai"
+attendu_app="$home_essai/Library/Caches/macstatusd-build/app/macstatusd.app"
+HOME="$home_essai" bash "$assembleur" --binaire "$binaire" > "$journal" 2>&1
+code=$?
+if [[ $code -eq 0 ]]; then ok "$cas : code 0"; else ko "$cas" "code $code ; dernière ligne : $(tail -n 1 "$journal")"; fi
+app=$(tail -n 1 "$journal")
+if [[ "$app" == "$attendu_app" ]]; then ok "$cas : chemin imprimé sous Library/Caches"; else ko "$cas" "chemin imprimé « $app » au lieu de « $attendu_app »"; fi
+if [[ -d "$attendu_app" ]]; then
+  ok "$cas : app présente"
+  sortie_cs=$(codesign --verify --strict "$attendu_app" 2>&1 | ~/.claude/outils/masquer)
+  if codesign --verify --strict "$attendu_app" > /dev/null 2>&1; then ok "$cas : codesign --verify --strict"; else ko "$cas" "codesign : $sortie_cs"; fi
+else
+  ko "$cas" "app absente : $attendu_app"
+fi
+if [[ -e "$depot/build" ]]; then ko "$cas" "$depot/build existe (la sortie par défaut ne doit plus y aller)"; else ok "$cas : pas de build/ dans le dépôt"; fi
 
 echo
 if [[ $echec -eq 0 ]]; then echo "Banc de l'assembleur : tout passe."; else echo "Banc de l'assembleur : des cas échouent."; fi

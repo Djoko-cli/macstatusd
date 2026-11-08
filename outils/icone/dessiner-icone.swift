@@ -9,6 +9,11 @@
 //   --canevas facteur > 1 : la maîtresse est centrée sur un canevas plus grand (gris moyen, cadre
 //             de 1024 en pointillé) pour vérifier qu'aucune forme n'est coupée.
 //
+// Refaire AppIcon.icns : dessiner la variante c aux dix tailles de l'iconset (16, 32, 32, 64,
+// 128, 256, 256, 512, 512, 1024 px, noms icon_16x16.png, icon_16x16@2x.png… icon_512x512@2x.png),
+// chacune à sa taille exacte (rendu vectoriel, pas de rééchantillonnage), dans un dossier
+// AppIcon.iconset, puis : iconutil -c icns AppIcon.iconset -o outils/icone/AppIcon.icns
+//
 // Cadre commun, relevé sur les autres apps : tuile arrondie de 824 px dans 1024 (80 %,
 // marge de 100), ombre douce portée vers le bas, glyphe de 45 à 55 % de la tuile, aplats.
 

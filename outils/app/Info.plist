@@ -28,7 +28,7 @@
 		<string>fr</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>macstatusd sends the Mac's usage status to Home Assistant on your local network.</string>
+	<string>macstatusd talks to Home Assistant on your local network so that HomeKit knows whether the Mac is in use.</string>
 	<key>MacstatusdSupportName</key>
 	<string>@NOM_SUPPORT@</string>
 </dict>
