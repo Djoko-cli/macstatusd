@@ -419,8 +419,9 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
 **Interfaces :**
 - Produit, `outils/assembler-app.sh` :
   - options `[--binaire <chemin>] [--identifiant <id>] [--nom-support <nom>] [--sortie <dossier>] [--icone <icns>] [--signer <identité>|-]`.
-    Défauts : compilation `swift build -c release`, `com.djoko.macstatusd`, `macstatusd`, `build/app`,
-    `outils/icone/AppIcon.icns` et signature ad hoc (`-`) ;
+    Défauts : compilation `swift build -c release`, `com.djoko.macstatusd`, `macstatusd`,
+    `$HOME/Library/Caches/macstatusd-build/app` (R14, hors de `~/Documents`), `outils/icone/AppIcon.icns` et
+    signature ad hoc (`-`) ;
   - le nom de l'app est `macstatusd.app`, ou `macstatusd-<suffixe>.app` pour `com.djoko.macstatusd.<suffixe>`.
     Le script imprime le chemin de l'app sur sa dernière ligne.
 - Contenu de l'`Info.plist` :
@@ -461,7 +462,8 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
   qu'aucune forme n'est coupée.
 - [x] **Étape 5 : validation par Djoko** (SendUserFile, rendu). Il choisit une variante, ou la fait reprendre. Sa
   réponse va au registre.
-- [x] **Étape 6 :** jeu d'icônes par `sips` (16 à 1024 px, en 1x et 2x), puis `iconutil -c icns`, qui donne
+- [x] **Étape 6 :** jeu d'icônes dessiné par le script à chaque taille, de 16 à 1024 px, en 1x et 2x (R15 : `sips`
+  contrôle les dimensions, sans rééchantillonner), puis `iconutil -c icns`, qui donne
   `outils/icone/AppIcon.icns`. Le banc passe, cas `defauts` compris. Commit « Plan 4 : paquet macstatusd.app,
   icône validée par Djoko (C20) ».
 
