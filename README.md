@@ -142,9 +142,10 @@ refuse to run as root.
    ```
 
    The agent is registered and its state is printed. A double-click does the
-   same, shows the alert "macstatusd runs in the background. Settings: General >
-   Login Items & Extensions." and quits. While the agent runs, a double-click on
-   the app opens nothing.
+   same, shows an alert that follows the state read afterwards ("macstatusd runs in
+   the background. Settings: General > Login Items & Extensions.", or an approval
+   request, or "macstatusd could not register: ..." with the reason) and quits. While
+   the agent runs, a double-click on the app opens nothing.
 4. The first time, macOS asks you to allow the app in **System Settings >
    General > Login Items & Extensions**. Without that, the state stays
    `requires-approval`.
@@ -167,6 +168,7 @@ copies it into `~/Applications`, registers the agent and checks `/health`. Optio
 |--------|--------|
 | `--app <path.app>` | install that app instead of building one |
 | `--ancien-prefixe <folder>` | folder of a 0.5 installation to migrate (default `/opt/macstatusd`) |
+| `--anciens-journaux <folder>` | old agent's log folder emptied to the Trash (default `~/Library/Logs/macstatusd`); must be a direct subfolder of `~/Library/Logs/` |
 | `--preparer-jeton` | stops after the configuration and the token: no copy, no registration |
 | `--sans-verification` | does not check `/health` at the end |
 

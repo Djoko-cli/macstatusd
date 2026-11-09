@@ -29,8 +29,31 @@ public enum ServiceState: String {
         case .requiresApproval: return "à autoriser : Réglages Système > Général > Ouverture et extensions"
         case .notRegistered: return "non enregistré : lancer macstatusd --register"
         case .notFound: return "introuvable : l'app doit être dans ~/Applications ou /Applications"
+        // Sans code : le code brut n'existe que dans `message(rawStatus:)`, qui le complète pour un état inconnu.
         case .unknown: return "inconnu"
         }
+    }
+
+    /// Texte de l'alerte montrée par un lancement depuis le Finder, d'après l'état relu après `register()`.
+    /// `registerFailed` : `register()` a levé une erreur ; l'alerte ne promet alors rien. Le message de l'état
+    /// reste en français, comme celui de la CLI.
+    public func finderAlertText(registerFailed: Bool, preferEnglish: Bool) -> String {
+        if !registerFailed {
+            switch self {
+            case .enabled:
+                return preferEnglish
+                    ? "macstatusd runs in the background. Settings: General > Login Items & Extensions."
+                    : "macstatusd tourne en arrière-plan. Réglages : Général > Ouverture et extensions."
+            case .requiresApproval:
+                return preferEnglish
+                    ? "macstatusd needs your approval: System Settings > General > Login Items & Extensions."
+                    : "macstatusd attend ton autorisation : Réglages Système > Général > Ouverture et extensions."
+            default: break
+            }
+        }
+        return preferEnglish
+            ? "macstatusd could not register: \(message)."
+            : "macstatusd n'a pas pu s'enregistrer : \(message)."
     }
 
     /// Phrase pour un code brut de SMAppService : comme `message`, avec le code pour un état inconnu

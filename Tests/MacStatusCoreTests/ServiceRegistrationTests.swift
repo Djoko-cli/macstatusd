@@ -25,6 +25,29 @@ final class ServiceRegistrationTests: XCTestCase {
         XCTAssertEqual(ServiceState.message(rawStatus: 1), "activé")
     }
 
+    func test_alerteDuFinder_selonLEtat_dansLesDeuxLangues() {
+        XCTAssertEqual(ServiceState.enabled.finderAlertText(registerFailed: false, preferEnglish: false),
+                       "macstatusd tourne en arrière-plan. Réglages : Général > Ouverture et extensions.")
+        XCTAssertEqual(ServiceState.enabled.finderAlertText(registerFailed: false, preferEnglish: true),
+                       "macstatusd runs in the background. Settings: General > Login Items & Extensions.")
+        XCTAssertEqual(ServiceState.requiresApproval.finderAlertText(registerFailed: false, preferEnglish: false),
+                       "macstatusd attend ton autorisation : Réglages Système > Général > Ouverture et extensions.")
+        XCTAssertEqual(ServiceState.requiresApproval.finderAlertText(registerFailed: false, preferEnglish: true),
+                       "macstatusd needs your approval: System Settings > General > Login Items & Extensions.")
+        XCTAssertEqual(ServiceState.notFound.finderAlertText(registerFailed: false, preferEnglish: false),
+                       "macstatusd n'a pas pu s'enregistrer : introuvable : l'app doit être dans ~/Applications ou /Applications.")
+        XCTAssertEqual(ServiceState.notRegistered.finderAlertText(registerFailed: false, preferEnglish: true),
+                       "macstatusd could not register: non enregistré : lancer macstatusd --register.")
+    }
+
+    func test_alerteDuFinder_registerEnEchec_ditQueLEnregistrementAEchoue() {
+        // Même si l'état relu est « activé » ou « à autoriser », un register() en échec n'affiche pas de bonne nouvelle.
+        XCTAssertEqual(ServiceState.enabled.finderAlertText(registerFailed: true, preferEnglish: false),
+                       "macstatusd n'a pas pu s'enregistrer : activé.")
+        XCTAssertEqual(ServiceState.requiresApproval.finderAlertText(registerFailed: true, preferEnglish: true),
+                       "macstatusd could not register: à autoriser : Réglages Système > Général > Ouverture et extensions.")
+    }
+
     func test_etatDuService_aApprouver_ditOuLeReactiver() {
         XCTAssertEqual(ServiceState.requiresApproval.message,
                        "à autoriser : Réglages Système > Général > Ouverture et extensions")

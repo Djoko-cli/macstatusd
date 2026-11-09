@@ -5,8 +5,8 @@ import Foundation
 /// secondes. Le coût d'une lecture non lente : deux lectures de l'horloge d'éveil et un verrou.
 ///
 /// Les durées se mesurent sur `clock.awake()`, veille exclue (un gel du processus, Mac éveillé, compte), avant
-/// et après l'appel. Le WARN passe par `logWarn`, comme
-/// tout le moteur. `snapshot` alimente le champ `slow_calls` de `/status`.
+/// et après l'appel. Le WARN passe par `logWarn`, comme tout le moteur. `snapshot` alimente le champ
+/// `slow_calls` de `/status`.
 public final class SlowCallMonitor {
     private let clock: Clock
     private let threshold: Double

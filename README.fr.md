@@ -144,9 +144,11 @@ d'arrière-plan enregistré auprès de macOS (`SMAppService`). Rien ne demande
    ```
 
    L'agent est enregistré et son état s'affiche. Un double-clic fait la même
-   chose, montre l'alerte « macstatusd tourne en arrière-plan. Réglages : Général
-   > Ouverture et extensions. » puis quitte. Tant que l'agent tourne, un
-   double-clic sur l'app n'ouvre rien.
+   chose, montre une alerte fidèle à l'état relu ensuite (« macstatusd tourne en
+   arrière-plan. Réglages : Général > Ouverture et extensions. », ou une demande
+   d'autorisation, ou « macstatusd n'a pas pu s'enregistrer : ... » avec la
+   raison) puis quitte. Tant que l'agent tourne, un double-clic sur l'app n'ouvre
+   rien.
 4. La première fois, macOS demande d'autoriser l'app dans **Réglages Système >
    Général > Ouverture et extensions**. Sans cela, l'état reste
    `requires-approval`.
@@ -170,6 +172,7 @@ dans `~/Applications`, enregistre l'agent et contrôle `/health`. Options :
 |--------|-------|
 | `--app <chemin.app>` | installe cette app au lieu d'en compiler une |
 | `--ancien-prefixe <dossier>` | dossier d'une installation 0.5 à migrer (défaut `/opt/macstatusd`) |
+| `--anciens-journaux <dossier>` | dossier des journaux de l'ancien agent, vidé à la Corbeille (défaut `~/Library/Logs/macstatusd`) ; sous-dossier direct de `~/Library/Logs/` obligatoire |
 | `--preparer-jeton` | s'arrête après la config et le jeton : ni copie, ni enregistrement |
 | `--sans-verification` | ne contrôle pas `/health` à la fin |
 

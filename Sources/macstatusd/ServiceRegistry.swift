@@ -19,12 +19,6 @@ enum ServiceRegistry {
         return ServiceState(rawStatus: service.status.rawValue)
     }
 
-    /// Texte de l'état courant, avec le code brut pour un état inconnu.
-    static func currentMessage() -> String {
-        guard let service = service() else { return ServiceState.notFound.message }
-        return ServiceState.message(rawStatus: service.status.rawValue)
-    }
-
     /// Enregistre l'agent, puis rend l'état obtenu. L'échec est rendu en texte.
     static func register() -> (state: ServiceState, failure: String?) {
         guard let service = service() else { return (.notFound, nil) }
@@ -47,6 +41,7 @@ enum ServiceRegistry {
     }
 
     /// Options `--register`, `--unregister` et `--status-service` : imprime l'état, sort par son code.
+    /// L'état est lu une seule fois, après l'action : message et code viennent de cette valeur.
     static func runCommand(_ option: String) -> Never {
         var failure: String?
         switch option {
@@ -57,24 +52,24 @@ enum ServiceRegistry {
         if let failure {
             FileHandle.standardError.write(Data("macstatusd: \(option) : \(failure)\n".utf8))
         }
-        print(currentMessage())
-        exit(currentState().exitCode)
+        let status = service()?.status.rawValue
+        print(status.map { ServiceState.message(rawStatus: $0) } ?? ServiceState.notFound.message)
+        exit((status.map { ServiceState(rawStatus: $0) } ?? .notFound).exitCode)
     }
 
-    /// Lancement par le Finder : enregistre l'agent, informe par une alerte, quitte. Le daemon, lui, tourne
-    /// sous launchd.
+    /// Lancement par le Finder : enregistre l'agent, informe par une alerte fidèle à l'état relu, quitte. Le
+    /// daemon, lui, tourne sous launchd.
     static func runFromFinder() -> Never {
-        _ = register()
+        let registration = register()
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
         application.activate(ignoringOtherApps: true)
         let french = Locale.preferredLanguages.first?.hasPrefix("fr") == true
         let alert = NSAlert()
-        alert.messageText = french
-            ? "macstatusd tourne en arrière-plan. Réglages : Général > Ouverture et extensions."
-            : "macstatusd runs in the background. Settings: General > Login Items & Extensions."
+        alert.messageText = registration.state.finderAlertText(registerFailed: registration.failure != nil,
+                                                               preferEnglish: !french)
         alert.addButton(withTitle: "OK")
         alert.runModal()
-        exit(currentState().exitCode)
+        exit(registration.state.exitCode)
     }
 }

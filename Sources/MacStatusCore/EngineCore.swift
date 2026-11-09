@@ -26,7 +26,8 @@ import Foundation
 /// Le moteur n'a ni file ni minuterie. **Contrat : on l'appelle toujours depuis
 /// une même file série** (celle de `EngineRunner` dans l'exécutable), ce qui
 /// exclut toute course entre les notifications système, le serveur HTTP et la
-/// scrutation. Les échéances (lissage, escalade, délai de confirmation, trou de
+/// scrutation. Les appels lents (lectures du système, dont l'état du service par XPC) se mesurent sur
+/// `clock.awake()`, veille exclue. Les échéances (lissage, escalade, délai de confirmation, trou de
 /// scrutation) se mesurent par `clock.monotonic()` et s'évaluent à chaque `tick()`.
 public final class EngineCore {
     private let config: Config
@@ -1183,7 +1184,7 @@ public final class EngineCore {
             "saver_start": actions.screenSaverStart.rawValue,
             "slow_calls": slowCalls.snapshot,
             "build": buildInfo.statusDictionary,
-            "service": serviceState().rawValue,
+            "service": slowCalls.measure("service") { serviceState() }.rawValue,
             "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
             "display_list": facts.displays.map { display -> [String: Any] in
                 ["id": display.idText, "main": display.isMain, "asleep": display.asleep,
