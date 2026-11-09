@@ -861,7 +861,7 @@ faite et refaite au banc.
 
   Le paquet de relecture lui est remis avec son plan de lecture, en tranches mesurées par `wc -l`.
 - [x] **Étape 2 :** corrections par un agent neuf, puis relecture ciblée.
-- [ ] **Étape 3 : vérification finale.**
+- [x] **Étape 3 : vérification finale.** (09/11, tête 1a4bac2 : 574 tests ; bancs assembleur, installation, publier, garde 31 OK ; python 78 OK ; selftest écran allumé 92 OK, écran éteint 88 OK, 0 échec ; --once conforme à l'instance réelle)
   - `swift test` ;
   - selftest écran allumé, puis écran éteint ;
   - `bash outils/tests/test-assembler-app.sh`, `test-install.sh`, `test-publier.sh` et `test-garde.sh` ;
