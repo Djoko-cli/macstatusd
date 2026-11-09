@@ -63,7 +63,7 @@ nouveau_cas() { # nom
   export FAUX_JOURNAL="$base/journal"
   export PATH="$faux:$chemin_initial"
   export MACSTATUSD_VERIF_PAUSE=0
-  unset FAUX_LAUNCHCTL_PRINT FAUX_LAUNCHCTL_KICKSTART_CODE FAUX_CURL_CODE FAUX_APP_CODE FAUX_APP_UNREGISTER_CODE MACSTATUSD_EUID
+  unset FAUX_LAUNCHCTL_PRINT FAUX_LAUNCHCTL_KICKSTART_CODE FAUX_LAUNCHCTL_BOOTSTRAP_CODE FAUX_CURL_CODE FAUX_APP_CODE FAUX_APP_UNREGISTER_CODE MACSTATUSD_EUID
   support="$HOME/Library/Application Support/macstatusd-essai"
   config="$support/config.json"
   installee="$HOME/Applications/macstatusd-essai.app"
@@ -359,6 +359,18 @@ verifier "$cas" "plist pas à la Corbeille" 0 "$(en_poubelle "$libelle.plist")"
 verifier "$cas" "message : l'ancienne version a été relancée" 1 "$(nb_motif "L'ancienne version a été relancée" "$base/sortie.txt")"
 verifier "$cas" "aucun marqueur restart-pending" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
 
+nouveau_cas migration-meme-libelle-echec-bootstrap
+libelle="com.djoko.macstatusd"
+creer_app v1 com.djoko.macstatusd macstatusd-essai
+creer_ancien
+charger "$libelle" "$prefixe/macstatusd"
+export FAUX_APP_CODE=1 FAUX_LAUNCHCTL_BOOTSTRAP_CODE=5
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 1 "$code"
+verifier "$cas" "message : pas de faux « relancée »" 0 "$(nb_motif "L'ancienne version a été relancée" "$base/sortie.txt")"
+verifier "$cas" "message : n'a pas pu être relancée" 1 "$(nb_motif "n'a pas pu être relancée" "$base/sortie.txt")"
+verifier "$cas" "commande de relance donnée" 1 "$(nb_motif "launchctl bootstrap gui/$(id -u) \"$HOME/Library/LaunchAgents/$libelle.plist\"" "$base/sortie.txt")"
+
 nouveau_cas migration-meme-libelle-a-approuver
 libelle="com.djoko.macstatusd"
 creer_app v1 com.djoko.macstatusd macstatusd-essai
@@ -383,6 +395,10 @@ charger "$libelle" "$installee/Contents/MacOS/macstatusd"
 lancer_install --app "$app" --ancien-prefixe "$prefixe"
 verifier "$cas" "code de sortie" 0 "$code"
 verifier "$cas" "la 0.6 n'est pas arrêtée (aucun bootout)" 0 "$(nb_motif bootout "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "aucun bootout du libellé avant --register" 0 "$(sed -n "1,$(rang_premier '^app --register')p" "$FAUX_JOURNAL/ordre.log" | /usr/bin/grep -c bootout || true)"
+verifier "$cas" "kickstart après --register" oui "$([[ $(rang_dernier '^launchctl kickstart') -gt $(rang_premier '^app --register') && $(rang_premier '^app --register') -gt 0 ]] && echo oui || echo non)"
+verifier "$cas" "message : agent déjà chargé" 1 "$(nb_motif "Agent déjà chargé" "$base/sortie.txt")"
+verifier "$cas" "marqueur restart-pending posé (le daemon le consomme)" présent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
 verifier "$cas" "plist à la Corbeille" 1 "$(en_poubelle "$libelle.plist")"
 
 # --- migration-identite-production ------------------------------------------------------

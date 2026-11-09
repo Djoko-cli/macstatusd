@@ -148,7 +148,7 @@ refuse to run as root.
    if [ -e "$F" ]; then echo "config.json already exists: set it aside (mv) and run this block again, or keep its auth_token"; else
      ( umask 077; : > "$F"; chmod 600 "$F"
        printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
-     stat -f %Lp "$F"   # must print 600
+     echo "mode: $(stat -f %Lp "$F") (expected: 600)"
    fi
    ```
 
@@ -524,11 +524,16 @@ successful once the facts confirm it.
 
 ## Diagnostics
 
+- `--once`: state and facts as JSON, then exits.
+- `--watch`: continuous table of facts.
+- `--version`: version and provenance (git, date).
+- `curl -s localhost:9090/status`: full view of the running instance.
+
 ```bash
-~/Applications/macstatusd.app/Contents/MacOS/macstatusd --once     # state + facts as JSON, then exits
-~/Applications/macstatusd.app/Contents/MacOS/macstatusd --watch    # continuous table of facts
-~/Applications/macstatusd.app/Contents/MacOS/macstatusd --version  # version and provenance (git, date)
-curl -s localhost:9090/status                       # full view of the running instance
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --once
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --watch
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --version
+curl -s localhost:9090/status
 tail -f ~/Library/Logs/macstatusd/macstatusd.log
 ```
 
@@ -611,10 +616,17 @@ path outside `~/Applications` and `~/Library`. Exit codes: 0 done, 1 failure or
 refusal, 2 usage.
 
 From the published archive there is no script: unregister the agent, then put the
-app in the Trash.
+app in the Trash. The app is in `~/Applications` or in `/Applications`, depending on
+where you put it:
 
 ```bash
 ~/Applications/macstatusd.app/Contents/MacOS/macstatusd --unregister
+```
+
+or, if it is in `/Applications`:
+
+```bash
+/Applications/macstatusd.app/Contents/MacOS/macstatusd --unregister
 ```
 
 `uninstall.sh` is in the repository, not in the archive, and it only accepts an
@@ -628,10 +640,14 @@ is gone all the same: `launchctl list | grep macstatusd` no longer shows it.
 
 ### Tests
 
+- `swift test`: unit tests of MacStatusCore (rules, engine, webhook, HTTP, documentation).
+- `./scripts/selftest.sh`: runs swift test, then checks on isolated test instances.
+- `./scripts/validate-live.sh`: guided validation through the real states.
+
 ```bash
-swift test                               # unit tests of MacStatusCore (rules, engine, webhook, HTTP, documentation)
-./scripts/selftest.sh                    # runs swift test, then checks on isolated test instances
-./scripts/validate-live.sh               # guided validation through the real states
+swift test
+./scripts/selftest.sh
+./scripts/validate-live.sh
 ```
 
 `DocumentationTests` keeps these READMEs aligned with the code: every key of

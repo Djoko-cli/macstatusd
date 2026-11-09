@@ -298,6 +298,13 @@ if [[ ${#plists_collision[@]} -gt 0 ]]; then
   if sortie_print="$(launchctl print "gui/$(id -u)/$identifiant" 2>/dev/null)" \
      && [[ "$sortie_print" == *"$ancien_prefixe/macstatusd"* ]]; then
     ancien_a_arreter=1
+  elif [[ -n "${sortie_print:-}" ]] || launchctl print "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+    # Job chargé sans l'ancien binaire : c'est la 0.6 (relance après une autorisation). Elle doit être
+    # relancée comme pour une mise à jour, car l'étape 4 remplace son app.
+    agent_charge=1
+    : > "$support/restart-pending"
+    marqueur_pose=1
+    echo "==> Agent déjà chargé : marqueur restart-pending posé (le redémarrage ne publiera pas OFF)"
   fi
   unset sortie_print
 elif launchctl print "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
@@ -370,10 +377,14 @@ case "$code_app" in
   *)
     echo "!! L'enregistrement a échoué (code $code_app)" >&2
     if [[ $ancien_a_arreter -eq 1 ]]; then
+      relance_ratee=0
       for plist in "${plists_collision[@]}"; do
-        launchctl bootstrap "gui/$(id -u)" "$plist" > /dev/null 2>&1 || true
+        if ! launchctl bootstrap "gui/$(id -u)" "$plist" > /dev/null 2>&1; then
+          relance_ratee=1
+          echo "!! L'ancienne version n'a pas pu être relancée. Relance-la avec : launchctl bootstrap gui/$(id -u) \"$plist\"" >&2
+        fi
       done
-      echo "!! L'ancienne version a été relancée." >&2
+      if [[ $relance_ratee -eq 0 ]]; then echo "!! L'ancienne version a été relancée." >&2; fi
     fi
     exit 1 ;;
 esac

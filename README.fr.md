@@ -150,7 +150,7 @@ d'arrière-plan enregistré auprès de macOS (`SMAppService`). Rien ne demande
    if [ -e "$F" ]; then echo "config.json existe déjà : le mettre de côté (mv) et relancer ce bloc, ou garder son auth_token"; else
      ( umask 077; : > "$F"; chmod 600 "$F"
        printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
-     stat -f %Lp "$F"   # doit afficher 600
+     echo "droits : $(stat -f %Lp "$F") (attendu : 600)"
    fi
    ```
 
@@ -540,11 +540,16 @@ réussie qu'une fois les faits confirmés.
 
 ## Diagnostic
 
+- `--once` : état et faits en JSON, puis quitte.
+- `--watch` : tableau continu des faits.
+- `--version` : version et provenance (git, date).
+- `curl -s localhost:9090/status` : vue complète de l'instance en cours.
+
 ```bash
-~/Applications/macstatusd.app/Contents/MacOS/macstatusd --once     # état + faits en JSON, puis quitte
-~/Applications/macstatusd.app/Contents/MacOS/macstatusd --watch    # tableau continu des faits
-~/Applications/macstatusd.app/Contents/MacOS/macstatusd --version  # version et provenance (git, date)
-curl -s localhost:9090/status                       # vue complète de l'instance en cours
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --once
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --watch
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --version
+curl -s localhost:9090/status
 tail -f ~/Library/Logs/macstatusd/macstatusd.log
 ```
 
@@ -628,10 +633,17 @@ root et refuse tout chemin hors de `~/Applications` et de `~/Library`. Codes de
 sortie : 0 réussi, 1 échec ou refus, 2 usage.
 
 Depuis l'archive publiée, il n'y a pas de script : retirer l'agent, puis mettre
-l'app à la Corbeille.
+l'app à la Corbeille. L'app est dans `~/Applications` ou dans `/Applications`, selon
+l'endroit où tu l'as mise :
 
 ```bash
 ~/Applications/macstatusd.app/Contents/MacOS/macstatusd --unregister
+```
+
+ou, si elle est dans `/Applications` :
+
+```bash
+/Applications/macstatusd.app/Contents/MacOS/macstatusd --unregister
 ```
 
 `uninstall.sh` est dans le dépôt, pas dans l'archive, et il n'accepte qu'une app
@@ -645,10 +657,14 @@ tard. L'agent est bien parti : `launchctl list | grep macstatusd` ne le montre p
 
 ### Tests
 
+- `swift test` : tests unitaires de MacStatusCore (règles, moteur, webhook, HTTP, documentation).
+- `./scripts/selftest.sh` : lance swift test, puis des contrôles sur des instances d'essai isolées.
+- `./scripts/validate-live.sh` : validation guidée à travers les vrais états.
+
 ```bash
-swift test                               # tests unitaires de MacStatusCore (règles, moteur, webhook, HTTP, documentation)
-./scripts/selftest.sh                    # lance swift test, puis des contrôles sur des instances d'essai isolées
-./scripts/validate-live.sh               # validation guidée à travers les vrais états
+swift test
+./scripts/selftest.sh
+./scripts/validate-live.sh
 ```
 
 `DocumentationTests` garde ces README alignés sur le code : chaque clé de

@@ -4,6 +4,7 @@
 # rend 0 quand le libellé figure dans $FAUX_JOURNAL/charges (une ligne par job chargé : « libellé [programme] »)
 # et 1 sinon. Il affiche « program = <programme> » quand la ligne en porte un.
 # « bootout gui/<uid>/<libellé> » retire le libellé de ce fichier ; « bootstrap gui/<uid> <plist> » l'y ajoute.
+# « bootstrap » rend FAUX_LAUNCHCTL_BOOTSTRAP_CODE s'il est non nul (sans charger le job).
 # « kickstart » rend FAUX_LAUNCHCTL_KICKSTART_CODE (0 par défaut).
 echo "$*" >> "$FAUX_JOURNAL/launchctl.log"
 echo "launchctl $*" >> "$FAUX_JOURNAL/ordre.log"
@@ -23,6 +24,7 @@ case "${1:-}" in
     fi
     exit 0 ;;
   bootstrap)
+    if [[ "${FAUX_LAUNCHCTL_BOOTSTRAP_CODE:-0}" != 0 ]]; then exit "$FAUX_LAUNCHCTL_BOOTSTRAP_CODE"; fi
     if [[ -f "${3:-}" ]]; then
       echo "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$3") $(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$3")" >> "$charges"
     fi
