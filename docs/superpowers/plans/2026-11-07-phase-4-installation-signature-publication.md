@@ -332,7 +332,7 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
   - Suite complète. Registre du plan, rubrique « Pour les README » : `slow_calls` et le WARN « appel lent » mesurent
     le temps éveillé, veille exclue ; un gel du processus, lui, compte. Commit « Plan 4 : appels lents mesurés hors
     veille (R85, amendement) ».
-- [ ] **Étape 9 : la fin d'une veille sans avis ne relit pas les écrans (R85, banc 3, amendement du 09/11).**
+- [x] **Étape 9 : la fin d'une veille sans avis ne relit pas les écrans (R85, banc 3, amendement du 09/11).**
   Banc 3 : ON 2,1 s après la fin de la veille. `endAbortedSleep()` relit tous les faits après `noteWake`, écrans
   compris, alors qu'il vient de les lire ; la relecture des écrans a pris 1,45 s pendant leur rallumage.
   - Test rouge `test_finDeVeilleSansAvis_reutiliseLaLectureDesEcrans_ONDansLeLissage` : la fin de veille par une frappe

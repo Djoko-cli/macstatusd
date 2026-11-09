@@ -403,7 +403,12 @@ public final class EngineCore {
 
     // MARK: - Faits
 
-    private func refreshFacts() {
+    /// Dernier relevé brut des écrans rendu par `signals.displaySnapshot()`, avant `DisplayTopology.state`.
+    private var lastDisplaySnapshot: DisplaySnapshot?
+
+    /// `reuseDisplaySnapshot` : ne pas relire les écrans, reprendre le dernier relevé brut (la topologie en est
+    /// recalculée avec l'état courant de `screensAsleepNotified`). Sans relevé gardé, les écrans sont lus.
+    private func refreshFacts(reuseDisplaySnapshot: Bool = false) {
         var next = Facts()
         next.systemAsleep = systemAsleep
 
@@ -415,8 +420,14 @@ public final class EngineCore {
         // Session vue verrouillée pendant la veille en cours : relue déverrouillée, elle y met fin.
         if sleepInProgress, session.locked { sleepSawLocked = true }
 
-        let display = DisplayTopology.state(slowCalls.measure("ecrans") { signals.displaySnapshot() },
-                                            screensAsleepNotified: screensAsleepNotified)
+        let snapshot: DisplaySnapshot
+        if reuseDisplaySnapshot, let kept = lastDisplaySnapshot {
+            snapshot = kept
+        } else {
+            snapshot = slowCalls.measure("ecrans") { signals.displaySnapshot() }
+            lastDisplaySnapshot = snapshot
+        }
+        let display = DisplayTopology.state(snapshot, screensAsleepNotified: screensAsleepNotified)
         if screensAsleepNotified, display.enumerationOK,
            !display.displays.contains(where: { !$0.isPlaceholder && $0.asleep }) {
             screensAsleepNotified = false
@@ -889,7 +900,8 @@ public final class EngineCore {
     ///
     /// À appeler juste après un `refreshFacts()` : les deux règles lisent ses faits. La fin est tenue comme celle
     /// d'un réveil traité (`noteWake`), sans republication forcée, puis les faits sont relus (ils disent le Mac
-    /// éveillé) ; l'appelant évalue ensuite sans l'immédiat, donc ON attend le lissage. L'avis IOKit qui arrive
+    /// éveillé), écrans exceptés : leur relevé, fait juste avant, est réutilisé ; leur relecture a tenu ON 1,45 s
+    /// au banc 3 (R85). L'appelant évalue ensuite sans l'immédiat, donc ON attend le lissage. L'avis IOKit qui arrive
     /// après trouve la fin posée et ne force rien.
     private func endAbortedSleep() {
         guard sleepInProgress, let sleep = lastSleep else { return }
@@ -907,7 +919,7 @@ public final class EngineCore {
         }
         noteWake(now: now)
         logInfo("fin de la veille sans avis de réveil (\(cause))")
-        refreshFacts()
+        refreshFacts(reuseDisplaySnapshot: true)
     }
 
     // MARK: - Arrêt

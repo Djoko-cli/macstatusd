@@ -1232,6 +1232,59 @@ final class EngineCoreSaverTests: EngineCoreTestCase {
         }
     }
 
+    /// R85 (banc 3) : la fin d'une veille sans avis relit les faits sans relire les écrans, dont le relevé vient d'être
+    /// fait. Chaque lecture des écrans après la première du tick coûte 1,45 s d'horloge d'essai (la relecture du banc
+    /// avait tenu la file du moteur pendant le rallumage des écrans externes) : ON, session verrouillée, part au
+    /// tick suivant, moins de `settle_on_ms` + un intervalle de scrutation après la première lecture, sans avis IOKit.
+    func test_finDeVeilleSansAvis_reutiliseLaLectureDesEcrans_ONDansLeLissage() {
+        signaux.etatSession.locked = true
+        let (core, _) = moteurEnVeille()
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }   // verrouillée, aucune activité
+        XCTAssertEqual(veilleSignalee(core), true)
+        XCTAssertFalse(core.currentState)
+
+        var lecturesDuTick = 0
+        var finDeLaPremiereLecture = 0.0
+        signaux.surLectureEcrans = { [self] in
+            lecturesDuTick += 1
+            if lecturesDuTick == 1 { finDeLaPremiereLecture = horloge.t } else { horloge.advance(1.45) }
+        }
+        let avant = signaux.lecturesEcrans
+        signaux.inactiviteHID = 0.3          // une frappe, bien plus de 2 s après l'annonce
+        scruter(core, 0.5)
+        XCTAssertEqual(signaux.lecturesEcrans - avant, 1, "\(journal.lines)")
+        XCTAssertEqual(veilleSignalee(core), false, "\(journal.lines)")
+        XCTAssertTrue(journalContient("fin de la veille sans avis de réveil (activité"), "\(journal.lines)")
+        XCTAssertFalse(core.currentState, "évaluation non immédiate : ON attend le lissage")
+
+        lecturesDuTick = 0
+        scruterSansActivite(core, 0.5)
+        XCTAssertTrue(core.currentState, "\(journal.lines)")
+        XCTAssertEqual(core.statusSnapshot()["reason"] as? String, "lock-screen-ui")
+        XCTAssertLessThanOrEqual(horloge.t - finDeLaPremiereLecture, 0.3 + 0.5 + 0.001,
+                                 "ON publié trop tard après la première lecture des écrans")
+        XCTAssertFalse(journalContient("IOKit: réveil système"))
+        XCTAssertEqual(publicationsForcees, 0)
+    }
+
+    /// Même défaut par le chemin du déverrouillage : session vue verrouillée pendant la veille, puis avis de
+    /// déverrouillage (`refreshAfterNotification(…, endingAbortedSleep: true)`) : une seule lecture des écrans.
+    func test_finDeVeilleParDeverrouillage_reutiliseLaLectureDesEcrans() {
+        signaux.etatSession.locked = true
+        let (core, _) = moteurEnVeille()
+        for _ in 0..<4 { scruterSansActivite(core, 0.5) }
+        XCTAssertEqual(veilleSignalee(core), true)
+
+        signaux.etatSession.locked = false
+        horloge.advance(0.5)
+        signaux.inactiviteHID += 0.5
+        let avant = signaux.lecturesEcrans
+        core.handle(.screenUnlocked)
+        XCTAssertEqual(veilleSignalee(core), false, "\(journal.lines)")
+        XCTAssertTrue(finDeVeilleJournalisee("session déverrouillée"), "\(journal.lines)")
+        XCTAssertEqual(signaux.lecturesEcrans - avant, 1, "\(journal.lines)")
+    }
+
     /// Un avis de déverrouillage seul ne prouve rien : la session n'a jamais été vue verrouillée depuis l'annonce.
     func test_sessionJamaisVerrouillee_avisDeDeverrouillage_neMetPasFin() {
         let (core, _) = moteurEnVeille()

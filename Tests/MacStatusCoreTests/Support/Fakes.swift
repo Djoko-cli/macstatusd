@@ -194,7 +194,10 @@ final class FakeSignals: SystemSignals {
     /// Appelé au début de chaque `displaySnapshot()` : un test y fait avancer l'horloge d'essai pour simuler une
     /// lecture lente des écrans.
     var surLectureEcrans: (() -> Void)?
+    /// Nombre d'appels de `displaySnapshot()` : une lecture des écrans par appel.
+    private(set) var lecturesEcrans = 0
     func displaySnapshot() -> DisplaySnapshot {
+        lecturesEcrans += 1
         surLectureEcrans?()
         return ecrans
     }
