@@ -332,6 +332,18 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
   - Suite complète. Registre du plan, rubrique « Pour les README » : `slow_calls` et le WARN « appel lent » mesurent
     le temps éveillé, veille exclue ; un gel du processus, lui, compte. Commit « Plan 4 : appels lents mesurés hors
     veille (R85, amendement) ».
+- [ ] **Étape 9 : la fin d'une veille sans avis ne relit pas les écrans (R85, banc 3, amendement du 09/11).**
+  Banc 3 : ON 2,1 s après la fin de la veille. `endAbortedSleep()` relit tous les faits après `noteWake`, écrans
+  compris, alors qu'il vient de les lire ; la relecture des écrans a pris 1,45 s pendant leur rallumage.
+  - Test rouge `test_finDeVeilleSansAvis_reutiliseLaLectureDesEcrans_ONDansLeLissage` : la fin de veille par une frappe
+    ne lit les écrans qu'une fois. La seconde lecture ferait avancer l'horloge d'essai de 1,45 s, et ON doit partir au
+    plus `settle_on_ms` après la lecture qui a montré les écrans allumés.
+  - La même chose pour le chemin du déverrouillage.
+  - Mise en œuvre : la relecture qui suit `noteWake` dans `endAbortedSleep()` réutilise le relevé brut des écrans
+    qu'elle vient de faire, recalculé avec l'avis d'écrans éteints oublié. Session, inactivité, économiseur et
+    saisie sécurisée sont relus.
+  - Suite complète. Commit « Plan 4 : fin de veille sans avis sans relecture des écrans (R85, banc 3) ».
+  - Le banc de la nouvelle répétition (tâche 11) refait R85.
 
 **Contrôle du relecteur :** concurrence.
 - Toute valeur de `CachedSignals` se lit et s'écrit sur une seule file. Une relecture n'est jamais doublée.
