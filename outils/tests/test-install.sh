@@ -44,7 +44,8 @@ verifier() { # cas description attendu réel
 etat_reel() {
   local d
   for d in "$vrai_home/Applications" "$vrai_home/Library/LaunchAgents"; do
-    echo "$(ls -A "$d" 2>/dev/null | wc -l | tr -d ' ') fichiers, empreinte $(ls -la "$d" 2>&1 | cksum | cut -d' ' -f1)"
+    # -lA et non -la : « .. » (le dossier personnel, ou ~/Library) change de date pour une écriture sans rapport.
+    echo "$(ls -A "$d" 2>/dev/null | wc -l | tr -d ' ') fichiers, empreinte $(ls -lA "$d" 2>&1 | cksum | cut -d' ' -f1)"
   done
 }
 avant=$(etat_reel)
