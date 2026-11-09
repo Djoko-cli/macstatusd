@@ -194,4 +194,92 @@ final class EngineCoreDisplayReaderTests: EngineCoreTestCase {
         XCTAssertEqual(apres["ecrans"]?["count"] as? Int, 1)
         XCTAssertEqual(apres["ecrans"]?["max_seconds"] as? Double, 1.5)
     }
+    // MARK: - Correction 1 : tout changement annoncé invalide le relevé gardé
+
+    /// Un virtuel principal qui reste éveillé quand l'écran physique s'endort (cas de `EngineCoreSaverTests`).
+    private var virtuelPrincipal: DisplayInfo {
+        DisplayInfo(id: 1, vendor: 0x4321, model: 0x5678, asleep: false, isMain: true)
+    }
+
+    private func lister(_ ecrans: DisplayInfo...) -> DisplaySnapshot {
+        DisplaySnapshot(displays: ecrans, enumerationOK: true)
+    }
+
+    /// I1 : le relevé gardé (écrans éveillés) ne doit pas effacer l'avis `screensDidSleep`.
+    func test_ecransEteintsAnnonces_releveGardeEveille_ONNeResteePas() {
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        let core = moteurAvecLecteur()
+        XCTAssertTrue(core.currentState)
+        scruter(core, 0.5)               // relevé gardé éveillé, relecture en vol
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        core.handle(.screensDidSleep)
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertFalse(core.currentState, "écrans physiques éteints : OFF malgré le virtuel éveillé")
+        XCTAssertEqual(verdictDesFaits(core), "display-asleep")
+    }
+
+    /// I1 : une relecture lancée avant l'avis et livrée après est jetée.
+    func test_relectureEnVolAvantExtinction_jetee() {
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2))
+        let core = moteurAvecLecteur()
+        scruter(core, 0.5)
+        lecteur.finirLesRelectures()     // lit des écrans encore éveillés
+        signaux.ecrans = lister(virtuelPrincipal, .physique(2, asleep: true))
+        core.handle(.screensDidSleep)
+        lecteur.livrer()                 // livrée après l'avis : jetée
+        XCTAssertEqual(verdictDesFaits(core), "display-asleep")
+        for _ in 0..<4 { scruter(core, 0.5) }
+        XCTAssertFalse(core.currentState)
+    }
+
+    /// I2 : après un trou non couvert par la veille, l'évaluation forcée se fait sur une lecture synchrone.
+    func test_trouNonCouvert_lectureSynchroneAvantLEvaluationForcee() {
+        let core = moteurAvecLecteur()
+        scruter(core, 0.5)               // relevé gardé « allumé »
+        signaux.etatEcran.asleep = true
+        let avant = lecteur.lecturesImmediates
+        horloge.advance(15)
+        core.tick()                      // gel sans veille annoncée
+        XCTAssertEqual(lecteur.lecturesImmediates, avant + 1, "lecture synchrone au trou")
+        XCTAssertEqual(verdictDesFaits(core), "display-asleep")
+        XCTAssertEqual(publieur.publications.filter { $0.etat }, [Publication(etat: true, force: false)],
+                       "aucun ON forcé sur le relevé périmé : \(publieur.publications)")
+    }
+
+    /// M3 : après un réveil commandé, une livraison en vol ne lâche pas l'assertion avant le tick suivant.
+    func test_reveilCommande_releveInvalide_relachementAuTickSuivant() {
+        let core = moteurAvecLecteur()
+        scruter(core, 0.5)               // relecture en vol
+        core.requestOn(peer: "essai")    // déjà ON : réveil léger
+        XCTAssertEqual(actions.appels, [.wake])
+        lecteur.relireEtLivrer()         // livraison juste après le réveil : jetée
+        XCTAssertEqual(actions.appelsReveil, [], "pas de relâchement hors tick")
+        scruter(core, 0.5)
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake], "relâché au tick suivant")
+    }
+
+    /// M1 : `--watch` lit les écrans de façon synchrone, sans relecture d'arrière-plan.
+    func test_watch_lectureSynchrone_sansLivraison() {
+        let core = moteurAvecLecteur()
+        let publicationsAvant = publieur.publications
+        _ = core.inspect()
+        _ = core.inspect()
+        XCTAssertTrue(lecteur.travaux.isEmpty, "aucune relecture d'arrière-plan")
+        XCTAssertEqual(lecteur.lecturesImmediates, 3)
+        XCTAssertTrue(lecteur.livraisons.isEmpty)
+        XCTAssertEqual(publieur.publications, publicationsAvant)
+    }
+
+    /// Arrêt pendant une relecture en vol : à sa livraison, rien n'est évalué ni publié.
+    func test_livraisonApresArret_rien() {
+        let core = moteurAvecLecteur()
+        scruter(core, 0.5)
+        core.shutdown(publishOff: false) {}
+        let publications = publieur.publications
+        let journalAvant = journal.lines.count
+        signaux.etatEcran.asleep = true
+        lecteur.relireEtLivrer()
+        XCTAssertEqual(publieur.publications, publications)
+        XCTAssertEqual(journal.lines.count, journalAvant, "rien n'est évalué")
+    }
 }

@@ -274,6 +274,8 @@ public final class EngineCore {
         lastTickAt = now
 
         let recovering = gap > max(10, config.pollInterval * 20)
+        // Un trou de scrutation : le relevé gardé a au moins 10 s, l'évaluation forcée se fait sur une lecture réelle.
+        if recovering { invalidateDisplaySnapshot() }
         var force = recovering
         var covered = false
         if recovering {
@@ -421,9 +423,19 @@ public final class EngineCore {
     /// Change à chaque veille annoncée et à chaque réveil : une relecture lancée avant est jetée à son retour.
     private var displayGeneration = 0
 
+    /// Tout événement qui annonce un changement des écrans (veille, réveil, extinction ou réveil des écrans, trou de
+    /// scrutation, réveil commandé) passe par ici, avant la relecture des faits qui le suit : le relevé gardé n'est plus
+    /// sûr (la lecture suivante est synchrone) et une relecture en vol sera jetée à sa livraison.
+    private func invalidateDisplaySnapshot() {
+        displayGeneration += 1
+        displaySnapshotValid = false
+    }
+
     /// `reuseDisplaySnapshot` : ne pas relire les écrans, reprendre le dernier relevé brut (la topologie en est
     /// recalculée avec l'état courant de `screensAsleepNotified`). Sans relevé gardé, les écrans sont lus.
-    private func refreshFacts(reuseDisplaySnapshot: Bool = false) {
+    /// `synchronousDisplays` : lecture réelle tout de suite, jamais le relevé gardé ni de relecture d'arrière-plan
+    /// (`inspect`, pour `--once` et `--watch`).
+    private func refreshFacts(reuseDisplaySnapshot: Bool = false, synchronousDisplays: Bool = false) {
         var next = Facts()
         next.systemAsleep = systemAsleep
 
@@ -439,7 +451,7 @@ public final class EngineCore {
         if reuseDisplaySnapshot, let kept = lastDisplaySnapshot {
             snapshot = kept
         } else if let runner = displayRunner {
-            if let kept = lastDisplaySnapshot, displaySnapshotValid, !systemAsleep {
+            if let kept = lastDisplaySnapshot, displaySnapshotValid, !systemAsleep, !synchronousDisplays {
                 // Hors veille annoncée, avec un relevé sûr : on ne bloque pas la file du moteur sur CoreGraphics.
                 snapshot = kept
                 startBackgroundDisplayRead(runner)
@@ -665,6 +677,8 @@ public final class EngineCore {
         lightWake = false
         deferredReleaseReason = nil
         actions.wake()
+        // Aucune livraison de relecture ne doit lâcher l'assertion avant le tick suivant, qui relit de façon synchrone.
+        invalidateDisplaySnapshot()
         guard !actions.hasWakeOverride else { return }
         wakeAssertionHeld = true
         wakeJustIssued = true
@@ -775,7 +789,7 @@ public final class EngineCore {
         }
         logInfo("veille imminente → publication OFF avant gel du daemon")
         systemAsleep = true
-        displayGeneration += 1   // une relecture des écrans en vol sera jetée
+        invalidateDisplaySnapshot()   // une relecture des écrans en vol sera jetée
         // Deux avis de veille sans réveil entre eux : le début reste celui du premier.
         if lastSleep == nil || lastSleep?.end != nil {
             lastSleep = SleepSpan(start: clock.monotonic(), awakeStart: clock.awake())
@@ -870,10 +884,12 @@ public final class EngineCore {
         case .screensDidSleep:
             // Le système le dit : un écran physique au moins s'est endormi, même si un écran virtuel veille encore.
             screensAsleepNotified = true
+            invalidateDisplaySnapshot()
             refreshFacts()
             evaluate(immediate: false)
         case .screensDidWake:
             screensAsleepNotified = false
+            invalidateDisplaySnapshot()
             refreshFacts()
             evaluate(immediate: false)
         case .sessionActive, .sessionInactive:
@@ -913,8 +929,7 @@ public final class EngineCore {
         systemAsleep = false
         screensAsleepNotified = false
         // Le relevé d'avant la veille ne doit jamais servir au réveil : relecture synchrone, relecture en vol jetée.
-        displayGeneration += 1
-        displaySnapshotValid = false
+        invalidateDisplaySnapshot()
         saver.noteSystemWake()
         return slept
     }
@@ -1287,7 +1302,7 @@ public final class EngineCore {
 
     /// Instantané des faits pour `--once` / `--watch` (hors serveur HTTP).
     public func inspect() -> (state: Bool, reason: String, facts: Facts) {
-        refreshFacts()
+        refreshFacts(synchronousDisplays: true)
         let verdict = factsVerdict()
         return (published ?? verdict.state, verdict.reason, facts)
     }
