@@ -344,6 +344,20 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
     saisie sécurisée sont relus.
   - Suite complète. Commit « Plan 4 : fin de veille sans avis sans relecture des écrans (R85, banc 3) ».
   - Le banc de la nouvelle répétition (tâche 11) refait R85.
+- [ ] **Étape 10 : les écrans se lisent hors de la file du moteur (R85, banc 4, amendement du 09/11).**
+  Banc 4, réveil par l'avis IOKit : ON 1,5 s après les premiers faits « écrans allumés ». Trois lectures des écrans de
+  1,5 s environ ont tenu la file pendant la reconfiguration ; le lissage ON attendait la lecture suivante.
+  - Hors veille annoncée, une lecture des écrans rend le dernier relevé et lance une relecture en arrière-plan, une
+    seule à la fois. À son retour sur la file du moteur, les faits sont recalculés avec ce relevé, sans nouvelle
+    lecture, puis évalués sans l'immédiat.
+  - Pendant une veille annoncée, les lectures sont synchrones. À chaque réveil (`noteWake`), le relevé gardé est
+    invalidé : la lecture suivante est synchrone. Une relecture lancée avant la veille et rendue après est jetée
+    (génération).
+  - `endAbortedSleep()` valide le relevé de son tick (étape 9).
+  - Sans lecteur d'arrière-plan (tests, `nil`), comportement inchangé.
+  - Tests : voir la fiche (premier relevé synchrone ; une seule relecture en vol ; retour sans boucle ; relecture
+    jetée après une veille ; réveil sombre sans faux ON ; séquence du banc 4 ; appels lents comptés).
+  - Le banc de la nouvelle répétition refait R85.
 
 **Contrôle du relecteur :** concurrence.
 - Toute valeur de `CachedSignals` se lit et s'écrit sur une seule file. Une relecture n'est jamais doublée.
