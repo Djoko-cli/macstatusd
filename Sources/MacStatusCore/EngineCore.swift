@@ -39,6 +39,8 @@ public final class EngineCore {
     private let slowCalls: SlowCallMonitor
     /// Provenance du binaire, pour `/status` (champ `build`).
     private let buildInfo: BuildInfo
+    /// État de l'agent auprès de macOS, relu à chaque `/status` (C20).
+    private let serviceState: () -> ServiceState
 
     private var facts = Facts()
     private var systemAsleep = false
@@ -191,8 +193,10 @@ public final class EngineCore {
                 oracle: ScreenSaverOracle,
                 actions: CommandActions,
                 publisher: StatePublisher,
-                buildInfo: BuildInfo = .unknown) {
+                buildInfo: BuildInfo = .unknown,
+                serviceState: @escaping () -> ServiceState = { .unknown }) {
         self.buildInfo = buildInfo
+        self.serviceState = serviceState
         self.config = config
         self.clock = clock
         self.signals = signals
@@ -1179,6 +1183,7 @@ public final class EngineCore {
             "saver_start": actions.screenSaverStart.rawValue,
             "slow_calls": slowCalls.snapshot,
             "build": buildInfo.statusDictionary,
+            "service": serviceState().rawValue,
             "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
             "display_list": facts.displays.map { display -> [String: Any] in
                 ["id": display.idText, "main": display.isMain, "asleep": display.asleep,

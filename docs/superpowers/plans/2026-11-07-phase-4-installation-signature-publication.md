@@ -547,16 +547,16 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
   Le résultat va dans `.superpowers/banc/banc-3-essai-smappservice.md`. Si une clé n'est pas honorée, ou si
   `XPC_SERVICE_NAME` diffère, le contrôleur décide de la correction des gabarits de la tâche 5 ou de `decide`
   avant l'étape 2.
-- [ ] **Étape 2 : tests rouges**
+- [x] **Étape 2 : tests rouges**
   - `test_etatDuService_correspondanceDesCodes`, avec 0 à 3 et 7 ;
   - `test_etatDuService_aApprouver_ditOuLeReactiver` (message et code 3) ;
   - `test_modeDeLancement_agent` (`--agent`) et `test_modeDeLancement_finder` (sans argument, variable relevée à
     l'étape 1) ;
   - `test_modeDeLancement_ligneDeCommande` (sans argument ni variable ; `--once`) ;
   - `test_status_porteLEtatDuService`.
-- [ ] **Étape 3 :** mise en œuvre. Les appels à SMAppService vivent dans `ServiceRegistry.swift`, qui n'est jamais
+- [x] **Étape 3 :** mise en œuvre. Les appels à SMAppService vivent dans `ServiceRegistry.swift`, qui n'est jamais
   appelé par un test.
-- [ ] **Étape 4 :** suite complète, registre (options de la CLI, champ `service`, messages). Commit « Plan 4 :
+- [x] **Étape 4 :** suite complète, registre (options de la CLI, champ `service`, messages). Commit « Plan 4 :
   enregistrement de l'agent par SMAppService, --register, --unregister, --status-service (C20) ».
 
 **Contrôle du relecteur :**

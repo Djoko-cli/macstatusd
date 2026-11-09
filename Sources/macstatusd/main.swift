@@ -11,6 +11,14 @@ signal(SIGPIPE, SIG_IGN)
 // Les messages de la bibliothèque passent par ce journal : à brancher avant tout le reste.
 CoreLog.sink = Log.shared
 
+// MARK: - Mode de lancement
+
+// Double-clic dans le Finder : enregistre l'agent, informe, quitte. Le daemon tourne sous launchd (`--agent`).
+if LaunchMode.decide(arguments: Array(CommandLine.arguments.dropFirst()),
+                     environment: ProcessInfo.processInfo.environment) == .finder {
+    ServiceRegistry.runFromFinder()
+}
+
 // MARK: - Arguments
 
 struct Options {
@@ -60,6 +68,11 @@ func parseOptions() -> Options {
             options.watch = true
         case "--no-webhook":
             options.disableWebhook = true
+        case "--agent":
+            // Lancement par launchd : le daemon démarre comme sans argument.
+            break
+        case "--register", "--unregister", "--status-service":
+            ServiceRegistry.runCommand(argument)
         case "--version", "-v":
             print(BuildInfo.current().versionLine)
             exit(0)
@@ -77,6 +90,12 @@ func parseOptions() -> Options {
               --once              affiche l'état et les faits en JSON, puis quitte
               --watch             affiche l'état en continu (diagnostic)
               --no-webhook        n'envoie aucun webhook (tests)
+              --register          enregistre l'agent auprès de macOS (SMAppService), affiche l'état
+              --unregister        retire l'agent, affiche l'état
+              --status-service    affiche l'état de l'agent
+                                  (codes de sortie : 0 activé, 3 à autoriser, 4 non enregistré,
+                                  5 introuvable, 1 inconnu)
+              --agent             lancement par launchd (démarre le daemon)
               --version, -v       version et provenance du binaire (git, date)
               --help, -h          cette aide
 
@@ -168,7 +187,8 @@ if diagnosticMode {
 
 let actions = PowerActions(config: config)
 let buildInfo = BuildInfo.current()
-let engine = EngineRunner(config: config, actions: actions, buildInfo: buildInfo)
+let engine = EngineRunner(config: config, actions: actions, buildInfo: buildInfo,
+                          serviceState: { ServiceRegistry.currentState() })
 
 if options.once {
     let snapshot = engine.inspect()

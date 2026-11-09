@@ -45,7 +45,8 @@ class EngineCoreTestCase: XCTestCase {
         return core
     }
 
-    func moteurBrut(_ config: Config = Config(), build: BuildInfo = .unknown) -> EngineCore {
+    func moteurBrut(_ config: Config = Config(), build: BuildInfo = .unknown,
+                    service: @escaping () -> ServiceState = { .unknown }) -> EngineCore {
         let oracle = ScreenSaverOracle(
             dismissOnInput: config.saverDismissOnInput,
             dismissGrace: config.saverDismissGrace,
@@ -53,7 +54,7 @@ class EngineCoreTestCase: XCTestCase {
             signals: signaux
         )
         return EngineCore(config: config, clock: horloge, signals: signaux, oracle: oracle,
-                          actions: actions, publisher: publieur, buildInfo: build)
+                          actions: actions, publisher: publieur, buildInfo: build, serviceState: service)
     }
 
     func scruter(_ core: EngineCore, _ secondes: Double) {

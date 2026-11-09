@@ -1992,4 +1992,15 @@ final class EngineCoreTests: EngineCoreTestCase {
         XCTAssertEqual(instantane["session_context"] as? String, "aqua")
         XCTAssertEqual(instantane["uptime_seconds"] as? Int, 5)
     }
+
+    /// C20 : `service` vient du fournisseur reçu, relu à chaque appel ; `unknown` par défaut.
+    func test_status_porteLEtatDuService() {
+        var etat = ServiceState.enabled
+        let core = moteurBrut(service: { etat })
+        core.start()
+        XCTAssertEqual(core.statusSnapshot()["service"] as? String, "enabled")
+        etat = .requiresApproval
+        XCTAssertEqual(core.statusSnapshot()["service"] as? String, "requires-approval")
+        XCTAssertEqual(moteur().statusSnapshot()["service"] as? String, "unknown")
+    }
 }
