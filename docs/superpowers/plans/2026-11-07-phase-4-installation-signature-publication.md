@@ -852,7 +852,7 @@ faite et refaite au banc.
 
 ### Tâche 11 : relecture finale, fusion, puis publication de la 0.6.0
 
-- [ ] **Étape 1 : relecture finale de la branche par Opus**, de `6c0b992` à la tête. Risques nommés :
+- [x] **Étape 1 : relecture finale de la branche par Opus**, de `6c0b992` à la tête. Risques nommés :
   - le jeton dans `install.sh` et la publication ;
   - le masque sur tous les chemins d'erreur ;
   - la concurrence de `CachedSignals` ;
@@ -860,7 +860,7 @@ faite et refaite au banc.
   - les modes de lancement.
 
   Le paquet de relecture lui est remis avec son plan de lecture, en tranches mesurées par `wc -l`.
-- [ ] **Étape 2 :** corrections par un agent neuf, puis relecture ciblée.
+- [x] **Étape 2 :** corrections par un agent neuf, puis relecture ciblée.
 - [ ] **Étape 3 : vérification finale.**
   - `swift test` ;
   - selftest écran allumé, puis écran éteint ;
