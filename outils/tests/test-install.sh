@@ -100,6 +100,7 @@ creer_ancien() {
   "accessory_id": "mac",
   "port": 9191,
   "bind_address": "",
+  "log_file": "/private/tmp/macstatusd-plan4/ancien/macstatusd.log",
   "auth_token": ""
 }
 JSON
@@ -107,6 +108,14 @@ JSON
   ecrire_plist "$HOME/Library/LaunchAgents/$libelle-voisin.plist" "$libelle-voisin" "/home/exemple/autre/macstatusd"
   printf 'ligne ancienne\n' > "$HOME/Library/Logs/macstatusd/macstatusd.log"
 }
+
+# Déclare un job chargé pour le faux launchctl : libellé et, au choix, le programme qu'il lance.
+charger() { # libellé [programme]
+  echo "$1 ${2:-}" >> "$FAUX_JOURNAL/charges"
+}
+# Rang de la première / dernière ligne de ordre.log qui correspond à une expression (0 si absente).
+rang_premier() { /usr/bin/grep -n -E "$1" "$FAUX_JOURNAL/ordre.log" 2>/dev/null | head -n 1 | cut -d: -f1 | /usr/bin/grep -E '^[0-9]+$' || echo 0; }
+rang_dernier() { /usr/bin/grep -n -E "$1" "$FAUX_JOURNAL/ordre.log" 2>/dev/null | tail -n 1 | cut -d: -f1 | /usr/bin/grep -E '^[0-9]+$' || echo 0; }
 
 lancer_install() { # arguments d'install.sh
   bash "$depot/scripts/install.sh" "$@" > "$base/sortie.txt" 2>&1
@@ -170,6 +179,7 @@ verifier "$cas" "pas de marqueur de redémarrage (agent non chargé)" absent "$(
 verifier "$cas" "aucun kickstart (agent non chargé)" 0 "$(nb_motif kickstart "$FAUX_JOURNAL/launchctl.log")"
 verifier "$cas" "vérification de /health sur 127.0.0.1:9090" 1 "$(nb_motif "http://127.0.0.1:9090/health" "$FAUX_JOURNAL/curl.log")"
 verifier "$cas" "aucune trace Python" 0 "$(nb_motif Traceback "$base/sortie.txt")"
+verifier "$cas" "I2 : rappel d'éditer la config et de relancer l'agent" 1 "$(nb_motif "launchctl kickstart -k gui/$(id -u)/com.djoko.macstatusd.essai" "$base/sortie.txt")"
 verifier_jeton_cache
 
 # --- migration --------------------------------------------------------------------------
@@ -198,6 +208,12 @@ verifier "$cas" "ancien préfixe intact (config)" 0 "$(cmp -s "$prefixe/config.j
 verifier "$cas" "libellé de $(( ${#libelle} )) caractères annoncé" 1 "$(nb_motif "ancien agent retiré (libellé de ${#libelle} caractères)" "$base/sortie.txt")"
 verifier "$cas" "libellé jamais affiché" 0 "$(nb_motif "$libelle" "$base/sortie.txt")"
 verifier "$cas" "vérification sur le port migré" 1 "$(nb_motif "http://127.0.0.1:9191/health" "$FAUX_JOURNAL/curl.log")"
+verifier "$cas" "E1 : log_file de l'ancienne config non repris" False "$(valeur "$config" '"log_file" in c')"
+verifier "$cas" "E1 : message final avec le journal par défaut" 1 "$(nb_motif "Journal : $HOME/Library/Logs/macstatusd-essai/macstatusd.log" "$base/sortie.txt")"
+verifier "$cas" "M2 : marqueur restart-pending posé après le retrait" présent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+verifier "$cas" "M2 : un kickstart de l'agent 0.6" 1 "$(nb_motif "kickstart -k gui/$(id -u)/com.djoko.macstatusd.essai" "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "M2 : le kickstart suit le dernier bootout" oui "$([[ $(rang_dernier '^launchctl kickstart') -gt $(rang_dernier '^launchctl bootout') && $(rang_dernier '^launchctl bootout') -gt 0 ]] && echo oui || echo non)"
+verifier "$cas" "pas de rappel de config (config migrée)" 0 "$(nb_motif "La configuration vient d'être créée" "$base/sortie.txt")"
 verifier_jeton_cache
 
 # --- leurre -----------------------------------------------------------------------------
@@ -277,6 +293,97 @@ lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant"
 verifier "$cas" "code de sortie" 0 "$code"
 verifier "$cas" "kickstart tenté" 1 "$(nb_motif "kickstart -k" "$FAUX_JOURNAL/launchctl.log")"
 verifier "$cas" "pas de « agent relancé »" 0 "$(nb_motif "agent relancé" "$base/sortie.txt")"
+verifier "$cas" "M1 : marqueur retiré (aucun kickstart réussi ne l'a consommé)" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+verifier "$cas" "M3 : commande de relance donnée" 1 "$(nb_motif "launchctl kickstart -k gui/$(id -u)/com.djoko.macstatusd.essai)" "$base/sortie.txt")"
+# M1 : la copie échoue après la pose du marqueur.
+nouveau_cas marqueur-copie-echec
+creer_app v1
+export FAUX_LAUNCHCTL_PRINT=0
+mkdir -p "$HOME/Applications"
+chmod 000 "$app/Contents/MacOS" 2>/dev/null
+lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant"
+chmod 755 "$app/Contents/MacOS"
+verifier "$cas" "copie en échec : code 1" 1 "$code"
+verifier "$cas" "M1 : marqueur absent après l'échec" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+# Libellé d'un autre agent chargé : l'agent 0.6 n'est pas pris pour chargé (le faux répond par libellé).
+nouveau_cas faux-par-libelle
+creer_app v1
+creer_ancien
+charger "$libelle" "$prefixe/macstatusd"
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "agent 0.6 non pris pour chargé : aucun « Agent déjà chargé »" 0 "$(nb_motif "Agent déjà chargé" "$base/sortie.txt")"
+verifier "$cas" "aucun kickstart avant le retrait de l'ancien" oui "$([[ $(rang_premier '^launchctl kickstart') -gt $(rang_premier '^launchctl bootout') ]] && echo oui || echo non)"
+# Journal d'une config existante : le log_file de la config est donné.
+nouveau_cas journal-config
+creer_app v1
+mkdir -p "$support"
+printf '{"log_file": "/private/tmp/macstatusd-plan4/journal-essai.log", "auth_token": "ab"}\n' > "$config"
+lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "E1 : message avec le log_file de la config" 1 "$(nb_motif "Journal : /private/tmp/macstatusd-plan4/journal-essai.log" "$base/sortie.txt")"
+verifier "$cas" "pas de rappel de config (config gardée)" 0 "$(nb_motif "La configuration vient d'être créée" "$base/sortie.txt")"
+
+# --- Même libellé que l'agent 0.6 (gabarit publié de la 0.5) ------------------------------
+nouveau_cas migration-meme-libelle
+libelle="com.djoko.macstatusd"
+creer_app v1 com.djoko.macstatusd macstatusd-essai
+creer_ancien
+charger "$libelle" "$prefixe/macstatusd"
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "aucun marqueur restart-pending" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+verifier "$cas" "aucun kickstart" 0 "$(nb_motif kickstart "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "pas de « Agent déjà chargé »" 0 "$(nb_motif "Agent déjà chargé" "$base/sortie.txt")"
+verifier "$cas" "bootout de l'identifiant avant --register" 1 "$(nb_motif "bootout gui/$(id -u)/$libelle" "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "le bootout précède --register" oui "$([[ $(rang_premier '^launchctl bootout') -gt 0 && $(rang_premier '^launchctl bootout') -lt $(rang_premier '^app --register') ]] && echo oui || echo non)"
+verifier "$cas" "aucun bootout après --register" 0 "$(sed -n "$(rang_premier '^app --register'),\$p" "$FAUX_JOURNAL/ordre.log" | /usr/bin/grep -c bootout || true)"
+verifier "$cas" "message d'arrêt avant l'enregistrement" 1 "$(nb_motif "Ancienne version arrêtée avant l'enregistrement (même libellé)" "$base/sortie.txt")"
+verifier "$cas" "plist à la Corbeille" 1 "$(en_poubelle "$libelle.plist")"
+verifier "$cas" "plist retiré de LaunchAgents" absent "$([[ -e "$HOME/Library/LaunchAgents/$libelle.plist" ]] && echo présent || echo absent)"
+verifier "$cas" "aucun bootstrap" 0 "$(nb_motif bootstrap "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "anciens journaux à la Corbeille" 1 "$(en_poubelle "macstatusd.log")"
+verifier_jeton_cache
+
+nouveau_cas migration-meme-libelle-echec
+libelle="com.djoko.macstatusd"
+creer_app v1 com.djoko.macstatusd macstatusd-essai
+creer_ancien
+charger "$libelle" "$prefixe/macstatusd"
+export FAUX_APP_CODE=1
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 1 "$code"
+verifier "$cas" "bootstrap du plist après --register" oui "$([[ $(rang_dernier "^launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/$libelle.plist") -gt $(rang_premier '^app --register') && $(rang_premier '^app --register') -gt 0 ]] && echo oui || echo non)"
+verifier "$cas" "plist laissé en place" présent "$([[ -e "$HOME/Library/LaunchAgents/$libelle.plist" ]] && echo présent || echo absent)"
+verifier "$cas" "plist pas à la Corbeille" 0 "$(en_poubelle "$libelle.plist")"
+verifier "$cas" "message : l'ancienne version a été relancée" 1 "$(nb_motif "L'ancienne version a été relancée" "$base/sortie.txt")"
+verifier "$cas" "aucun marqueur restart-pending" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+
+nouveau_cas migration-meme-libelle-a-approuver
+libelle="com.djoko.macstatusd"
+creer_app v1 com.djoko.macstatusd macstatusd-essai
+creer_ancien
+charger "$libelle" "$prefixe/macstatusd"
+export FAUX_APP_CODE=3
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "pas de bootstrap (le libellé doit rester libre)" 0 "$(nb_motif bootstrap "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "bootout fait avant --register" 1 "$(nb_motif "bootout gui/$(id -u)/$libelle" "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "plist encore en place" présent "$([[ -e "$HOME/Library/LaunchAgents/$libelle.plist" ]] && echo présent || echo absent)"
+verifier "$cas" "message : relancer le script après l'autorisation" 1 "$(nb_motif "relance ce script tout de suite" "$base/sortie.txt")"
+verifier "$cas" "aucune vérification" 0 "$(nb_lignes "$FAUX_JOURNAL/curl.log")"
+verifier "$cas" "aucun marqueur restart-pending" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+
+# Relance après l'autorisation : le libellé est tenu par la 0.6, qui ne doit pas être arrêtée.
+nouveau_cas migration-meme-libelle-relance-apres-autorisation
+libelle="com.djoko.macstatusd"
+creer_app v1 com.djoko.macstatusd macstatusd-essai
+creer_ancien
+charger "$libelle" "$installee/Contents/MacOS/macstatusd"
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "la 0.6 n'est pas arrêtée (aucun bootout)" 0 "$(nb_motif bootout "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "plist à la Corbeille" 1 "$(en_poubelle "$libelle.plist")"
 
 # --- migration-identite-production ------------------------------------------------------
 # En production, le nom de support vaut « macstatusd » : la 0.6 écrit dans le dossier de journaux de la 0.5.

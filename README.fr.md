@@ -137,7 +137,27 @@ d'arrière-plan enregistré auprès de macOS (`SMAppService`). Rien ne demande
    vérifier la somme (`shasum -a 256 -c SHA256SUMS`) et décompresser.
 2. Déplacer `macstatusd.app` dans `~/Applications` (ou `/Applications` ; ailleurs,
    l'état est `not-found`).
-3. Double-cliquer dessus, ou l'enregistrer depuis un terminal :
+3. Créer la configuration (avant que l'agent démarre, car elle n'est lue qu'au
+   lancement). L'archive ne contient ni `install.sh` ni `config.example.json` :
+   coller ce bloc dans un Terminal. Il n'affiche jamais le jeton, et il ne fait
+   rien si le fichier existe déjà (dans ce cas, mettre le fichier existant de côté
+   avec `mv` et relancer le bloc, ou garder l'`auth_token` qu'il contient) :
+
+   ```bash
+   D="$HOME/Library/Application Support/macstatusd"
+   F="$D/config.json"
+   mkdir -p "$D"; chmod 700 "$D"
+   if [ -e "$F" ]; then echo "config.json existe déjà : le mettre de côté (mv) et relancer ce bloc, ou garder son auth_token"; else
+     ( umask 077; : > "$F"; chmod 600 "$F"
+       printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
+     stat -f %Lp "$F"   # doit afficher 600
+   fi
+   ```
+
+   Le fichier contient un `auth_token` de 64 caractères hexadécimaux. Pour donner
+   le jeton à Home Assistant, ouvrir le fichier dans un éditeur et copier la
+   valeur de là ; ne pas l'imprimer dans un terminal partagé.
+4. Double-cliquer sur l'app, ou l'enregistrer depuis un terminal :
 
    ```bash
    ~/Applications/macstatusd.app/Contents/MacOS/macstatusd --register
@@ -149,32 +169,17 @@ d'arrière-plan enregistré auprès de macOS (`SMAppService`). Rien ne demande
    d'autorisation, ou « macstatusd n'a pas pu s'enregistrer : ... » avec la
    raison) puis quitte. Tant que l'agent tourne, un double-clic sur l'app n'ouvre
    rien.
-4. La première fois, macOS demande d'autoriser l'app dans **Réglages Système >
+5. La première fois, macOS demande d'autoriser l'app dans **Réglages Système >
    Général > Ouverture et extensions**. Sans cela, l'état reste
    `requires-approval`.
+6. Éditer la configuration (`enabled`, `webhook_targets` ; les autres clés sont
+   dans [Configuration](#configuration)), puis relancer l'agent pour qu'il la
+   lise : `launchctl kickstart -k gui/$(id -u)/com.djoko.macstatusd`.
 
 La version publiée est signée par un Developer ID et notariée (voir [Signature et
 notarisation](#signature-et-notarisation)). Sans fichier de configuration, l'app
 écoute sur `127.0.0.1` seulement et ne publie rien, et sans `auth_token` aucune
-autre machine ne peut la commander. L'archive ne contient ni `install.sh` ni
-`config.example.json` : pour obtenir une configuration valide sans le dépôt,
-coller ce bloc dans un Terminal (il ne fait rien si le fichier existe déjà, et
-n'affiche jamais le jeton) :
-
-```bash
-D="$HOME/Library/Application Support/macstatusd"
-F="$D/config.json"
-mkdir -p "$D"
-if [ -e "$F" ]; then echo "config.json existe déjà : y ajouter auth_token à la main"; else
-  ( umask 077; : > "$F"; chmod 600 "$F"
-    printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
-fi
-```
-
-Le fichier est en droits 600 et contient un `auth_token` de 64 caractères
-hexadécimaux. Pour donner le jeton à Home Assistant, ouvrir le fichier dans un
-éditeur et copier la valeur de là ; ne pas l'imprimer dans un terminal partagé.
-Les autres clés sont dans [Configuration](#configuration).
+autre machine ne peut la commander.
 
 ### Depuis les sources
 
@@ -206,10 +211,13 @@ dans `~/Applications`, enregistre l'agent et contrôle `/health`. Options :
 3. **Redémarrage prévu** : un marqueur `restart-pending` est posé avant que l'app
    soit remplacée, pour que l'ancien process ne publie pas OFF en s'arrêtant. Si
    l'agent est déjà chargé, le script dit « Agent déjà chargé : marqueur
-   restart-pending posé ».
+   restart-pending posé ». Le marqueur est retiré si le script échoue ensuite avant
+   que l'agent ait été relancé.
 4. **Copie et enregistrement** : l'app va dans `~/Applications`, puis `--register`
    est lancé.
-5. **Ancien agent** : retiré, voir plus bas.
+5. **Ancien agent** : retiré, voir plus bas. Quand un ancien agent a été retiré et
+   que le nouvel agent est chargé, le script relance le nouvel agent en dernier :
+   son état est le dernier publié et il prend aussitôt le port libéré.
 6. **Contrôle** : `GET /health`, sur l'hôte tiré de `bind_address` (`""`, `::` et
    `0.0.0.0` donnent `127.0.0.1`) et sur le port configuré, 20 essais espacés de
    0,5 s. En cas d'échec, le script affiche « macstatusd ne répond pas sur <url> »
@@ -221,7 +229,8 @@ ou refus, 2 usage.
 Si le script affiche « À autoriser : Réglages Système > Général > Ouverture et
 extensions » (code d'enregistrement 3), il s'arrête avec le code 0 **avant** de
 retirer l'ancien agent et avant le contrôle : autoriser l'app dans les Réglages,
-puis relancer `install.sh`. Juste après une installation, le contrôle `/health`
+puis relancer `install.sh` aussitôt (voir [Mise à jour depuis la
+0.5](#mise-à-jour-depuis-la-05)). Juste après une installation, le contrôle `/health`
 peut aussi échouer si l'ancien agent tenait encore le port : relancer `install.sh`
 suffit.
 
@@ -258,7 +267,19 @@ aucune invite n'apparaît et que le journal confirme le webhook, il n'y a rien �
   `~/Library/LaunchAgents` dont `ProgramArguments[0]` est l'ancien binaire), jamais
   par son libellé, puis retiré par `launchctl bootout` ; son plist et ses anciens
   journaux vont à la Corbeille. Le script affiche « ancien agent retiré (libellé
-  de N caractères) » ;
+  de N caractères) ». Le gabarit 0.5 de ce dépôt porte le même libellé que l'agent
+  0.6 (`com.djoko.macstatusd`) : dans ce cas, l'ancien agent est arrêté **avant**
+  l'enregistrement de la 0.6 (« Ancienne version arrêtée avant l'enregistrement
+  (même libellé) »), et seul son plist va ensuite à la Corbeille (jamais de
+  `bootout` par libellé à ce moment-là, qui désignerait le nouvel agent). Si
+  l'enregistrement échoue, l'ancien agent est relancé et le script sort avec le
+  code 1 ;
+- si le script s'arrête sur la demande d'autorisation (code d'enregistrement 3), les
+  anciens journaux sont déjà à la Corbeille. Un ancien agent d'un autre libellé
+  continue de tourner jusqu'à la relance du script ; celui qui porte
+  `com.djoko.macstatusd` est déjà arrêté, et la 0.6 démarre à l'autorisation. Dans
+  les deux cas, relancer `install.sh` aussitôt après avoir autorisé l'app : le
+  vieux plist n'est retiré qu'à cette seconde passe ;
 - les journaux de la 0.5 contiennent l'URL du webhook : si l'agent 0.5 a été
   retiré à la main avant, ils restent où ils sont, donc les mettre à la Corbeille
   soi-même ;
@@ -433,6 +454,10 @@ seule cible GET) marche encore pour une configuration existante, mais
 
 ## Configuration
 
+La configuration est lue au lancement ; après une modification, relance l'agent :
+`launchctl kickstart -k gui/$(id -u)/com.djoko.macstatusd` (Home Assistant voit un
+OFF bref pendant la relance).
+
 `~/Library/Application Support/macstatusd/config.json` (`--config <chemin>` pour
 un autre fichier ; `MACSTATUSD_SUPPORT_DIR` remplace le dossier de support).
 Toutes les clés sont facultatives ; une clé absente ou invalide retrouve son
@@ -601,6 +626,16 @@ configuration (jeton compris) et les journaux sont gardés ; `--tout` les met au
 `~/.Trash` (pas de « Remettre » dans le Finder). Le script refuse de tourner en
 root et refuse tout chemin hors de `~/Applications` et de `~/Library`. Codes de
 sortie : 0 réussi, 1 échec ou refus, 2 usage.
+
+Depuis l'archive publiée, il n'y a pas de script : retirer l'agent, puis mettre
+l'app à la Corbeille.
+
+```bash
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --unregister
+```
+
+`uninstall.sh` est dans le dépôt, pas dans l'archive, et il n'accepte qu'une app
+sous `~/Applications`.
 
 Les Réglages Système peuvent garder l'app dans « Autoriser en arrière-plan », inactive,
 après la désinstallation : sous macOS 27, l'entrée y était encore des heures plus

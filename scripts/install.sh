@@ -187,6 +187,9 @@ if mode == "migrer" and "webhook_base_url" in cfg and "webhook_targets" not in c
         if base.strip():
             cfg["webhook_targets"] = [{"url": base, "method": "GET"}]
         del cfg["webhook_base_url"]
+if mode == "migrer":
+    # Le journal de la 0.6 va dans son dossier par défaut : l'ancien chemin n'est pas repris.
+    cfg.pop("log_file", None)
 jeton = cfg.get("auth_token")
 genere = not (isinstance(jeton, str) and jeton.strip())
 if genere:
@@ -195,6 +198,7 @@ sys.stdout.write(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
 sys.exit(0 if genere else 10)
 PY
 
+config_neuve=0
 echo "==> Config $config"
 mkdir -p "$support"
 chmod 700 "$support"
@@ -206,6 +210,7 @@ elif [[ -f "$ancien_prefixe/config.json" ]]; then
   echo "    migration de la config de l'ancienne installation (lecture seule)"
 else
   mode="migrer"; source_config="$depot/config.example.json"
+  config_neuve=1
   echo "    config prise de config.example.json"
 fi
 code_python=0
@@ -248,15 +253,57 @@ if [[ $code_python -eq 0 ]]; then
 else
   echo "    jeton déjà présent dans $config"
 fi
+
+# Chemin du journal : le log_file de la config s'il y est, sinon le chemin par défaut.
+journal="$(python3 -c 'import json,sys
+v = json.load(open(sys.argv[1], encoding="utf-8")).get("log_file")
+print(v if isinstance(v, str) and v.strip() else "")' "$config" 2>/dev/null)" || journal=""
+if [[ -z "$journal" ]]; then journal="$logs/macstatusd.log"; fi
+
+# La config n'est lue qu'au lancement du daemon : une config neuve (enabled: false, sans cible) se
+# complète à la main, puis l'agent se relance.
+rappel_config() {
+  if [[ $config_neuve -eq 1 ]]; then
+    echo "    La configuration vient d'être créée : édite $config, puis relance l'agent :"
+    echo "      launchctl kickstart -k gui/$(id -u)/$identifiant"
+  fi
+}
 if [[ $preparer_jeton -eq 1 ]]; then
   exit 0
 fi
 
+# --- 2b. Anciens agents repérés (F80), retrouvés par leur contenu, jamais par leur libellé ----------
+# Repérés AVANT le marqueur : un ancien agent peut porter le même libellé que la 0.6 (gabarit publié de
+# la 0.5, com.djoko.macstatusd). Le job chargé sous ce libellé est alors la 0.5, pas l'agent de la 0.6.
+anciens_plists=()
+plists_collision=()
+for plist in "$HOME/Library/LaunchAgents"/*.plist; do
+  [[ -f "$plist" ]] || continue
+  programme="$("$pb" -c "Print :ProgramArguments:0" "$plist" 2>/dev/null)" || continue
+  [[ "$programme" == "$ancien_prefixe/macstatusd" ]] || continue
+  anciens_plists+=("$plist")
+  libelle_ancien="$("$pb" -c "Print :Label" "$plist" 2>/dev/null)" || libelle_ancien=""
+  if [[ "$libelle_ancien" == "$identifiant" ]]; then plists_collision+=("$plist"); fi
+done
+
 # --- 3. Marqueur de redémarrage (C16) -------------------------------------------------------
 agent_charge=0
-if launchctl print "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+marqueur_pose=0
+ancien_a_arreter=0
+# Un échec après la pose du marqueur ne le laisse pas en place : seul un kickstart réussi le consomme.
+trap 'if [[ $marqueur_pose -eq 1 ]]; then rm -f "$support/restart-pending"; fi' EXIT
+if [[ ${#plists_collision[@]} -gt 0 ]]; then
+  # Le libellé est tenu par la 0.5 (ou, après une autorisation, déjà par la 0.6) : pas de marqueur ici.
+  # Seul un job chargé qui lance l'ancien binaire est arrêté avant l'enregistrement.
+  if sortie_print="$(launchctl print "gui/$(id -u)/$identifiant" 2>/dev/null)" \
+     && [[ "$sortie_print" == *"$ancien_prefixe/macstatusd"* ]]; then
+    ancien_a_arreter=1
+  fi
+  unset sortie_print
+elif launchctl print "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
   agent_charge=1
   : > "$support/restart-pending"
+  marqueur_pose=1
   echo "==> Agent déjà chargé : marqueur restart-pending posé (le redémarrage ne publiera pas OFF)"
 fi
 
@@ -277,16 +324,9 @@ else
   mv "$temporaire_app" "$destination"
 fi
 
-# --- 4b. Ancien agent repéré (F80), retrouvé par son contenu, jamais par son libellé -----------------
+# --- 4b. Anciens journaux ----------------------------------------------------------------------------
 # Les journaux de la 0.5.0 (URL du webhook en clair, spec section 4) partent à la Corbeille AVANT
 # l'enregistrement : en production la 0.6 écrit dans le même dossier, et recrée son journal ensuite.
-anciens_plists=()
-for plist in "$HOME/Library/LaunchAgents"/*.plist; do
-  [[ -f "$plist" ]] || continue
-  programme="$("$pb" -c "Print :ProgramArguments:0" "$plist" 2>/dev/null)" || continue
-  [[ "$programme" == "$ancien_prefixe/macstatusd" ]] || continue
-  anciens_plists+=("$plist")
-done
 if [[ ${#anciens_plists[@]} -gt 0 && -d "$anciens_journaux" ]]; then
   for f in "$anciens_journaux"/*; do
     [[ -f "$f" ]] && corbeille "$f"
@@ -295,6 +335,12 @@ if [[ ${#anciens_plists[@]} -gt 0 && -d "$anciens_journaux" ]]; then
 fi
 
 # --- 5. Enregistrement ------------------------------------------------------------------------
+if [[ $ancien_a_arreter -eq 1 ]]; then
+  for plist in "${plists_collision[@]}"; do
+    launchctl bootout "gui/$(id -u)/$identifiant" > /dev/null 2>&1 || true
+  done
+  echo "==> Ancienne version arrêtée avant l'enregistrement (même libellé)"
+fi
 echo "==> Enregistrement de l'agent"
 code_app=0
 sortie_app="$("$destination/Contents/MacOS/macstatusd" --register 2>&1)" || code_app=$?
@@ -304,17 +350,31 @@ case "$code_app" in
     # register() ne relance pas un agent déjà actif : la mise à jour exige un kickstart.
     if [[ $agent_charge -eq 1 ]]; then
       if launchctl kickstart -k "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+        marqueur_pose=0
         echo "    agent relancé"
       else
-        echo "    (kickstart de l'agent sans effet : il redémarrera tout seul)"
+        echo "    (kickstart de l'agent sans effet : l'ancien process continue jusqu'à la fin de la session."
+        echo "     Pour appliquer la mise à jour tout de suite : launchctl kickstart -k gui/$(id -u)/$identifiant)"
       fi
     fi ;;
   3)
     echo "==> À autoriser : Réglages Système > Général > Ouverture et extensions."
-    echo "    Autorise macstatusd, puis relance ce script : la migration et la vérification se feront alors."
+    if [[ $ancien_a_arreter -eq 1 ]]; then
+      echo "    Autorise macstatusd (la 0.6 démarre à l'autorisation, l'ancienne version est déjà arrêtée),"
+      echo "    puis relance ce script tout de suite : la migration et la vérification se feront alors."
+    else
+      echo "    Autorise macstatusd, puis relance ce script tout de suite : la migration et la vérification se feront alors."
+    fi
+    rappel_config
     exit 0 ;;
   *)
     echo "!! L'enregistrement a échoué (code $code_app)" >&2
+    if [[ $ancien_a_arreter -eq 1 ]]; then
+      for plist in "${plists_collision[@]}"; do
+        launchctl bootstrap "gui/$(id -u)" "$plist" > /dev/null 2>&1 || true
+      done
+      echo "!! L'ancienne version a été relancée." >&2
+    fi
     exit 1 ;;
 esac
 
@@ -323,16 +383,37 @@ echo "==> Ancien agent de $ancien_prefixe"
 if [[ ${#anciens_plists[@]} -eq 0 ]]; then
   echo "    aucun ancien agent trouvé"
 else
+  retires_hors_collision=0
   for plist in "${anciens_plists[@]}"; do
     libelle="$("$pb" -c "Print :Label" "$plist" 2>/dev/null)" || libelle=""
-    if [[ -n "$libelle" ]]; then
+    en_collision=0
+    if [[ ${#plists_collision[@]} -gt 0 ]]; then
+      for p in "${plists_collision[@]}"; do
+        if [[ "$p" == "$plist" ]]; then en_collision=1; fi
+      done
+    fi
+    if [[ $en_collision -eq 1 ]]; then
+      : # le libellé désigne maintenant le nouvel agent : seulement la Corbeille du plist
+    elif [[ -n "$libelle" ]]; then
       launchctl bootout "gui/$(id -u)/$libelle" > /dev/null 2>&1 || true
     else
       launchctl bootout "gui/$(id -u)" "$plist" > /dev/null 2>&1 || true
     fi
+    if [[ $en_collision -eq 0 ]]; then retires_hors_collision=$((retires_hors_collision + 1)); fi
     corbeille "$plist"
     echo "    ancien agent retiré (libellé de ${#libelle} caractères)"
   done
+  # L'état de la 0.6 part en dernier : son écoute prend aussitôt le port libéré par l'ancien agent.
+  if [[ $retires_hors_collision -gt 0 ]] && launchctl print "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+    : > "$support/restart-pending"
+    marqueur_pose=1
+    if launchctl kickstart -k "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+      marqueur_pose=0
+      echo "    agent relancé après le retrait de l'ancien (son état part en dernier)"
+    else
+      echo "    (kickstart de l'agent sans effet : launchctl kickstart -k gui/$(id -u)/$identifiant)"
+    fi
+  fi
 fi
 if [[ -f "$ancien_prefixe/macstatusd" ]]; then
   echo "    Le dossier de l'ancienne installation reste en place. Pour le supprimer, lance toi-même :"
@@ -341,7 +422,8 @@ fi
 
 # --- 7. Vérification (F63) --------------------------------------------------------------------
 if [[ $sans_verification -eq 1 ]]; then
-  echo "==> Installé (vérification ignorée). Journal : $logs/macstatusd.log"
+  echo "==> Installé (vérification ignorée). Journal : $journal"
+  rappel_config
   exit 0
 fi
 read -r -d '' python_hote <<'PY' || true
@@ -365,12 +447,13 @@ echo "==> Vérification ($url)"
 for ((essai = 1; essai <= 20; essai++)); do
   if curl -fsS --max-time 1 "$url" > /dev/null 2>&1; then
     echo "    OK : macstatusd répond"
-    echo "==> Installé. Journal : $logs/macstatusd.log"
+    echo "==> Installé. Journal : $journal"
+    rappel_config
     exit 0
   fi
   sleep "${MACSTATUSD_VERIF_PAUSE:-0.5}"
 done
 echo "!! macstatusd ne répond pas sur $url" >&2
 echo "   État de l'agent : \"$destination/Contents/MacOS/macstatusd\" --status-service" >&2
-echo "   Journal : $logs/macstatusd.log" >&2
+echo "   Journal : $journal" >&2
 exit 1

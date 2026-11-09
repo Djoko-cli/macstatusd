@@ -135,7 +135,27 @@ refuse to run as root.
    the checksum (`shasum -a 256 -c SHA256SUMS`) and unzip.
 2. Move `macstatusd.app` into `~/Applications` (or `/Applications`; elsewhere the
    state is `not-found`).
-3. Double-click it, or register it from a terminal:
+3. Create the configuration (before the agent starts, because it is read only at
+   launch). The archive contains neither `install.sh` nor `config.example.json`:
+   paste this block in a Terminal. It never prints the token, and it does nothing
+   if the file already exists (in that case, set the existing file aside with `mv`
+   and run the block again, or keep the `auth_token` it already holds):
+
+   ```bash
+   D="$HOME/Library/Application Support/macstatusd"
+   F="$D/config.json"
+   mkdir -p "$D"; chmod 700 "$D"
+   if [ -e "$F" ]; then echo "config.json already exists: set it aside (mv) and run this block again, or keep its auth_token"; else
+     ( umask 077; : > "$F"; chmod 600 "$F"
+       printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
+     stat -f %Lp "$F"   # must print 600
+   fi
+   ```
+
+   The file holds an `auth_token` of 64 hexadecimal characters. To hand the token
+   to Home Assistant, open the file in an editor and copy the value from there; do
+   not print it in a shared terminal.
+4. Double-click the app, or register it from a terminal:
 
    ```bash
    ~/Applications/macstatusd.app/Contents/MacOS/macstatusd --register
@@ -146,32 +166,17 @@ refuse to run as root.
    the background. Settings: General > Login Items & Extensions.", or an approval
    request, or "macstatusd could not register: ..." with the reason) and quits. While
    the agent runs, a double-click on the app opens nothing.
-4. The first time, macOS asks you to allow the app in **System Settings >
+5. The first time, macOS asks you to allow the app in **System Settings >
    General > Login Items & Extensions**. Without that, the state stays
    `requires-approval`.
+6. Edit the configuration (`enabled`, `webhook_targets`; the other keys are in
+   [Configuration](#configuration)), then restart the agent so that it reads it:
+   `launchctl kickstart -k gui/$(id -u)/com.djoko.macstatusd`.
 
 The release is signed with a Developer ID and notarized (see [Signing and
 notarization](#signing-and-notarization)). Without a configuration file, the app
 listens on `127.0.0.1` only and publishes nothing, and without `auth_token` no
-other machine can command it. The archive contains neither `install.sh` nor
-`config.example.json`: to get a valid configuration without the repository,
-paste this block in a Terminal (it does nothing if the file already exists, and
-never prints the token):
-
-```bash
-D="$HOME/Library/Application Support/macstatusd"
-F="$D/config.json"
-mkdir -p "$D"
-if [ -e "$F" ]; then echo "config.json already exists: add auth_token to it by hand"; else
-  ( umask 077; : > "$F"; chmod 600 "$F"
-    printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
-fi
-```
-
-The file is in mode 600 and holds an `auth_token` of 64 hexadecimal characters.
-To hand the token to Home Assistant, open the file in an editor and copy the
-value from there; do not print it in a shared terminal. The other keys are in
-[Configuration](#configuration).
+other machine can command it.
 
 ### From the sources
 
@@ -202,9 +207,13 @@ Steps, in order:
 3. **Planned restart**: a `restart-pending` marker is written before the app is
    replaced, so the old process does not publish OFF when it stops. If the agent
    is already loaded, the script says "Agent déjà chargé : marqueur restart-pending posé".
+   The marker is removed again if the script then fails before the agent has been
+   restarted.
 4. **Copy and registration**: the app goes into `~/Applications`, then
    `--register` is run.
-5. **Old agent**: removed, see below.
+5. **Old agent**: removed, see below. When one was removed and the new agent is
+   loaded, the script restarts the new agent last, so that its state is the last one
+   published and it takes over the freed port.
 6. **Check**: `GET /health`, on the host taken from `bind_address` (`""`, `::` and
    `0.0.0.0` give `127.0.0.1`) and on the configured port, 20 tries 0.5 s apart.
    Failure prints "macstatusd ne répond pas sur <url>" and exits with code 1.
@@ -214,7 +223,7 @@ Exit codes: 0 done (also when approval is pending), 1 failure or refusal, 2 usag
 If the script prints "À autoriser : Réglages Système > Général > Ouverture et
 extensions" (registration code 3), it stops with code 0 **before** removing the
 old agent and before the check: allow the app in the Settings, then run
-`install.sh` again. Right after an installation the `/health` check can also
+`install.sh` again right away (see [Updating from 0.5](#updating-from-05)). Right after an installation the `/health` check can also
 fail if the old agent was still holding the port: running `install.sh` again is
 enough.
 
@@ -251,7 +260,17 @@ webhook is confirmed in the log, nothing else is needed.
   `~/Library/LaunchAgents` whose `ProgramArguments[0]` is the old binary), never
   by its label, then removed with `launchctl bootout`; its plist and its old logs
   go to the Trash. The script prints "ancien agent retiré (libellé de N
-  caractères)";
+  caractères)". The 0.5 template in this repository uses the same label as the 0.6
+  agent (`com.djoko.macstatusd`): in that case the old agent is stopped **before**
+  the 0.6 is registered ("Ancienne version arrêtée avant l'enregistrement (même
+  libellé)"), and only its plist goes to the Trash afterwards (never a `bootout` by
+  label at that point, which would name the new agent). If the registration fails,
+  the old agent is started again and the script exits with code 1;
+- if the script ends on the approval request (registration code 3), the old logs
+  are already in the Trash. An old agent with another label keeps running until you
+  run the script again; one labelled `com.djoko.macstatusd` is already stopped, and
+  the 0.6 starts when you allow it. Either way, run `install.sh` again right after
+  allowing the app: the old plist is only removed on that second run;
 - the 0.5 logs contain the webhook URL: if you removed the 0.5 agent by hand
   first, they stay where they are, so put them in the Trash yourself;
 - the script **prints** the command that removes the old folder
@@ -421,6 +440,10 @@ overrides it when both are present.
 
 ## Configuration
 
+The configuration is read at launch; after a change, restart the agent:
+`launchctl kickstart -k gui/$(id -u)/com.djoko.macstatusd` (Home Assistant sees a
+brief OFF during the restart).
+
 `~/Library/Application Support/macstatusd/config.json` (`--config <path>` to use
 another file; `MACSTATUSD_SUPPORT_DIR` replaces the support folder). Every key is
 optional; a missing or invalid key falls back to its default without preventing
@@ -586,6 +609,16 @@ Trash as well. Nothing is deleted for good: "Trash" is a `mv` into `~/.Trash`
 (no "Put Back" in the Finder). The script refuses to run as root and refuses any
 path outside `~/Applications` and `~/Library`. Exit codes: 0 done, 1 failure or
 refusal, 2 usage.
+
+From the published archive there is no script: unregister the agent, then put the
+app in the Trash.
+
+```bash
+~/Applications/macstatusd.app/Contents/MacOS/macstatusd --unregister
+```
+
+`uninstall.sh` is in the repository, not in the archive, and it only accepts an
+app under `~/Applications`.
 
 System Settings can keep listing the app under "Allow in the Background", inactive,
 after the uninstall: on macOS 27 the entry was still there hours later. The agent

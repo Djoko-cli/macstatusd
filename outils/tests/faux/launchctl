@@ -1,7 +1,32 @@
 #!/bin/bash
-# Faux launchctl du banc : note chaque appel. « print » rend FAUX_LAUNCHCTL_PRINT (1 = agent non chargé) ; « kickstart » rend FAUX_LAUNCHCTL_KICKSTART_CODE (0 par défaut).
+# Faux launchctl du banc : note chaque appel dans launchctl.log et ordre.log.
+# « print » : si FAUX_LAUNCHCTL_PRINT est défini, il rend cette valeur (1 = agent non chargé) ; sinon il
+# rend 0 quand le libellé figure dans $FAUX_JOURNAL/charges (une ligne par job chargé : « libellé [programme] »)
+# et 1 sinon. Il affiche « program = <programme> » quand la ligne en porte un.
+# « bootout gui/<uid>/<libellé> » retire le libellé de ce fichier ; « bootstrap gui/<uid> <plist> » l'y ajoute.
+# « kickstart » rend FAUX_LAUNCHCTL_KICKSTART_CODE (0 par défaut).
 echo "$*" >> "$FAUX_JOURNAL/launchctl.log"
 echo "launchctl $*" >> "$FAUX_JOURNAL/ordre.log"
-if [[ "${1:-}" == "print" ]]; then exit "${FAUX_LAUNCHCTL_PRINT:-1}"; fi
-if [[ "${1:-}" == "kickstart" ]]; then exit "${FAUX_LAUNCHCTL_KICKSTART_CODE:-0}"; fi
+charges="$FAUX_JOURNAL/charges"
+libelle_cible="${2##*/}"
+case "${1:-}" in
+  print)
+    if [[ -n "${FAUX_LAUNCHCTL_PRINT:-}" ]]; then exit "$FAUX_LAUNCHCTL_PRINT"; fi
+    ligne="$([[ -f "$charges" ]] && /usr/bin/grep -m1 -E "^$libelle_cible( |\$)" "$charges")" || exit 1
+    programme="${ligne#"$libelle_cible"}"; programme="${programme# }"
+    if [[ -n "$programme" ]]; then echo "	program = $programme"; fi
+    exit 0 ;;
+  bootout)
+    if [[ "$2" == */*/* && -f "$charges" ]]; then
+      /usr/bin/grep -v -E "^$libelle_cible( |\$)" "$charges" > "$charges.tmp"
+      mv "$charges.tmp" "$charges"
+    fi
+    exit 0 ;;
+  bootstrap)
+    if [[ -f "${3:-}" ]]; then
+      echo "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$3") $(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$3")" >> "$charges"
+    fi
+    exit 0 ;;
+  kickstart) exit "${FAUX_LAUNCHCTL_KICKSTART_CODE:-0}" ;;
+esac
 exit 0

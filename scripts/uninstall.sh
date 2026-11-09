@@ -24,7 +24,7 @@ fi
 home_normalise="$(printf '%s' "${HOME:-}" | tr -s '/')"
 home_normalise="${home_normalise%/}"
 if [[ -z "${HOME:-}" || "$HOME" != /* || -z "$home_normalise" ]]; then
-  echo "!! HOME invalide (vide, relatif ou « / ») : rien n'est installé." >&2
+  echo "!! HOME invalide (vide, relatif ou « / ») : rien n'est fait." >&2
   exit 1
 fi
 

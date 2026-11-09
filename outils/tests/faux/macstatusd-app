@@ -12,6 +12,13 @@ case "${1:-}" in
   --unregister) code="${FAUX_APP_UNREGISTER_CODE:-4}" ;;
   *) code=0 ;;
 esac
+if [[ "${1:-}" == "--register" && "$code" == "0" ]]; then
+  # Un agent enregistré est chargé : le faux launchctl le trouve dans son fichier d'état.
+  id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$(dirname "$0")/../Info.plist" 2>/dev/null)"
+  if [[ -n "$id" ]] && ! /usr/bin/grep -q -E "^$id( |\$)" "$FAUX_JOURNAL/charges" 2>/dev/null; then
+    echo "$id $0" >> "$FAUX_JOURNAL/charges"
+  fi
+fi
 case "$code" in
   0) echo "activé" ;;
   3) echo "à autoriser : Réglages Système > Général > Ouverture et extensions" ;;
