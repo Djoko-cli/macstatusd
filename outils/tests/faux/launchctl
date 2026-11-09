@@ -1,6 +1,7 @@
 #!/bin/bash
-# Faux launchctl du banc : note chaque appel. « print » rend FAUX_LAUNCHCTL_PRINT (1 = agent non chargé).
+# Faux launchctl du banc : note chaque appel. « print » rend FAUX_LAUNCHCTL_PRINT (1 = agent non chargé) ; « kickstart » rend FAUX_LAUNCHCTL_KICKSTART_CODE (0 par défaut).
 echo "$*" >> "$FAUX_JOURNAL/launchctl.log"
 echo "launchctl $*" >> "$FAUX_JOURNAL/ordre.log"
 if [[ "${1:-}" == "print" ]]; then exit "${FAUX_LAUNCHCTL_PRINT:-1}"; fi
+if [[ "${1:-}" == "kickstart" ]]; then exit "${FAUX_LAUNCHCTL_KICKSTART_CODE:-0}"; fi
 exit 0

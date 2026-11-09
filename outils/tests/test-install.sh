@@ -63,7 +63,7 @@ nouveau_cas() { # nom
   export FAUX_JOURNAL="$base/journal"
   export PATH="$faux:$chemin_initial"
   export MACSTATUSD_VERIF_PAUSE=0
-  unset FAUX_LAUNCHCTL_PRINT FAUX_CURL_CODE FAUX_APP_CODE FAUX_APP_UNREGISTER_CODE MACSTATUSD_EUID
+  unset FAUX_LAUNCHCTL_PRINT FAUX_LAUNCHCTL_KICKSTART_CODE FAUX_CURL_CODE FAUX_APP_CODE FAUX_APP_UNREGISTER_CODE MACSTATUSD_EUID
   support="$HOME/Library/Application Support/macstatusd-essai"
   config="$support/config.json"
   installee="$HOME/Applications/macstatusd-essai.app"
@@ -234,6 +234,50 @@ verifier "$cas" "le kickstart suit le dernier --register" kickstart "$(/usr/bin/
 verifier "$cas" "droits de la config" 600 "$(stat -f %Lp "$config" 2>/dev/null)"
 verifier_jeton_cache
 
+# --- anciens-journaux-ailleurs ----------------------------------------------------------
+# --anciens-journaux désigne le dossier vidé ; le dossier de la vraie instance reste intact.
+nouveau_cas anciens-journaux-ailleurs
+creer_app v1
+creer_ancien
+mkdir -p "$HOME/Library/Logs/macstatusd-repetition-ancien"
+printf 'ligne de la repetition\n' > "$HOME/Library/Logs/macstatusd-repetition-ancien/macstatusd.log"
+printf 'temoin\n' > "$HOME/Library/Logs/macstatusd/temoin.log"
+rm -f "$HOME/Library/Logs/macstatusd/macstatusd.log"
+lancer_install --app "$app" --ancien-prefixe "$prefixe" --anciens-journaux "$HOME/Library/Logs/macstatusd-repetition-ancien"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "journal témoin de la vraie instance laissé" présent "$([[ -e "$HOME/Library/Logs/macstatusd/temoin.log" ]] && echo présent || echo absent)"
+verifier "$cas" "journal du dossier désigné retiré" absent "$([[ -e "$HOME/Library/Logs/macstatusd-repetition-ancien/macstatusd.log" ]] && echo présent || echo absent)"
+verifier "$cas" "journal du dossier désigné à la Corbeille" 1 "$(en_poubelle "macstatusd.log")"
+verifier_jeton_cache
+
+# --- anciens-journaux-hors-logs ---------------------------------------------------------
+nouveau_cas anciens-journaux-hors-logs
+creer_app v1
+creer_ancien
+mkdir -p "$HOME/Documents"
+printf 'important\n' > "$HOME/Documents/important.txt"
+lancer_install --app "$app" --ancien-prefixe "$prefixe" --anciens-journaux "$HOME/Documents"
+verifier "$cas" "dossier hors Logs refusé, code" 1 "$code"
+verifier "$cas" "message clair" 1 "$(nb_motif "--anciens-journaux" "$base/sortie.txt")"
+verifier "$cas" "fichier du dossier refusé laissé" présent "$([[ -e "$HOME/Documents/important.txt" ]] && echo présent || echo absent)"
+verifier "$cas" "ancien journal laissé" présent "$([[ -e "$HOME/Library/Logs/macstatusd/macstatusd.log" ]] && echo présent || echo absent)"
+verifier "$cas" "rien à la Corbeille" 0 "$(ls -A "$HOME/.Trash" 2>/dev/null | wc -l | tr -d ' ')"
+verifier "$cas" "app non installée" absent "$([[ -e "$installee" ]] && echo présent || echo absent)"
+nouveau_cas anciens-journaux-sous-sous-dossier
+creer_app v1
+mkdir -p "$HOME/Library/Logs/a/b"
+lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant" --anciens-journaux "$HOME/Library/Logs/a/b"
+verifier "$cas" "sous-dossier non direct refusé, code" 1 "$code"
+
+# Relance en échec : pas de « agent relancé ».
+nouveau_cas relance-echec
+creer_app v1
+export FAUX_LAUNCHCTL_PRINT=0 FAUX_LAUNCHCTL_KICKSTART_CODE=1
+lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "kickstart tenté" 1 "$(nb_motif "kickstart -k" "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "pas de « agent relancé »" 0 "$(nb_motif "agent relancé" "$base/sortie.txt")"
+
 # --- migration-identite-production ------------------------------------------------------
 # En production, le nom de support vaut « macstatusd » : la 0.6 écrit dans le dossier de journaux de la 0.5.
 nouveau_cas migration-identite-production
@@ -265,7 +309,7 @@ mkdir -p "$base/relatif"
 verifier "$cas" "HOME relatif : install.sh refuse, code" 1 "$code"
 verifier "$cas" "HOME relatif : rien créé" 0 "$(ls -A "$base/relatif" | wc -l | tr -d ' ')"
 rm -rf "$base/relatif"
-for home_mauvais in "/" ""; do
+for home_mauvais in "/" "//" ""; do
   ( cd "$base" && HOME="$home_mauvais" bash "$depot/scripts/install.sh" --app "$app" --ancien-prefixe "$base/opt/inexistant" > "$base/sortie.txt" 2>&1 ); code=$?
   verifier "$cas" "HOME « $home_mauvais » : install.sh refuse, code" 1 "$code"
   verifier "$cas" "HOME « $home_mauvais » : message clair" 1 "$(nb_motif "HOME invalide" "$base/sortie.txt")"

@@ -2,13 +2,17 @@
 # Installe macstatusd comme app d'arrière-plan dans ~/Applications, SANS sudo.
 #
 # Usage : bash scripts/install.sh [--app <chemin.app>] [--ancien-prefixe <dossier>]
-#                                 [--preparer-jeton] [--sans-verification]
+#                                 [--anciens-journaux <dossier>] [--preparer-jeton] [--sans-verification]
 #
 #   --app                Installe cette app. Sans cette option : compilation (swift build -c release),
 #                        puis outils/assembler-app.sh. L'identité (CFBundleIdentifier, MacstatusdSupportName)
 #                        vient de l'app.
 #   --ancien-prefixe     Dossier de l'ancienne installation (défaut /opt/macstatusd) : sa config est migrée
 #                        (lecture seule) et son agent launchd est retiré.
+#   --anciens-journaux   Dossier des journaux de l'ancien agent (défaut ~/Library/Logs/macstatusd), mis à la
+#                        Corbeille (son contenu) quand un ancien agent est repéré. Doit être un sous-dossier
+#                        direct de ~/Library/Logs/, sinon refus (code 1) : une répétition le désigne pour ne
+#                        pas vider les journaux de la vraie instance.
 #   --preparer-jeton     S'arrête après la config et le jeton : ni copie de l'app, ni enregistrement.
 #   --sans-verification  Ne contrôle pas /health à la fin.
 #
@@ -27,7 +31,9 @@ fi
 
 # Garde-fou de HOME : absolu et différent de « / ». Sinon « $HOME/Applications » pointerait un dossier
 # du système (ou un chemin relatif) où l'on ne doit rien écrire.
-if [[ -z "${HOME:-}" || "$HOME" != /* || "$HOME" == "/" ]]; then
+home_normalise="$(printf '%s' "${HOME:-}" | tr -s '/')"
+home_normalise="${home_normalise%/}"
+if [[ -z "${HOME:-}" || "$HOME" != /* || -z "$home_normalise" ]]; then
   echo "!! HOME invalide (vide, relatif ou « / ») : rien n'est installé." >&2
   exit 1
 fi
@@ -37,17 +43,22 @@ pb=/usr/libexec/PlistBuddy
 
 app_source=""
 ancien_prefixe="/opt/macstatusd"
+anciens_journaux="$HOME/Library/Logs/macstatusd"
 preparer_jeton=0
 sans_verification=0
 
 usage() {
-  echo "Usage : bash scripts/install.sh [--app <chemin.app>] [--ancien-prefixe <dossier>] [--preparer-jeton] [--sans-verification]" >&2
+  echo "Usage : bash scripts/install.sh [--app <chemin.app>] [--ancien-prefixe <dossier>] [--anciens-journaux <dossier>] [--preparer-jeton] [--sans-verification]" >&2
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --app|--ancien-prefixe)
+    --app|--ancien-prefixe|--anciens-journaux)
       if [[ $# -lt 2 ]]; then echo "option sans valeur : $1" >&2; usage; exit 2; fi
-      if [[ "$1" == "--app" ]]; then app_source="$2"; else ancien_prefixe="$2"; fi
+      case "$1" in
+        --app) app_source="$2" ;;
+        --ancien-prefixe) ancien_prefixe="$2" ;;
+        *) anciens_journaux="$2" ;;
+      esac
       shift 2 ;;
     --preparer-jeton) preparer_jeton=1; shift ;;
     --sans-verification) sans_verification=1; shift ;;
@@ -55,6 +66,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 ancien_prefixe="${ancien_prefixe%/}"
+anciens_journaux="${anciens_journaux%/}"
+# Le dossier des anciens journaux est vidé : il doit être un sous-dossier direct de ~/Library/Logs/.
+nom_journaux="${anciens_journaux#"$HOME/Library/Logs/"}"
+if [[ "$anciens_journaux" != "$HOME/Library/Logs/"* || -z "$nom_journaux" || "$nom_journaux" == */* \
+      || "$nom_journaux" == "." || "$nom_journaux" == ".." ]]; then
+  echo "!! --anciens-journaux doit être un sous-dossier direct de $HOME/Library/Logs/ : refusé, rien n'est installé." >&2
+  exit 1
+fi
 
 # --- Outils -----------------------------------------------------------------------------
 # « À la Corbeille » : déplacement dans ~/.Trash, sous un nom unique en cas de collision.
@@ -268,11 +287,11 @@ for plist in "$HOME/Library/LaunchAgents"/*.plist; do
   [[ "$programme" == "$ancien_prefixe/macstatusd" ]] || continue
   anciens_plists+=("$plist")
 done
-if [[ ${#anciens_plists[@]} -gt 0 && -d "$HOME/Library/Logs/macstatusd" ]]; then
-  for f in "$HOME/Library/Logs/macstatusd"/*; do
+if [[ ${#anciens_plists[@]} -gt 0 && -d "$anciens_journaux" ]]; then
+  for f in "$anciens_journaux"/*; do
     [[ -f "$f" ]] && corbeille "$f"
   done
-  echo "==> Anciens journaux de ~/Library/Logs/macstatusd mis à la Corbeille"
+  echo "==> Anciens journaux de ~/Library/Logs/$nom_journaux mis à la Corbeille"
 fi
 
 # --- 5. Enregistrement ------------------------------------------------------------------------
@@ -284,8 +303,11 @@ case "$code_app" in
   0)
     # register() ne relance pas un agent déjà actif : la mise à jour exige un kickstart.
     if [[ $agent_charge -eq 1 ]]; then
-      launchctl kickstart -k "gui/$(id -u)/$identifiant" > /dev/null 2>&1 || echo "    (kickstart de l'agent sans effet : il redémarrera tout seul)"
-      echo "    agent relancé"
+      if launchctl kickstart -k "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+        echo "    agent relancé"
+      else
+        echo "    (kickstart de l'agent sans effet : il redémarrera tout seul)"
+      fi
     fi ;;
   3)
     echo "==> À autoriser : Réglages Système > Général > Ouverture et extensions."

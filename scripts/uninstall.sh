@@ -21,7 +21,9 @@ fi
 
 # Garde-fou de HOME : absolu et différent de « / ». Sinon « $HOME/Applications » pointerait un dossier
 # du système (ou un chemin relatif) où l'on ne doit rien écrire.
-if [[ -z "${HOME:-}" || "$HOME" != /* || "$HOME" == "/" ]]; then
+home_normalise="$(printf '%s' "${HOME:-}" | tr -s '/')"
+home_normalise="${home_normalise%/}"
+if [[ -z "${HOME:-}" || "$HOME" != /* || -z "$home_normalise" ]]; then
   echo "!! HOME invalide (vide, relatif ou « / ») : rien n'est installé." >&2
   exit 1
 fi
