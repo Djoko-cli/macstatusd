@@ -1176,6 +1176,8 @@ public final class EngineCore {
         var shownFacts = facts
         shownFacts.hidIdleSeconds = signals.hidIdleSeconds()
         let verdict = factsVerdict()
+        // Lu (et mesuré) avant le littéral : `slow_calls` de la même réponse compte alors cette lecture.
+        let service = slowCalls.measure("service") { serviceState() }
         var dict: [String: Any] = [
             "version": macstatusdVersion,
             "state": (published ?? verdict.state) ? "1" : "0",
@@ -1196,7 +1198,7 @@ public final class EngineCore {
             "saver_start": actions.screenSaverStart.rawValue,
             "slow_calls": slowCalls.snapshot,
             "build": buildInfo.statusDictionary,
-            "service": slowCalls.measure("service") { serviceState() }.rawValue,
+            "service": service.rawValue,
             "main_display": facts.displays.first(where: \.isMain)?.idText ?? "none",
             "display_list": facts.displays.map { display -> [String: Any] in
                 ["id": display.idText, "main": display.isMain, "asleep": display.asleep,

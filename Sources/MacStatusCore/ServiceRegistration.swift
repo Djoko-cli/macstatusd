@@ -35,21 +35,19 @@ public enum ServiceState: String {
     }
 
     /// Texte de l'alerte montrée par un lancement depuis le Finder, d'après l'état relu après `register()`.
-    /// `registerFailed` : `register()` a levé une erreur ; l'alerte ne promet alors rien. Le message de l'état
-    /// reste en français, comme celui de la CLI.
+    /// `registerFailed` : `register()` a levé une erreur ; l'alerte ne promet alors rien, sauf pour l'état
+    /// « à autoriser » : agent coupé dans les Réglages, `register()` lève, et l'utilisateur doit l'autoriser, ce que
+    /// l'alerte lui dit toujours. Le message de l'état reste en français, comme celui de la CLI.
     public func finderAlertText(registerFailed: Bool, preferEnglish: Bool) -> String {
-        if !registerFailed {
-            switch self {
-            case .enabled:
-                return preferEnglish
-                    ? "macstatusd runs in the background. Settings: General > Login Items & Extensions."
-                    : "macstatusd tourne en arrière-plan. Réglages : Général > Ouverture et extensions."
-            case .requiresApproval:
-                return preferEnglish
-                    ? "macstatusd needs your approval: System Settings > General > Login Items & Extensions."
-                    : "macstatusd attend ton autorisation : Réglages Système > Général > Ouverture et extensions."
-            default: break
-            }
+        if self == .requiresApproval {
+            return preferEnglish
+                ? "macstatusd needs your approval: System Settings > General > Login Items & Extensions."
+                : "macstatusd attend ton autorisation : Réglages Système > Général > Ouverture et extensions."
+        }
+        if !registerFailed, self == .enabled {
+            return preferEnglish
+                ? "macstatusd runs in the background. Settings: General > Login Items & Extensions."
+                : "macstatusd tourne en arrière-plan. Réglages : Général > Ouverture et extensions."
         }
         return preferEnglish
             ? "macstatusd could not register: \(message)."
@@ -84,11 +82,21 @@ public enum LaunchMode: Equatable {
     /// Par une ligne de commande ; sans argument, lance le daemon comme avant.
     case commandLine
 
-    /// Un lancement par le Finder tourne sous un travail launchd dont le nom commence par `application.`
-    /// (relevé à l'essai du 09/11). L'agent enregistré, lui, a pour `XPC_SERVICE_NAME` son label.
-    public static func decide(arguments: [String], environment: [String: String]) -> LaunchMode {
+    /// Un lancement par le Finder tourne sous un travail launchd nommé `application.<identifiant>.<n>.<n>`
+    /// (relevé à l'essai du 09/11), où l'identifiant est celui de l'app lancée. Le préfixe `application.` seul ne
+    /// suffit pas : tout process lancé par une autre app ouverte via LaunchServices hérite du nom de CETTE app
+    /// (un terminal d'éditeur, par exemple). On exige donc l'identifiant de notre propre bundle, suivi de deux
+    /// nombres et de rien d'autre : l'app de production ne reconnaît pas non plus les enfants de l'app d'essai.
+    /// L'agent enregistré, lui, a pour `XPC_SERVICE_NAME` son label.
+    public static func decide(arguments: [String], environment: [String: String],
+                              bundleIdentifier: String?) -> LaunchMode {
         if arguments.contains("--agent") { return .agent }
-        if arguments.isEmpty, environment["XPC_SERVICE_NAME"]?.hasPrefix("application.") == true { return .finder }
+        if arguments.isEmpty, let bundleIdentifier, !bundleIdentifier.isEmpty,
+           let nom = environment["XPC_SERVICE_NAME"],
+           nom.range(of: "^application\\.\(NSRegularExpression.escapedPattern(for: bundleIdentifier))\\.[0-9]+\\.[0-9]+$",
+                     options: .regularExpression) != nil {
+            return .finder
+        }
         return .commandLine
     }
 }

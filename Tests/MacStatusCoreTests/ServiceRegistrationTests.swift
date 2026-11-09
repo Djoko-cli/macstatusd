@@ -40,12 +40,15 @@ final class ServiceRegistrationTests: XCTestCase {
                        "macstatusd could not register: non enregistré : lancer macstatusd --register.")
     }
 
-    func test_alerteDuFinder_registerEnEchec_ditQueLEnregistrementAEchoue() {
-        // Même si l'état relu est « activé » ou « à autoriser », un register() en échec n'affiche pas de bonne nouvelle.
+    func test_alerteDuFinder_registerEnEchec_ditQueLEnregistrementAEchoue_sauf_a_autoriser() {
+        // Un état « activé » après un register() en échec n'affiche pas de bonne nouvelle ; « à autoriser » garde son texte.
         XCTAssertEqual(ServiceState.enabled.finderAlertText(registerFailed: true, preferEnglish: false),
                        "macstatusd n'a pas pu s'enregistrer : activé.")
+        // Agent coupé dans les Réglages : register() lève, mais l'utilisateur doit autoriser, et l'alerte le dit.
         XCTAssertEqual(ServiceState.requiresApproval.finderAlertText(registerFailed: true, preferEnglish: true),
-                       "macstatusd could not register: à autoriser : Réglages Système > Général > Ouverture et extensions.")
+                       "macstatusd needs your approval: System Settings > General > Login Items & Extensions.")
+        XCTAssertEqual(ServiceState.requiresApproval.finderAlertText(registerFailed: true, preferEnglish: false),
+                       "macstatusd attend ton autorisation : Réglages Système > Général > Ouverture et extensions.")
     }
 
     func test_etatDuService_aApprouver_ditOuLeReactiver() {
@@ -54,27 +57,58 @@ final class ServiceRegistrationTests: XCTestCase {
         XCTAssertEqual(ServiceState.requiresApproval.exitCode, 3)
     }
 
+    private let prod = "com.djoko.macstatusd"
+
     func test_modeDeLancement_agent() {
-        XCTAssertEqual(LaunchMode.decide(arguments: ["--agent"], environment: [:]), .agent)
+        XCTAssertEqual(LaunchMode.decide(arguments: ["--agent"], environment: [:], bundleIdentifier: prod), .agent)
         // L'argument l'emporte sur l'environnement.
         XCTAssertEqual(LaunchMode.decide(arguments: ["--agent"],
-                                         environment: ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.1.2"]),
+                                         environment: ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.1.2"],
+                                         bundleIdentifier: prod),
                        .agent)
     }
 
     func test_modeDeLancement_finder() {
         let environnement = ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.640044241.640044246"]
-        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: environnement), .finder)
+        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: environnement, bundleIdentifier: prod), .finder)
+        // L'app d'essai, dont l'identifiant contient des points : reconnue par son propre identifiant.
+        XCTAssertEqual(LaunchMode.decide(
+            arguments: [],
+            environment: ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.essai.640044241.640044246"],
+            bundleIdentifier: "com.djoko.macstatusd.essai"), .finder)
+    }
+
+    func test_modeDeLancement_enfantDUneAutreApp_ligneDeCommande() {
+        XCTAssertEqual(LaunchMode.decide(arguments: [],
+                                         environment: ["XPC_SERVICE_NAME": "application.com.exemple.Editeur.1.2"],
+                                         bundleIdentifier: "com.djoko.macstatusd.essai"), .commandLine)
+    }
+
+    func test_modeDeLancement_sansIdentifiant_ligneDeCommande() {
+        let environnement = ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.essai.1.2"]
+        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: environnement, bundleIdentifier: nil),
+                       .commandLine)
+        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: environnement, bundleIdentifier: ""),
+                       .commandLine)
+    }
+
+    func test_modeDeLancement_enfantDeLAppDEssai_pasLaProduction() {
+        XCTAssertEqual(LaunchMode.decide(
+            arguments: [],
+            environment: ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.essai.1.2"],
+            bundleIdentifier: prod), .commandLine)
     }
 
     func test_modeDeLancement_ligneDeCommande() {
-        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: [:]), .commandLine)
-        XCTAssertEqual(LaunchMode.decide(arguments: ["--once"], environment: [:]), .commandLine)
-        // Un label d'agent (sans « application. ») n'est pas un lancement par le Finder.
-        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: ["XPC_SERVICE_NAME": "com.djoko.macstatusd"]),
+        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: [:], bundleIdentifier: prod), .commandLine)
+        XCTAssertEqual(LaunchMode.decide(arguments: ["--once"], environment: [:], bundleIdentifier: prod),
                        .commandLine)
+        // Un label d'agent (sans « application. ») n'est pas un lancement par le Finder.
+        XCTAssertEqual(LaunchMode.decide(arguments: [], environment: ["XPC_SERVICE_NAME": "com.djoko.macstatusd"],
+                                         bundleIdentifier: prod), .commandLine)
         // Avec une option, même sous le Finder : ligne de commande.
         XCTAssertEqual(LaunchMode.decide(arguments: ["--once"],
-                                         environment: ["XPC_SERVICE_NAME": "application.x.1.2"]), .commandLine)
+                                         environment: ["XPC_SERVICE_NAME": "application.com.djoko.macstatusd.1.2"],
+                                         bundleIdentifier: prod), .commandLine)
     }
 }

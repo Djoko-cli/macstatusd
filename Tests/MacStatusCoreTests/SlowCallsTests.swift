@@ -29,6 +29,15 @@ final class SlowCallsTests: EngineCoreTestCase {
         XCTAssertEqual(appelsLents(core)["ecrans"]?["max_seconds"] as? Double, 7.0)
     }
 
+    func test_statusSnapshot_compteSaPropreLectureDuService() {
+        let core = moteurBrut(service: { [horloge] in horloge!.advance(2); return .enabled })
+        core.start()
+        // La même réponse porte la lecture du service qu'elle vient de faire.
+        let reponse = core.statusSnapshot()
+        let appels = reponse["slow_calls"] as? [String: [String: Any]] ?? [:]
+        XCTAssertEqual(appels["service"]?["count"] as? Int, 1, "reçu : \(appels)")
+    }
+
     func test_appelSousLeSeuil_rienAuJournal() {
         let core = moteur()
         core.start()

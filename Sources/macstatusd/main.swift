@@ -15,7 +15,8 @@ CoreLog.sink = Log.shared
 
 // Double-clic dans le Finder : enregistre l'agent, informe, quitte. Le daemon tourne sous launchd (`--agent`).
 if LaunchMode.decide(arguments: Array(CommandLine.arguments.dropFirst()),
-                     environment: ProcessInfo.processInfo.environment) == .finder {
+                     environment: ProcessInfo.processInfo.environment,
+                     bundleIdentifier: Bundle.main.bundleIdentifier) == .finder {
     ServiceRegistry.runFromFinder()
 }
 
@@ -197,8 +198,8 @@ if options.once {
     output["reason"] = snapshot.reason
     output["session_context"] = isAquaSession() ? "aqua" : "headless"
     // Comme dans /status : raison des faits, économiseur détecté par SAC, ou par l'hôte apparu après didstart
-    // (repli), moyen de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall), moyen de le démarrer lors d'un OFF (SACScreenSaverStartNow, ou
-    // le repli open -a), et topologie des écrans.
+    // (repli), moyen de l'écarter lors d'un ON (SACScreenSaverStopNow, ou le repli killall), moyen de le
+    // démarrer lors d'un OFF (SACScreenSaverStartNow, ou le repli open -a), et topologie des écrans.
     let status = engine.statusSnapshot()
     output["facts_reason"] = status["facts_reason"]
     output["saver_detection"] = status["saver_detection"]
@@ -272,7 +273,7 @@ if !isAquaSession() {
     logWarn("aucune session graphique visible : l'économiseur d'écran et l'état des écrans "
             + "peuvent être indétectables. Installer macstatusd comme LaunchAgent (session Aqua).")
 }
-if let path = Log.shared.currentLogPath { logInfo("journal: \(path)") }
+if let path = Log.shared.currentLogPath { logInfo("journal: \((path as NSString).abbreviatingWithTildeInPath)") }
 logInfo("binaire : sha256 \(executableDigest() ?? "illisible")")
 if !buildInfo.version.isEmpty, buildInfo.version != macstatusdVersion {
     logWarn("build-info.json annonce la version \(escapeForLog(buildInfo.version, limit: 32))")
