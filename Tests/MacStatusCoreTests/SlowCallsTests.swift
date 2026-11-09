@@ -58,6 +58,40 @@ final class SlowCallsTests: EngineCoreTestCase {
         XCTAssertEqual(appelsLents(core)["ecrans"]?["count"] as? Int, 4)
     }
 
+    /// R85 (amendement) : une lecture qui chevauche une veille ne compte pas la durée de la veille.
+    func test_appelQuiChevaucheUneVeille_neComptePasLaVeille() {
+        let core = moteur()
+        core.start()
+
+        signaux.surLectureEcrans = { [horloge] in
+            horloge!.dormir(500)
+            horloge!.advance(0.2)
+        }
+        core.tick()
+
+        XCTAssertTrue(avertissementsAppelLent().isEmpty, "reçu : \(avertissementsAppelLent())")
+        XCTAssertTrue(appelsLents(core).isEmpty)
+    }
+
+    /// Un appel réellement lent, éveillé, reste compté même si une veille s'y mêle.
+    func test_appelLentEveille_resteCompte() {
+        let core = moteur()
+        core.start()
+
+        signaux.surLectureEcrans = { [horloge] in
+            horloge!.dormir(300)
+            horloge!.advance(7)
+        }
+        core.tick()
+
+        let avertissements = avertissementsAppelLent()
+        XCTAssertEqual(avertissements.count, 1)
+        XCTAssertTrue(avertissements.first?.contains("appel lent : ecrans 7.0 s") ?? false,
+                      "reçu : \(avertissements)")
+        XCTAssertEqual(appelsLents(core)["ecrans"]?["count"] as? Int, 1)
+        XCTAssertEqual(appelsLents(core)["ecrans"]?["max_seconds"] as? Double, 7.0)
+    }
+
     /// Le moniteur seul : la durée se mesure sur l'horloge, le résultat de l'appel passe tel quel.
     func test_moniteur_rendLeResultatEtNeNommeQueLesAppelsLents() {
         let moniteur = SlowCallMonitor(clock: horloge)

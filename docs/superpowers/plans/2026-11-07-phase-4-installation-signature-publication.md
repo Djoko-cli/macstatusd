@@ -321,7 +321,7 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
 
   *Étapes 4 à 7 reportées (amendement du 09/11) : aucune lecture désignée en quatre essais, voir le résultat de
   l'étape 3.*
-- [ ] **Étape 8 : le compteur d'appels lents ne compte plus la veille.** `SlowCallMonitor.measure` mesure sur
+- [x] **Étape 8 : le compteur d'appels lents ne compte plus la veille.** `SlowCallMonitor.measure` mesure sur
   `clock.awake()` (`CLOCK_UPTIME_RAW`, arrêtée pendant la veille) au lieu de `clock.monotonic()`, y compris
   l'instant passé à `note` pour l'espacement des WARN. Commentaires de `SlowCalls.swift` à jour.
   - Test rouge `test_appelQuiChevaucheUneVeille_neComptePasLaVeille` : pendant l'appel, `TestClock.dormir(500)` puis

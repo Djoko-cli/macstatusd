@@ -2,9 +2,10 @@ import Foundation
 
 /// Mesure la durée de chaque lecture du système faite par le moteur (R85). Une lecture qui dure au moins
 /// `threshold` secondes est comptée, et signalée par un WARN au plus une fois par nom et par `warnEvery`
-/// secondes. Le coût d'une lecture non lente : deux lectures de l'horloge monotone et un verrou.
+/// secondes. Le coût d'une lecture non lente : deux lectures de l'horloge d'éveil et un verrou.
 ///
-/// Les durées se mesurent sur `clock.monotonic()`, avant et après l'appel. Le WARN passe par `logWarn`, comme
+/// Les durées se mesurent sur `clock.awake()`, veille exclue (un gel du processus, Mac éveillé, compte), avant
+/// et après l'appel. Le WARN passe par `logWarn`, comme
 /// tout le moteur. `snapshot` alimente le champ `slow_calls` de `/status`.
 public final class SlowCallMonitor {
     private let clock: Clock
@@ -23,9 +24,9 @@ public final class SlowCallMonitor {
 
     /// Exécute `body` et note sa durée.
     public func measure<T>(_ name: String, _ body: () -> T) -> T {
-        let start = clock.monotonic()
+        let start = clock.awake()
         let result = body()
-        let end = clock.monotonic()
+        let end = clock.awake()
         let elapsed = end - start
         if elapsed >= threshold { note(name, elapsed: elapsed, at: end) }
         return result
