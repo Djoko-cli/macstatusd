@@ -1,6 +1,6 @@
 {
-  "enabled": true,
-  "webhook_base_url": "http://192.0.2.10:51828",
+  "enabled": false,
+  "webhook_targets": [],
   "accessory_id": "mac",
 
   "port": 9090,

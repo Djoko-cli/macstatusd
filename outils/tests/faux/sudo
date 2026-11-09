@@ -1,0 +1,4 @@
+#!/bin/bash
+# Faux sudo du banc : note l'appel et échoue. Aucun script ne doit l'appeler.
+echo "$*" >> "$FAUX_JOURNAL/sudo.log"
+exit 1

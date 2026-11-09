@@ -1,0 +1,4 @@
+#!/bin/bash
+# Faux osascript du banc : note l'appel, ne fait rien.
+echo "$*" >> "$FAUX_JOURNAL/osascript.log"
+exit 0

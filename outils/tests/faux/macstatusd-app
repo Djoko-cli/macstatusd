@@ -1,0 +1,17 @@
+#!/bin/bash
+# Faux binaire d'app du banc : note ses arguments et imite --register / --unregister.
+# Codes de la vraie app : 0 activé, 3 à autoriser, 4 non enregistré, 5 introuvable, 1 inconnu.
+echo "$*" >> "$FAUX_JOURNAL/app.log"
+case "${1:-}" in
+  --register) code="${FAUX_APP_CODE:-0}" ;;
+  --unregister) code="${FAUX_APP_UNREGISTER_CODE:-4}" ;;
+  *) code=0 ;;
+esac
+case "$code" in
+  0) echo "activé" ;;
+  3) echo "à autoriser : Réglages Système > Général > Ouverture et extensions" ;;
+  4) echo "non enregistré : lancer macstatusd --register" ;;
+  5) echo "introuvable : l'app doit être dans ~/Applications ou /Applications" ;;
+  *) echo "inconnu (code $code)" ;;
+esac
+exit "$code"

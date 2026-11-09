@@ -1,0 +1,7 @@
+#!/bin/bash
+# Faux swift du banc : « build » réussit, « --show-bin-path » rend FAUX_BIN_DIR.
+echo "$*" >> "$FAUX_JOURNAL/swift.log"
+for a in "$@"; do
+  if [[ "$a" == "--show-bin-path" ]]; then echo "$FAUX_BIN_DIR"; exit 0; fi
+done
+exit 0

@@ -617,7 +617,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
    - Le port vient de la config.
    - `curl -fsS --max-time 1 http://<hôte>:<port>/health`, 20 essais à 0,5 s d'écart.
 
-- [ ] **Étape 1 : banc rouge `outils/tests/test-install.sh`** (bash, hermétique)
+- [x] **Étape 1 : banc rouge `outils/tests/test-install.sh`** (bash, hermétique)
   - Environnement : `HOME` d'essai, faux outils en tête du `PATH`. Chacun note ses appels. Le faux `sudo` échoue
     et note tout appel.
   - Ancien préfixe d'essai : sa config n'a pas de jeton et porte `webhook_base_url`. Un ancien agent d'essai
@@ -642,9 +642,9 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
     - `desinstallation` : `--unregister` appelé, app à la Corbeille, config gardée. Avec `--tout`, config et
       journaux à la Corbeille ;
     - `sans-sudo` : dans les deux scripts, aucune ligne n'appelle `sudo`, hors du texte affiché pour `/opt`.
-- [ ] **Étape 2 :** réécrire `install.sh` et `uninstall.sh`, retirer `launchd/`, modifier `config.example.json`.
+- [x] **Étape 2 :** réécrire `install.sh` et `uninstall.sh`, retirer `launchd/`, modifier `config.example.json`.
   `ConfigTests`, qui lit l'exemple, doit rester vert.
-- [ ] **Étape 3 :** banc vert, suite complète, selftest, `bash outils/tests/test-garde.sh`. Registre : options des
+- [x] **Étape 3 :** banc vert, suite complète, selftest, `bash outils/tests/test-garde.sh`. Registre : options des
   scripts, et ce que fait la migration. Commit « Plan 4 : install.sh et uninstall.sh sans sudo, migration depuis
   /opt (C2, C4, C16, F09, F10, F35, F63, F80) ».
 

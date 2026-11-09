@@ -1,0 +1,4 @@
+#!/bin/bash
+# Faux open du banc : note l'appel, ne fait rien.
+echo "$*" >> "$FAUX_JOURNAL/open.log"
+exit 0

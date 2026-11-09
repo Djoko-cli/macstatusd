@@ -1,0 +1,5 @@
+#!/bin/bash
+# Faux launchctl du banc : note chaque appel. « print » rend FAUX_LAUNCHCTL_PRINT (1 = agent non chargé).
+echo "$*" >> "$FAUX_JOURNAL/launchctl.log"
+if [[ "${1:-}" == "print" ]]; then exit "${FAUX_LAUNCHCTL_PRINT:-1}"; fi
+exit 0

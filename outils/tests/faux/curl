@@ -1,0 +1,5 @@
+#!/bin/bash
+# Faux curl du banc : note l'appel, rend FAUX_CURL_CODE (0 par défaut).
+echo "$*" >> "$FAUX_JOURNAL/curl.log"
+[[ "${FAUX_CURL_CODE:-0}" -eq 0 ]] && echo '{"ok":true}'
+exit "${FAUX_CURL_CODE:-0}"
