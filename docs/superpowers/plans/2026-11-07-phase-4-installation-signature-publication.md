@@ -282,13 +282,21 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
 - [x] **Étape 2 :** binaire du banc recompilé dans `.superpowers/banc/bin/macstatusd-tete`. Agent du banc repris du
   banc 2 (`.superpowers/banc/agent-banc-2-session.plist`, config `config-banc-2-session.json`, récepteur sur
   127.0.0.1), préparé par le contrôleur.
-- [ ] **Étape 3 : mesure avec Djoko** (5 min). Veille par le menu Pomme, 60 s d'attente, puis réveil au clavier.
+- [x] **Étape 3 : mesure avec Djoko** (5 min). Veille par le menu Pomme, 60 s d'attente, puis réveil au clavier.
   Relevé : les lignes « appel lent » et l'écart entre les faits « écrans allumés » et « état OFF → ON ». Le résultat
   va au registre, avec la décision :
   - **une lecture désignée** (≥ 1 s pendant le trou) : elle passe derrière `CachedSignals` (étapes 4 à 7) ;
   - **aucune** : arrêt de la tâche. Le contrôleur reprend le diagnostic, avec la méthode de débogage de Djoko, et le plan est
     amendé avant toute suite.
-- [ ] **Étape 4 : tests rouges de `CachedSignals`**
+
+  **Résultat (07-09/11, quatre essais, registre) :** aucune lecture désignée. Essais 1 et 2 : réveil sombre réseau
+  puis réveil plein, autre chemin que B6. Essai 3 : réveil direct, mais faussé par des veilles logicielles d'un outil
+  tiers juste après le réveil. Essai 4 (sans cet outil) : réveil direct propre, ON 1,5 s après `WillPowerOn`, un seul
+  appel lent de 1,1 s (écrans, pendant leur reconfiguration). Le blocage de 6,9 s de B6 ne se reproduit pas.
+  Les essais ont montré un défaut de l'instrument : `measure` compte le temps de veille (un « appel lent » de 517 s
+  chevauchait une veille). Amendement du 09/11 : étapes 4 à 7 reportées, étape 8 ajoutée ; les gels du processus et
+  les accusés de veille en retard vus le 09/11 vont aux questions ouvertes de la spec (§ 11), après la 0.6.0.
+- [-] **Étape 4 : tests rouges de `CachedSignals`**
   - `test_premiereLecture_synchrone` ;
   - `test_lectureSuivante_rendLaValeurGardee_etUneSeuleRelecture`, avec trois lectures pendant une relecture en
     cours ;
@@ -296,9 +304,9 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
   - `test_lectureNonDesignee_passeTelleQuelle`.
 
   Tous avec un `BackgroundRunner` d'essai, que le test vide à la main.
-- [ ] **Étape 5 :** mettre en œuvre `CachedSignals`, puis le câbler dans `EngineRunner`. Le `runner` est une file
+- [-] **Étape 5 :** mettre en œuvre `CachedSignals`, puis le câbler dans `EngineRunner`. Le `runner` est une file
   série par lecture désignée, et `onRefreshed` poste `.signalsRefreshed` sur la file du moteur.
-- [ ] **Étape 6 : test moteur de la séquence de B6, rouge sur le code de l'étape 1**
+- [-] **Étape 6 : test moteur de la séquence de B6, rouge sur le code de l'étape 1**
   `test_reveil_lectureDesEcransLente_ONDansLeLissage`. Il rejoue, dans l'ordre :
   - l'avis de veille ;
   - le trou couvert ;
@@ -307,15 +315,30 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
 
   Attendu : ON publié au plus `settle_on_ms` après l'avis, avant toute fin de relecture et avant l'avis d'IOKit.
   Mutation à rejouer : `cached` vide. Le test doit échouer, ON n'arrivant qu'après la relecture.
-- [ ] **Étape 7 :** suite complète, puis selftest des contraintes globales, écran allumé. Registre : champ
+- [-] **Étape 7 :** suite complète, puis selftest des contraintes globales, écran allumé. Registre : champ
   `slow_calls` et message « appel lent ». Commit « Plan 4 : lecture hors file de <nom>, ON sans attendre la fin du
   réveil (R85) ».
+
+  *Étapes 4 à 7 reportées (amendement du 09/11) : aucune lecture désignée en quatre essais, voir le résultat de
+  l'étape 3.*
+- [ ] **Étape 8 : le compteur d'appels lents ne compte plus la veille.** `SlowCallMonitor.measure` mesure sur
+  `clock.awake()` (`CLOCK_UPTIME_RAW`, arrêtée pendant la veille) au lieu de `clock.monotonic()`, y compris
+  l'instant passé à `note` pour l'espacement des WARN. Commentaires de `SlowCalls.swift` à jour.
+  - Test rouge `test_appelQuiChevaucheUneVeille_neComptePasLaVeille` : pendant l'appel, `TestClock.dormir(500)` puis
+    `advance(0.2)`. Attendu : aucun WARN, `slow_calls` vide. Rouge sur le code actuel (500,2 s comptées).
+  - Test `test_appelLentEveille_resteCompte` : `dormir(300)` puis `advance(7)` pendant l'appel. Attendu : WARN
+    « appel lent : ecrans 7.0 s », `count` 1, `max_seconds` 7.
+  - Les trois tests de l'étape 1 restent verts (`advance` fait avancer les deux horloges).
+  - Suite complète. Registre du plan, rubrique « Pour les README » : `slow_calls` et le WARN « appel lent » mesurent
+    le temps éveillé, veille exclue ; un gel du processus, lui, compte. Commit « Plan 4 : appels lents mesurés hors
+    veille (R85, amendement) ».
 
 **Contrôle du relecteur :** concurrence.
 - Toute valeur de `CachedSignals` se lit et s'écrit sur une seule file. Une relecture n'est jamais doublée.
 - Aucun appel désigné ne reste synchrone sur la file du moteur. La vérification se fait par un `grep` des appels
   à `signals.` dans `EngineCore.swift`, avec un tableau de chaque appel et du chemin qu'il prend.
 - Le banc 3 confirme (tâche 10, étape R85).
+- Étape 8 : un `grep` de `monotonic()` dans `SlowCalls.swift` ne rend plus rien.
 
 ### Tâche 3 : mineurs parqués du plan 3 (M6, R88, R86)
 
@@ -505,7 +528,7 @@ moteur (`EngineCoreTests.swift`, `EngineCoreSaverTests.swift`).
 - Produit, `/status` : le champ `service` (`ServiceState.rawValue`), relu à chaque appel par un fournisseur que le
   moteur reçoit. Par défaut, `{ .unknown }`.
 
-- [ ] **Étape 1 : essai jetable avec Djoko** (10 min)
+- [x] **Étape 1 : essai jetable avec Djoko** (10 min)
   - App `com.djoko.macstatusd.essai`, assemblée par la tâche 5 (ad hoc), avec un binaire de travail qui sait
     `--register`.
   - Config d'essai écrite d'abord dans `~/Library/Application Support/macstatusd-essai/config.json` : port 19480,

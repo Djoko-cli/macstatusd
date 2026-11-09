@@ -623,3 +623,12 @@ Aucune. Réglées le 25/10 :
   Homebridge (D6).
 
 Reste à valider par Djoko en cours de route, sans bloquer le plan : l'icône de l'app (lot 6).
+
+Ouvertes le 09/11/2026, pour après la 0.6.0 (constats des essais de R85, registre du plan 4) :
+- **Gels du processus, Mac éveillé.** Le daemon voit des « interruption de 20 à 33 s détectée » sans veille qui les
+  couvre, et les lectures en cours durent autant. Cause inconnue : processus suspendu ou système bloqué. C'est la
+  piste restante pour le blocage de 6,9 s de B6, qui ne s'est pas reproduit en quatre essais.
+- **Accusé de veille en retard.** À une veille du 09/11, le noyau a noté le daemon lent à accuser l'avis de veille
+  (4,8 s et 6,4 s), alors que le daemon l'autorise 1 ms après l'avoir reçu : l'avis lui arrive en retard.
+- **Retard d'entrée en veille d'environ 30 s.** Le plus souvent, une app tierce laisse expirer l'avis de veille (banc 2).
+  Une fois, le retard est resté sans elle (essai 4 de R85) : cause inconnue. Le daemon n'y est pour rien.
