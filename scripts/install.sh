@@ -25,6 +25,13 @@ if [[ "${MACSTATUSD_EUID:-$EUID}" -eq 0 ]]; then
   exit 1
 fi
 
+# Garde-fou de HOME : absolu et différent de « / ». Sinon « $HOME/Applications » pointerait un dossier
+# du système (ou un chemin relatif) où l'on ne doit rien écrire.
+if [[ -z "${HOME:-}" || "$HOME" != /* || "$HOME" == "/" ]]; then
+  echo "!! HOME invalide (vide, relatif ou « / ») : rien n'est installé." >&2
+  exit 1
+fi
+
 depot="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pb=/usr/libexec/PlistBuddy
 
@@ -135,15 +142,6 @@ destination="$HOME/Applications/$nom_app"
 exiger_chemin_permis "$support"
 exiger_chemin_permis "$destination"
 
-# Journaux de la 0.5.0 (dossier fixe « macstatusd »), relevés AVANT l'enregistrement : le nouvel agent
-# peut écrire dans le même dossier, seuls les fichiers déjà présents partent à la Corbeille.
-anciens_journaux=()
-if [[ -d "$HOME/Library/Logs/macstatusd" ]]; then
-  for f in "$HOME/Library/Logs/macstatusd"/*; do
-    [[ -f "$f" ]] && anciens_journaux+=("$f")
-  done
-fi
-
 # --- 1. Config ----------------------------------------------------------------------------
 # Le script Python lit la config source, migre webhook_base_url vers webhook_targets (pour une config
 # neuve), génère un jeton s'il manque, et écrit le JSON sur la sortie standard.
@@ -236,7 +234,9 @@ if [[ $preparer_jeton -eq 1 ]]; then
 fi
 
 # --- 3. Marqueur de redémarrage (C16) -------------------------------------------------------
+agent_charge=0
 if launchctl print "gui/$(id -u)/$identifiant" > /dev/null 2>&1; then
+  agent_charge=1
   : > "$support/restart-pending"
   echo "==> Agent déjà chargé : marqueur restart-pending posé (le redémarrage ne publiera pas OFF)"
 fi
@@ -258,13 +258,35 @@ else
   mv "$temporaire_app" "$destination"
 fi
 
+# --- 4b. Ancien agent repéré (F80), retrouvé par son contenu, jamais par son libellé -----------------
+# Les journaux de la 0.5.0 (URL du webhook en clair, spec section 4) partent à la Corbeille AVANT
+# l'enregistrement : en production la 0.6 écrit dans le même dossier, et recrée son journal ensuite.
+anciens_plists=()
+for plist in "$HOME/Library/LaunchAgents"/*.plist; do
+  [[ -f "$plist" ]] || continue
+  programme="$("$pb" -c "Print :ProgramArguments:0" "$plist" 2>/dev/null)" || continue
+  [[ "$programme" == "$ancien_prefixe/macstatusd" ]] || continue
+  anciens_plists+=("$plist")
+done
+if [[ ${#anciens_plists[@]} -gt 0 && -d "$HOME/Library/Logs/macstatusd" ]]; then
+  for f in "$HOME/Library/Logs/macstatusd"/*; do
+    [[ -f "$f" ]] && corbeille "$f"
+  done
+  echo "==> Anciens journaux de ~/Library/Logs/macstatusd mis à la Corbeille"
+fi
+
 # --- 5. Enregistrement ------------------------------------------------------------------------
 echo "==> Enregistrement de l'agent"
 code_app=0
 sortie_app="$("$destination/Contents/MacOS/macstatusd" --register 2>&1)" || code_app=$?
 echo "    $sortie_app"
 case "$code_app" in
-  0) ;;
+  0)
+    # register() ne relance pas un agent déjà actif : la mise à jour exige un kickstart.
+    if [[ $agent_charge -eq 1 ]]; then
+      launchctl kickstart -k "gui/$(id -u)/$identifiant" > /dev/null 2>&1 || echo "    (kickstart de l'agent sans effet : il redémarrera tout seul)"
+      echo "    agent relancé"
+    fi ;;
   3)
     echo "==> À autoriser : Réglages Système > Général > Ouverture et extensions."
     echo "    Autorise macstatusd, puis relance ce script : la migration et la vérification se feront alors."
@@ -274,33 +296,23 @@ case "$code_app" in
     exit 1 ;;
 esac
 
-# --- 6. Ancien agent (F80), retrouvé par son contenu, jamais par son libellé --------------------
+# --- 6. Retrait de l'ancien agent ---------------------------------------------------------------
 echo "==> Ancien agent de $ancien_prefixe"
-retire=0
-for plist in "$HOME/Library/LaunchAgents"/*.plist; do
-  [[ -f "$plist" ]] || continue
-  programme="$("$pb" -c "Print :ProgramArguments:0" "$plist" 2>/dev/null)" || continue
-  [[ "$programme" == "$ancien_prefixe/macstatusd" ]] || continue
-  libelle="$("$pb" -c "Print :Label" "$plist" 2>/dev/null)" || libelle=""
-  if [[ -n "$libelle" ]]; then
-    launchctl bootout "gui/$(id -u)/$libelle" > /dev/null 2>&1 || true
-  else
-    launchctl bootout "gui/$(id -u)" "$plist" > /dev/null 2>&1 || true
-  fi
-  corbeille "$plist"
-  echo "    ancien agent retiré (libellé de ${#libelle} caractères)"
-  retire=$((retire + 1))
-done
-if [[ $retire -eq 0 ]]; then
+if [[ ${#anciens_plists[@]} -eq 0 ]]; then
   echo "    aucun ancien agent trouvé"
 else
-  # La 0.5.0 écrivait l'URL du webhook en clair dans ses journaux (spec, section 4).
-  for f in ${anciens_journaux[@]+"${anciens_journaux[@]}"}; do
-    [[ -f "$f" ]] && corbeille "$f"
+  for plist in "${anciens_plists[@]}"; do
+    libelle="$("$pb" -c "Print :Label" "$plist" 2>/dev/null)" || libelle=""
+    if [[ -n "$libelle" ]]; then
+      launchctl bootout "gui/$(id -u)/$libelle" > /dev/null 2>&1 || true
+    else
+      launchctl bootout "gui/$(id -u)" "$plist" > /dev/null 2>&1 || true
+    fi
+    corbeille "$plist"
+    echo "    ancien agent retiré (libellé de ${#libelle} caractères)"
   done
-  echo "    anciens journaux de ~/Library/Logs/macstatusd mis à la Corbeille"
 fi
-if [[ -d "$ancien_prefixe" ]]; then
+if [[ -f "$ancien_prefixe/macstatusd" ]]; then
   echo "    Le dossier de l'ancienne installation reste en place. Pour le supprimer, lance toi-même :"
   echo "      sudo rm -rf \"$ancien_prefixe\""
 fi

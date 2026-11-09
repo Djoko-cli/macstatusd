@@ -19,6 +19,13 @@ if [[ "${MACSTATUSD_EUID:-$EUID}" -eq 0 ]]; then
   exit 1
 fi
 
+# Garde-fou de HOME : absolu et différent de « / ». Sinon « $HOME/Applications » pointerait un dossier
+# du système (ou un chemin relatif) où l'on ne doit rien écrire.
+if [[ -z "${HOME:-}" || "$HOME" != /* || "$HOME" == "/" ]]; then
+  echo "!! HOME invalide (vide, relatif ou « / ») : rien n'est installé." >&2
+  exit 1
+fi
+
 pb=/usr/libexec/PlistBuddy
 app="$HOME/Applications/macstatusd.app"
 tout=0

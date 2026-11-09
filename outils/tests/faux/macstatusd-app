@@ -2,6 +2,11 @@
 # Faux binaire d'app du banc : note ses arguments et imite --register / --unregister.
 # Codes de la vraie app : 0 activé, 3 à autoriser, 4 non enregistré, 5 introuvable, 1 inconnu.
 echo "$*" >> "$FAUX_JOURNAL/app.log"
+echo "app $*" >> "$FAUX_JOURNAL/ordre.log"
+if [[ "${1:-}" == "--register" ]]; then
+  # Ce que l'app voit dans le dossier des journaux de la 0.5 au moment de l'enregistrement.
+  { echo "--register"; ls -A "$HOME/Library/Logs/macstatusd" 2>/dev/null; } >> "$FAUX_JOURNAL/logs-vus.txt"
+fi
 case "${1:-}" in
   --register) code="${FAUX_APP_CODE:-0}" ;;
   --unregister) code="${FAUX_APP_UNREGISTER_CODE:-4}" ;;

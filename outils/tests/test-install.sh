@@ -40,7 +40,13 @@ verifier() { # cas description attendu réel
 }
 
 # État du vrai dossier personnel, relevé avant et après (les scripts ne doivent rien y toucher).
-etat_reel() { ls -la "$vrai_home/Applications" "$vrai_home/Library/LaunchAgents" 2>&1; }
+# Nombres seulement (jamais de noms : le libellé réel de l'ancien agent contient un prénom).
+etat_reel() {
+  local d
+  for d in "$vrai_home/Applications" "$vrai_home/Library/LaunchAgents"; do
+    echo "$(ls -A "$d" 2>/dev/null | wc -l | tr -d ' ') fichiers, empreinte $(ls -la "$d" 2>&1 | cksum | cut -d' ' -f1)"
+  done
+}
 avant=$(etat_reel)
 
 # --- Préparation d'un cas -------------------------------------------------------------
@@ -161,6 +167,7 @@ verifier "$cas" "un seul --register" 1 "$(nb_motif "--register" "$FAUX_JOURNAL/a
 verifier "$cas" "aucun appel à sudo" 0 "$(nb_lignes "$FAUX_JOURNAL/sudo.log")"
 [[ -x "$installee/Contents/MacOS/macstatusd" ]] && ok "$cas : app installée dans ~/Applications" || ko "$cas" "app absente de ~/Applications"
 verifier "$cas" "pas de marqueur de redémarrage (agent non chargé)" absent "$([[ -e "$support/restart-pending" ]] && echo présent || echo absent)"
+verifier "$cas" "aucun kickstart (agent non chargé)" 0 "$(nb_motif kickstart "$FAUX_JOURNAL/launchctl.log")"
 verifier "$cas" "vérification de /health sur 127.0.0.1:9090" 1 "$(nb_motif "http://127.0.0.1:9090/health" "$FAUX_JOURNAL/curl.log")"
 verifier "$cas" "aucune trace Python" 0 "$(nb_motif Traceback "$base/sortie.txt")"
 verifier_jeton_cache
@@ -222,8 +229,50 @@ verifier "$cas" "agent de l'identité interrogé à chaque passage" 2 "$(nb_moti
 verifier "$cas" "app remplacée" v2 "$(cat "$installee/Contents/Resources/marqueur" 2>/dev/null)"
 verifier "$cas" "ancienne app à la Corbeille" 1 "$(en_poubelle "macstatusd-essai.app")"
 verifier "$cas" "un --register par passage" 2 "$(nb_motif "--register" "$FAUX_JOURNAL/app.log")"
+verifier "$cas" "un seul kickstart -k de l'agent (mise à jour)" 1 "$(nb_motif "kickstart -k gui/$(id -u)/com.djoko.macstatusd.essai" "$FAUX_JOURNAL/launchctl.log")"
+verifier "$cas" "le kickstart suit le dernier --register" kickstart "$(/usr/bin/grep -n -E '^app --register|^launchctl kickstart' "$FAUX_JOURNAL/ordre.log" | tail -n 1 | sed -E 's/^[0-9]+:(app|launchctl) (--register|kickstart).*/\2/')"
 verifier "$cas" "droits de la config" 600 "$(stat -f %Lp "$config" 2>/dev/null)"
 verifier_jeton_cache
+
+# --- migration-identite-production ------------------------------------------------------
+# En production, le nom de support vaut « macstatusd » : la 0.6 écrit dans le dossier de journaux de la 0.5.
+nouveau_cas migration-identite-production
+creer_app v1 com.djoko.macstatusd.essai macstatusd
+creer_ancien
+lancer_install --app "$app" --ancien-prefixe "$prefixe"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "ancien journal à la Corbeille" 1 "$(en_poubelle "macstatusd.log")"
+verifier "$cas" "l'app ne voit plus l'ancien journal à l'enregistrement" 0 "$(nb_motif "macstatusd.log" "$FAUX_JOURNAL/logs-vus.txt")"
+verifier "$cas" "dossier des journaux vu à l'enregistrement" 1 "$(nb_motif "--register" "$FAUX_JOURNAL/logs-vus.txt")"
+verifier "$cas" "message final : chemin de journal hors de la Corbeille" 1 "$(nb_motif "Journal : $HOME/Library/Logs/macstatusd/macstatusd.log" "$base/sortie.txt")"
+verifier "$cas" "message final : rien ne désigne la Corbeille" 0 "$(/usr/bin/grep 'Journal :' "$base/sortie.txt" | /usr/bin/grep -c -F '.Trash' || true)"
+verifier "$cas" "plist de l'ancien agent retiré après l'enregistrement" 1 "$(en_poubelle "$libelle.plist")"
+verifier_jeton_cache
+
+# --- prefixe-sans-binaire ---------------------------------------------------------------
+nouveau_cas prefixe-sans-binaire
+creer_app v1
+mkdir -p "$base/opt/autre"
+lancer_install --app "$app" --ancien-prefixe "$base/opt/autre"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "aucune commande sudo rm -rf proposée" 0 "$(nb_motif "sudo rm" "$base/sortie.txt")"
+
+# --- home-invalide ----------------------------------------------------------------------
+nouveau_cas home-invalide
+creer_app v1
+mkdir -p "$base/relatif"
+( cd "$base" && HOME="relatif" bash "$depot/scripts/install.sh" --app "$app" --ancien-prefixe "$base/opt/inexistant" > "$base/sortie.txt" 2>&1 ); code=$?
+verifier "$cas" "HOME relatif : install.sh refuse, code" 1 "$code"
+verifier "$cas" "HOME relatif : rien créé" 0 "$(ls -A "$base/relatif" | wc -l | tr -d ' ')"
+rm -rf "$base/relatif"
+for home_mauvais in "/" ""; do
+  ( cd "$base" && HOME="$home_mauvais" bash "$depot/scripts/install.sh" --app "$app" --ancien-prefixe "$base/opt/inexistant" > "$base/sortie.txt" 2>&1 ); code=$?
+  verifier "$cas" "HOME « $home_mauvais » : install.sh refuse, code" 1 "$code"
+  verifier "$cas" "HOME « $home_mauvais » : message clair" 1 "$(nb_motif "HOME invalide" "$base/sortie.txt")"
+  ( cd "$base" && HOME="$home_mauvais" bash "$depot/scripts/uninstall.sh" --app "$app" > "$base/sortie-desinstall.txt" 2>&1 ); code=$?
+  verifier "$cas" "HOME « $home_mauvais » : uninstall.sh refuse, code" 1 "$code"
+  verifier "$cas" "HOME « $home_mauvais » : uninstall.sh message clair" 1 "$(nb_motif "HOME invalide" "$base/sortie-desinstall.txt")"
+done
 
 # --- preparer-jeton ---------------------------------------------------------------------
 nouveau_cas preparer-jeton
@@ -258,6 +307,13 @@ verifier "$cas" "un seul --register" 1 "$(nb_motif "--register" "$FAUX_JOURNAL/a
 verifier "$cas" "ancien agent laissé en place tant que l'app n'est pas autorisée" présent "$([[ -e "$HOME/Library/LaunchAgents/$libelle.plist" ]] && echo présent || echo absent)"
 verifier "$cas" "aucune vérification" 0 "$(nb_lignes "$FAUX_JOURNAL/curl.log")"
 verifier_jeton_cache
+# Code 3 avec agent déjà chargé : pas de kickstart.
+nouveau_cas a-approuver-agent-charge
+creer_app v1
+export FAUX_APP_CODE=3 FAUX_LAUNCHCTL_PRINT=0
+lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant"
+verifier "$cas" "code de sortie" 0 "$code"
+verifier "$cas" "aucun kickstart sur le code 3" 0 "$(nb_motif kickstart "$FAUX_JOURNAL/launchctl.log")"
 # Autres codes de l'app : échec, code 1.
 nouveau_cas enregistrement-refuse
 creer_app v1
