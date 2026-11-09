@@ -155,9 +155,26 @@ d'arrière-plan enregistré auprès de macOS (`SMAppService`). Rien ne demande
 
 La version publiée est signée par un Developer ID et notariée (voir [Signature et
 notarisation](#signature-et-notarisation)). Sans fichier de configuration, l'app
-écoute sur `127.0.0.1` seulement et ne publie rien : créer le fichier comme
-décrit dans [Configuration](#configuration), ou utiliser le script d'installation,
-qui le fait.
+écoute sur `127.0.0.1` seulement et ne publie rien, et sans `auth_token` aucune
+autre machine ne peut la commander. L'archive ne contient ni `install.sh` ni
+`config.example.json` : pour obtenir une configuration valide sans le dépôt,
+coller ce bloc dans un Terminal (il ne fait rien si le fichier existe déjà, et
+n'affiche jamais le jeton) :
+
+```bash
+D="$HOME/Library/Application Support/macstatusd"
+F="$D/config.json"
+mkdir -p "$D"
+if [ -e "$F" ]; then echo "config.json existe déjà : y ajouter auth_token à la main"; else
+  ( umask 077; : > "$F"; chmod 600 "$F"
+    printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
+fi
+```
+
+Le fichier est en droits 600 et contient un `auth_token` de 64 caractères
+hexadécimaux. Pour donner le jeton à Home Assistant, ouvrir le fichier dans un
+éditeur et copier la valeur de là ; ne pas l'imprimer dans un terminal partagé.
+Les autres clés sont dans [Configuration](#configuration).
 
 ### Depuis les sources
 
@@ -173,7 +190,7 @@ dans `~/Applications`, enregistre l'agent et contrôle `/health`. Options :
 | `--app <chemin.app>` | installe cette app au lieu d'en compiler une |
 | `--ancien-prefixe <dossier>` | dossier d'une installation 0.5 à migrer (défaut `/opt/macstatusd`) |
 | `--anciens-journaux <dossier>` | dossier des journaux de l'ancien agent, vidé à la Corbeille (défaut `~/Library/Logs/macstatusd`) ; sous-dossier direct de `~/Library/Logs/` obligatoire |
-| `--preparer-jeton` | s'arrête après la config et le jeton : ni copie, ni enregistrement |
+| `--preparer-jeton` | s'arrête après la config et le jeton : ni copie, ni enregistrement. Sans `--ancien-prefixe`, lit `/opt/macstatusd/config.json` (le défaut) quand ce fichier existe |
 | `--sans-verification` | ne contrôle pas `/health` à la fin |
 
 Étapes, dans l'ordre :

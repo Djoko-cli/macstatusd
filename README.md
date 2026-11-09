@@ -152,8 +152,26 @@ refuse to run as root.
 
 The release is signed with a Developer ID and notarized (see [Signing and
 notarization](#signing-and-notarization)). Without a configuration file, the app
-listens on `127.0.0.1` only and publishes nothing: create the file as described
-in [Configuration](#configuration), or use the install script, which does it.
+listens on `127.0.0.1` only and publishes nothing, and without `auth_token` no
+other machine can command it. The archive contains neither `install.sh` nor
+`config.example.json`: to get a valid configuration without the repository,
+paste this block in a Terminal (it does nothing if the file already exists, and
+never prints the token):
+
+```bash
+D="$HOME/Library/Application Support/macstatusd"
+F="$D/config.json"
+mkdir -p "$D"
+if [ -e "$F" ]; then echo "config.json already exists: add auth_token to it by hand"; else
+  ( umask 077; : > "$F"; chmod 600 "$F"
+    printf '{\n  "enabled": false,\n  "webhook_targets": [],\n  "auth_token": "%s"\n}\n' "$(openssl rand -hex 32)" > "$F" )
+fi
+```
+
+The file is in mode 600 and holds an `auth_token` of 64 hexadecimal characters.
+To hand the token to Home Assistant, open the file in an editor and copy the
+value from there; do not print it in a shared terminal. The other keys are in
+[Configuration](#configuration).
 
 ### From the sources
 
@@ -169,7 +187,7 @@ copies it into `~/Applications`, registers the agent and checks `/health`. Optio
 | `--app <path.app>` | install that app instead of building one |
 | `--ancien-prefixe <folder>` | folder of a 0.5 installation to migrate (default `/opt/macstatusd`) |
 | `--anciens-journaux <folder>` | old agent's log folder emptied to the Trash (default `~/Library/Logs/macstatusd`); must be a direct subfolder of `~/Library/Logs/` |
-| `--preparer-jeton` | stops after the configuration and the token: no copy, no registration |
+| `--preparer-jeton` | stops after the configuration and the token: no copy, no registration. Without `--ancien-prefixe` it reads `/opt/macstatusd/config.json` (the default) when that file exists |
 | `--sans-verification` | does not check `/health` at the end |
 
 Steps, in order:

@@ -44,6 +44,21 @@ final class DocumentationTests: EngineCoreTestCase {
         }
     }
 
+    /// Champs de `/status` absents d'un moteur au repos (voir `statusSnapshot()`) : ajoutés seulement
+    /// quand l'arrêt est en cours, après une transition, ou pendant qu'une commande se confirme.
+    private let champsOptionnelsDeStatus = [
+        "shutting_down", "last_transition", "pending_command",
+        "target", "source", "age_seconds", "escalated",
+    ]
+
+    func test_chaqueChampOptionnelDeStatus_estDecritDansLesDeuxReadme() throws {
+        for nom in ["README.md", "README.fr.md"] {
+            let texte = try lire(nom)
+            let absents = champsOptionnelsDeStatus.filter { !texte.contains("`\($0)`") }
+            XCTAssertTrue(absents.isEmpty, "\(nom) : champ(s) optionnel(s) de /status non décrit(s) : \(absents.joined(separator: ", "))")
+        }
+    }
+
     func test_lesDeuxReadme_ontLaMemeSuiteDeTitres() throws {
         let anglais = niveauxDeTitres(try lire("README.md"))
         let francais = niveauxDeTitres(try lire("README.fr.md"))
