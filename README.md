@@ -236,9 +236,10 @@ stops the agent. Its state can be read at any time:
 | `not-found` | introuvable : l'app doit être dans ~/Applications ou /Applications | 5 |
 | `unknown` | inconnu (code N) | 1 |
 
-macOS asks once for access to the **local network** (and possibly for the
+macOS may ask once for access to the **local network** (and possibly for the
 firewall) the first time the app contacts another machine: the signature identity
-changed with 0.6, so the old answers do not apply.
+changed with 0.6, so the old answers do not apply. If no prompt appears and the
+webhook is confirmed in the log, nothing else is needed.
 
 ### Updating from 0.5
 
@@ -585,6 +586,10 @@ Trash as well. Nothing is deleted for good: "Trash" is a `mv` into `~/.Trash`
 (no "Put Back" in the Finder). The script refuses to run as root and refuses any
 path outside `~/Applications` and `~/Library`. Exit codes: 0 done, 1 failure or
 refusal, 2 usage.
+
+System Settings can keep listing the app under "Allow in the Background", inactive,
+after the uninstall: on macOS 27 the entry was still there hours later. The agent
+is gone all the same: `launchctl list | grep macstatusd` no longer shows it.
 
 ## Development
 

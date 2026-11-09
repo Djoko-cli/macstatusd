@@ -243,9 +243,10 @@ l'agent. Son état se lit à tout moment :
 | `not-found` | introuvable : l'app doit être dans ~/Applications ou /Applications | 5 |
 | `unknown` | inconnu (code N) | 1 |
 
-macOS demande une fois l'accès au **réseau local** (et peut-être l'autorisation du
-pare-feu) la première fois que l'app contacte une autre machine : l'identité de
-signature a changé avec la 0.6, donc les anciennes réponses ne valent plus.
+macOS peut demander une fois l'accès au **réseau local** (et peut-être l'autorisation
+du pare-feu) la première fois que l'app contacte une autre machine : l'identité de
+signature a changé avec la 0.6, donc les anciennes réponses ne valent plus. Si
+aucune invite n'apparaît et que le journal confirme le webhook, il n'y a rien à faire.
 
 ### Mise à jour depuis la 0.5
 
@@ -600,6 +601,10 @@ configuration (jeton compris) et les journaux sont gardés ; `--tout` les met au
 `~/.Trash` (pas de « Remettre » dans le Finder). Le script refuse de tourner en
 root et refuse tout chemin hors de `~/Applications` et de `~/Library`. Codes de
 sortie : 0 réussi, 1 échec ou refus, 2 usage.
+
+Les Réglages Système peuvent garder l'app dans « Autoriser en arrière-plan », inactive,
+après la désinstallation : sous macOS 27, l'entrée y était encore des heures plus
+tard. L'agent est bien parti : `launchctl list | grep macstatusd` ne le montre plus.
 
 ## Développement
 

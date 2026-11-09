@@ -792,7 +792,7 @@ l'étape 4 du lot 9 (plan 5).
 **Fichiers (locaux) :** `.superpowers/banc/banc-3-<date>/protocole.md`, `resultats.md` et les journaux.
 **Fichiers (suivis) :** les corrections des README et des notes de version qui découlent du banc.
 
-- [ ] **Étape 1 : préparation par le contrôleur, sans Djoko**
+- [x] **Étape 1 : préparation par le contrôleur, sans Djoko** (09/11 : N notarisée et agrafée ; l'archive est refusée par la garde, chemins personnels des symboles de débogage : `strip -S` et nouvelle répétition en tâche 11)
   - **N-1 (0.5.0)** :
     - compilé depuis `ab4626d` (`git archive ab4626d | tar -x -C /private/tmp/macstatusd-plan4/n-1`) ;
     - binaire copié dans `~/Library/Application Support/macstatusd-repetition-ancien/opt/macstatusd`, avec sa
@@ -805,9 +805,9 @@ l'étape 4 du lot 9 (plan 5).
     intercepte `dlsym` pour `SACScreenSaverStartNow`, compte les appels et rend `SAC_CODE`. Elle intercepte aussi
     `posix_spawn` pour noter `argv` sans lancer `/usr/bin/open`. Elle sert sur une instance d'essai sans runtime
     renforcé.
-- [ ] **Étape 2 : répétition, avec Djoko**
+- [x] **Étape 2 : répétition, avec Djoko**
   - L'agent N-1 tourne, et le récepteur reçoit l'état.
-  - Djoko lance `./scripts/install.sh --app build/repetition/0.6.0/macstatusd-repetition.app --ancien-prefixe "$HOME/Library/Application Support/macstatusd-repetition-ancien/opt"`.
+  - Djoko lance `./scripts/install.sh --app "$HOME/Library/Caches/macstatusd-build/repetition/0.6.0/app/macstatusd-repetition.app" --ancien-prefixe "$HOME/Library/Application Support/macstatusd-repetition-ancien/opt" --anciens-journaux "$HOME/Library/Logs/macstatusd-repetition-ancien"` (l'app est assemblée hors de `~/Documents` ; `--anciens-journaux` garde intacts les journaux de l'instance réelle).
   - On relève :
     - la notification d'élément d'arrière-plan ajouté, avec son nom et son icône ;
     - l'entrée dans les Réglages ;
@@ -817,28 +817,30 @@ l'étape 4 du lot 9 (plan 5).
   - Puis on fait viser au webhook l'adresse de réseau local du Mac, avec un récepteur à l'écoute sur toutes les
     interfaces, et l'écoute de l'app sur toutes les interfaces. On relève les invites « Réseau local » et pare-feu,
     que Djoko accepte.
-- [ ] **Étape 3 : R84.**
+- [x] **Étape 3 : R84.**
   - Un OFF par `curl`, en-tête lu dans un fichier 600 (`-H @fichier`). Attendu :
     - l'économiseur réglé de chaque écran, puis le verrou ;
-    - un seul process `ScreenSaverEngine` ;
+    - ~~un seul process `ScreenSaverEngine`~~ (écart E2 : sous macOS 27, l'économiseur est rendu sans process `ScreenSaverEngine` ; l'état SAC et le témoin de Djoko le remplacent) ;
     - « SACScreenSaverStartNow appelé (code 0) » au journal.
   - Puis l'interposition, sur une instance d'essai : avec `SAC_CODE=0`, un appel et aucun `open`. Avec
     `SAC_CODE=22`, un appel, un `open` noté et le WARN.
   - Enfin, sur une session déjà verrouillée, l'extinction de l'écran s'applique toujours.
-- [ ] **Étape 4 : R85.** Veille par le menu Pomme, 60 s d'attente, réveil au clavier. Attendu : « état OFF → ON »
-  moins d'1 s après les premiers faits « écrans allumés ».
-- [ ] **Étape 5 : runtime renforcé.**
+- [x] **Étape 4 : R85.** Veille par le menu Pomme, 60 s d'attente, réveil au clavier. Attendu : « état OFF → ON »
+  moins d'1 s après les premiers faits « écrans allumés ». **Non tenu** (2,1 s, relecture des écrans en fin de veille sans
+  avis) : corrigé par la tâche 2, étape 9 ; R85 refait au banc de la nouvelle répétition (tâche 11).
+- [x] **Étape 5 : runtime renforcé.**
   - `/status` doit dire `saver_detection` = `sac`, `saver_dismissal` = `SACScreenSaverStopNow` et `saver_start` =
     `SACScreenSaverStartNow`.
   - `/wake` sur un économiseur : le panneau s'ouvre et `caffeinate` part.
-  - OFF avec `off_action` = `displaySleep` : l'écran s'éteint.
+  - OFF avec `off_action` = `display_sleep` : l'écran s'éteint (écart E3 : le plan écrivait `displaySleep`, valeur refusée).
   - L'envoi vers le réseau local est confirmé.
-- [ ] **Étape 6 : coupure dans les Réglages.** Djoko coupe l'agent : `--status-service` dit « à autoriser… ». Puis il
+- [x] **Étape 6 : coupure dans les Réglages.** Djoko coupe l'agent : `--status-service` dit « à autoriser… ». Puis il
   le réactive.
-- [ ] **Étape 7 : désinstallation.** `scripts/uninstall.sh --app ~/Applications/macstatusd-repetition.app --tout`.
-  Attendu : `launchctl print` échoue, l'entrée disparaît des Réglages, l'app et les dossiers sont à la Corbeille.
-  Les restes de N-1 partent aussi à la Corbeille.
-- [ ] **Étape 8 :** résultats dans `resultats.md`. Les corrections des README et de `NOTES-VERSIONS.md` (invites
+- [x] **Étape 7 : désinstallation.** `scripts/uninstall.sh --app ~/Applications/macstatusd-repetition.app --tout`.
+  Attendu : `launchctl print` échoue, ~~l'entrée disparaît des Réglages~~, l'app et les dossiers sont à la Corbeille.
+  Écart E4 : sous macOS 27, l'entrée reste listée, inactive (base BTM : `disabled`), des heures après ; README à jour.
+  ~~Les restes de N-1 partent aussi à la Corbeille.~~ Gardés pour la nouvelle répétition (tâche 11), puis au ménage final.
+- [x] **Étape 8 :** résultats dans `resultats.md`. Les corrections des README et de `NOTES-VERSIONS.md` (invites
   réellement vues, ordre) sont commitées. Registre.
 
 **Critère de sortie :** les étapes 2 à 7 sont réussies, ou chaque écart est tranché au registre, avec sa correction
