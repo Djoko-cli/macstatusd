@@ -667,8 +667,9 @@ bash outils/assembler-app.sh [--binaire <path>] [--identifiant <id>] [--nom-supp
 
 It builds `macstatusd.app` (`Contents/MacOS/macstatusd`, `Info.plist`,
 `build-info.json`, the icon, and the agent's plist in
-`Contents/Library/LaunchAgents/`), ad hoc signed by default, in `build/app`. The
-last line printed is the path of the app. It refuses to run without the icon
+`Contents/Library/LaunchAgents/`), ad hoc signed by default, in
+`~/Library/Caches/macstatusd-build/app` (outside `~/Documents`, where iCloud adds
+attributes that `codesign` refuses). The last line printed is the path of the app. It refuses to run without the icon
 (exit code 2). An identifier `com.djoko.macstatusd.<suffix>` gives an app named
 `macstatusd-<suffix>.app`, which is how test builds live next to the real one.
 
@@ -708,6 +709,7 @@ last line printed is the path of the app. It refuses to run without the icon
   sleeps.
 - **Double-click**: while the agent runs, a double-click on the app opens nothing
   (macOS reuses the running instance).
+- **Apple silicon only**: the binary is arm64 (Apple silicon); there is no Intel build.
 - **Trash of the scripts**: it is a `mv` into `~/.Trash`; the Finder has no "Put
   Back" for it.
 
@@ -721,8 +723,12 @@ produced by:
 bash outils/publier.sh [--repetition] X.Y.Z
 ```
 
-The script refuses a shallow clone, runs the tests first, signs the app (hardened
-runtime), checks that the archive carries no personal data, notarizes, staples,
+The script refuses a shallow clone, and a tree with tracked changes or whose
+`macstatusdVersion` is not `X.Y.Z` (a rehearsal accepts `X.Y.Z` or `X.Y.Z-dev`,
+and any tree). It runs the tests first, strips the debug symbols from the
+executable (`strip -S`, which carry personal paths), signs the app (hardened
+runtime), checks that the archive carries no personal data, a first time before
+sending it to Apple and a second time on the final archive, notarizes, staples,
 and writes `build/publication/X.Y.Z/` (`macstatusd-X.Y.Z.zip`, `SHA256SUMS`).
 `--repetition` does the same with a rehearsal identity (`com.djoko.macstatusd.repetition`)
 in `build/repetition/X.Y.Z/`. Environment: `IDENTITE_SIGNATURE` (default

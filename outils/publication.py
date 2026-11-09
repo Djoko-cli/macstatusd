@@ -4,14 +4,19 @@
   publication.py X.Y.Z [--repetition]
 
 Appelé par publier.sh. Dans l'ordre :
-  0. les vérifications, avant toute construction : la version est X.Y.Z ; l'identité de signature est la seule
+  0. les vérifications, avant toute construction : la version est X.Y.Z ; hors répétition, macstatusdVersion (de
+     Sources/MacStatusCore/Version.swift) est exactement cette version et l'arbre git n'a aucune modification suivie
+     (en répétition : X.Y.Z ou X.Y.Z-dev, arbre libre) ; l'identité de signature est la seule
      « Developer ID Application » du trousseau (trouvée par ce préfixe), au sujet et à l'émetteur d'Apple ; le profil
      de notarisation répond ; la liste locale de la garde (garde.local.txt) est lisible ;
   1. l'assemblage : outils/assembler-app.sh --signer - ;
+  1b. strip -S sur chaque exécutable de Contents/MacOS (les symboles de débogage portent des chemins personnels ;
+     strip invalide la signature, il précède donc toute signature) ;
   2. la signature : d'abord le binaire, puis le paquet, runtime renforcé et horodatage, sans --deep et sans fichier
      de droits (une exception ne s'ajoute qu'après la preuve, au banc 3, qu'elle manque) ;
   3. codesign --verify --strict -R <exigence> (l'exigence de signature est écrite dans le dossier de travail) ;
-  4. l'archive (ditto -c -k --norsrc --noextattr --keepParent), puis notarytool submit --keychain-profile <profil>
+  4. l'archive (ditto -c -k --norsrc --noextattr --keepParent), la garde sur cette archive (rien n'est envoyé à
+     Apple si elle refuse), puis notarytool submit --keychain-profile <profil>
      --wait --output-format json (le statut « Accepted » est lu dans le JSON) ;
   5. stapler staple sur l'app, une nouvelle archive, spctl -a -vv -t exec et stapler validate ;
   6. la garde de l'archive finale : aucune entrée AppleDouble (« ._* », « __MACOSX/ ») dans le zip ; puis, sur une
@@ -27,7 +32,7 @@ macstatusd-repetition, dossiers build/repetition/<version>/ et .../repetition/<v
 L'environnement : IDENTITE_SIGNATURE (« Developer ID Application » par défaut ; « - » seulement en répétition, sans
 notarisation), NOTARISER (1 pour notariser), PROFIL_NOTARISATION (le profil de notarytool store-credentials). Les
 outils s'appellent par chemin absolu (/usr/bin/codesign, etc.). Seule la répétition peut les remplacer (CODESIGN,
-SECURITY, OPENSSL, DITTO, XCRUN, SPCTL), donner une autre liste locale (GARDE_LISTE, par défaut garde.local.txt à la
+SECURITY, OPENSSL, DITTO, XCRUN, SPCTL, STRIP), donner une autre liste locale (GARDE_LISTE, par défaut garde.local.txt à la
 racine du dépôt) et un autre dossier de développeur (DEVELOPER_DIR, que les relais xcselect de /usr/bin suivent) :
 hors répétition, une de ces variables donne un refus avant le premier appel.
 
@@ -57,7 +62,7 @@ GET_TASK_ALLOW = 'com.apple.security.get-task-allow'
 # La chaîne d'un Developer ID Application, vérifiée par codesign sur l'app signée : ancrée chez Apple, un
 # intermédiaire Developer ID, une feuille Developer ID Application.
 # Les variables qui remplacent un outil, la liste de la garde ou le dossier de développeur : réservées à la répétition.
-REMPLACEMENTS = ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'GARDE_LISTE', 'DEVELOPER_DIR')
+REMPLACEMENTS = ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'STRIP', 'GARDE_LISTE', 'DEVELOPER_DIR')
 EXIGENCE_DEVELOPER_ID = ('=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and '
                          'certificate leaf[field.1.2.840.113635.100.6.1.13] exists')
 
@@ -100,8 +105,8 @@ def masquer_identite(texte):
     affiche (exigence de signature, erreurs de codesign, de spctl ou de notarytool) : ils ne vont que dans la
     signature. Les formes sont celles de ~/.claude/outils/masquer (les dix libellés, avec des espaces autour des
     deux-points, équipe, empreintes de 40 et de 64 caractères, courriels), plus O=, OU= et UID= d'un
-    certificat. Les échappements « \\= » qu'écrivent certains outils sont retirés d'abord. Les valeurs de la liste locale se masquent en dernier, en complément."""
-    texte = texte.replace('\\=', '=').replace('\\ ', ' ')
+    certificat. Les échappements « \\= » et « \\: » qu'écrivent certains outils sont retirés d'abord. Les valeurs de la liste locale se masquent en dernier, en complément."""
+    texte = texte.replace('\\=', '=').replace('\\ ', ' ').replace('\\:', ':')
     # Le libellé qui suit le préfixe d'une identité (titulaire, et équipe entre parenthèses).
     prefixe = r'(%s\s*:\s*)' % LIBELLES
     texte = re.sub(prefixe + r'[^\n"]*?(\s*\()[A-Z0-9]{10}(\))', r'\1<titulaire>\2<equipe>\3', texte)
@@ -144,6 +149,8 @@ class Outils:
         self.ditto = e.get('DITTO', '/usr/bin/ditto')
         self.xcrun = e.get('XCRUN', '/usr/bin/xcrun')
         self.spctl = e.get('SPCTL', '/usr/sbin/spctl')
+        self.strip = e.get('STRIP', '/usr/bin/strip')
+        self.git = '/usr/bin/git'
 
     def executer(self, cmd, entree=None):
         """Lance la commande ; rend (code, sortie, erreur) en texte. Ne lève rien pour un code non nul."""
@@ -156,6 +163,22 @@ class Outils:
         if r.code != 0:
             raise EchecCommande(cmd, r.code, r.erreur, r.sortie)
         return r.sortie
+
+    def version_du_code(self, depot):
+        """macstatusdVersion, lue dans Sources/MacStatusCore/Version.swift (même motif que l'assembleur) ; '' si
+        elle ne se lit pas."""
+        try:
+            with open(os.path.join(depot, 'Sources', 'MacStatusCore', 'Version.swift'), encoding='utf-8') as f:
+                m = re.search(r'macstatusdVersion *= *"([^"]*)"', f.read())
+        except OSError:
+            return ''
+        return m.group(1) if m else ''
+
+    def etat_de_l_arbre(self, depot):
+        """Les modifications suivies de l'arbre git (git status --porcelain --untracked-files=no) ; None si git
+        échoue."""
+        r = self.executer([self.git, '-C', depot, 'status', '--porcelain', '--untracked-files=no'])
+        return r.sortie if r.code == 0 else None
 
     def lancer_muet(self, cmd, quoi, entree=None):
         """Comme lancer, pour un outil dont la sortie peut porter l'identité (security, openssl) : un échec devient un
@@ -482,6 +505,22 @@ def reponse_notarisation(retour):
     return reponse
 
 
+def verifier_version_et_arbre(a, o):
+    """Hors répétition : la version du code est exactement celle demandée et l'arbre n'a aucune modification suivie.
+    En répétition : X.Y.Z ou X.Y.Z-dev, l'arbre est libre. Lève Refus."""
+    code = o.version_du_code(a.depot)
+    acceptees = (a.version, a.version + '-dev') if a.repetition else (a.version,)
+    if code not in acceptees:
+        raise Refus('la version du code (%s) n\'est pas celle demandée (%s) : monter macstatusdVersion d\'abord'
+                    % (code or 'illisible', a.version))
+    if not a.repetition:
+        etat = o.etat_de_l_arbre(a.depot)
+        if etat is None:
+            raise Refus("l'état de l'arbre git ne se lit pas (git status) : rien n'est publié")
+        if etat.strip():
+            raise Refus('arbre modifié : commiter d\'abord')
+
+
 def publier(a, o=None, env=None):
     """Les étapes dans l'ordre (voir l'en-tête). Rend le dossier des produits. a : version, repetition, depot,
     racine_travail (facultatif)."""
@@ -493,6 +532,7 @@ def publier(a, o=None, env=None):
         if remplaces:
             raise Refus('hors --repetition, aucun outil ni liste de la garde ne se remplace : %s' % ', '.join(remplaces))
     o = o or Outils(e, a.repetition)
+    verifier_version_et_arbre(a, o)
     identite = e.get('IDENTITE_SIGNATURE', DEVELOPER_ID)
     notarise = notariser(e)
     profil = e.get('PROFIL_NOTARISATION', '')
@@ -536,6 +576,11 @@ def publier(a, o=None, env=None):
         raise Refus("l'assembleur n'a pas donné le chemin de l'app sur sa dernière ligne")
     dire('app assemblée : ' + os.path.relpath(app, racine))
 
+    # 1b. strip -S avant toute signature : les stabs de débogage portent des chemins personnels, et strip invalide
+    # la signature (l'étape 2 signe de nouveau). Les exécutables seulement, pas le paquet.
+    for code in codes_de_l_app(app)[:-1]:
+        o.lancer([o.strip, '-S', code])
+
     # 2. la signature : le binaire, puis le paquet
     horodatage = developer_id(identite)
     for code in codes_de_l_app(app):
@@ -562,6 +607,13 @@ def publier(a, o=None, env=None):
     if notarise:
         soumission = os.path.join(travail, 'soumission.zip')
         archiver(o, app, soumission)
+        # La garde passe avant l'envoi : un chemin personnel ne part pas chez Apple.
+        try:
+            garder_archive(o, soumission, os.path.join(travail, 'controle-soumission'), motifs)
+        except BaseException:
+            if os.path.exists(soumission):
+                os.remove(soumission)
+            raise
         retour = o.lancer([o.xcrun, 'notarytool', 'submit', soumission, '--keychain-profile', profil, '--wait',
                            '--output-format', 'json'])
         os.remove(soumission)

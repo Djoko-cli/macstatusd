@@ -58,9 +58,11 @@ class FauxOutils(publication.Outils):
 
     def __init__(self, env=None, identites=None, emetteur=EMETTEUR, retrait_rate=False, ressources=None,
                  signature=b'signature', notarisation=NOTARISATION_ACCEPTEE, echec_signature=None,
-                 droits='', echecs=None, entrees_zip=None):
+                 droits='', echecs=None, entrees_zip=None, version_code='0.6.0', arbre=''):
         super().__init__(env)
         self.appels = []
+        self.version_code = version_code    # ce que « lit » la version du code (Version.swift)
+        self.arbre = arbre                  # ce que rendrait git status --porcelain (vide : arbre propre)
         self.identites = [(EMPREINTE, NOM_COMPLET)] if identites is None else identites
         self.emetteur = emetteur
         self.retrait_rate = retrait_rate
@@ -92,6 +94,12 @@ class FauxOutils(publication.Outils):
         if nom == 'xcrun' and cmd[1] == 'notarytool' and cmd[2] == 'submit':
             return self.rendre(0, self.notarisation)
         return self.rendre(0)
+
+    def version_du_code(self, depot):
+        return self.version_code
+
+    def etat_de_l_arbre(self, depot):
+        return self.arbre
 
     @staticmethod
     def rendre(code, sortie='', erreur=''):
@@ -447,7 +455,8 @@ class TestGarde(Base):
 class TestDeroulement(Base):
     def test_ordre_des_gestes(self):
         o, _ = self.publier()
-        self.assertEqual(['assembler', 'signer', 'vérifier', 'archiver', 'notariser', 'agrafer', 'archiver',
+        # La garde passe d'abord sur l'archive de soumission, avant l'envoi à Apple, puis sur l'archive finale.
+        self.assertEqual(['assembler', 'signer', 'vérifier', 'archiver', 'garder', 'notariser', 'agrafer', 'archiver',
                           'évaluer', 'valider', 'garder'], o.etapes())
 
     def test_signature_binaire_puis_paquet_sans_deep_ni_droits(self):
@@ -755,7 +764,8 @@ class TestProduitsEtTravail(Base):
             publication.publier(self.args(), o, e)
         produits = os.path.join(self.depot, 'build', 'publication', '0.6.0')
         self.assertEqual([], [n for n in (os.listdir(produits) if os.path.isdir(produits) else [])])
-        self.assertNotIn('garder', o.etapes())
+        # Seule la garde de l'archive de soumission a eu lieu, pas celle de l'archive finale.
+        self.assertEqual(1, o.etapes().count('garder'))
 
     def test_garde_refusee_rien_dans_les_produits(self):
         o = FauxOutils(self.env(), ressources={'Contents/Resources/r.json': CHEMIN_PERSO.encode()})
@@ -790,7 +800,7 @@ class TestProduitsEtTravail(Base):
 
 class TestOutilsNonRemplacables(Base):
     def test_hors_repetition_une_variable_de_remplacement_est_refusee_avant_tout_appel(self):
-        for nom in ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'GARDE_LISTE'):
+        for nom in ('CODESIGN', 'SECURITY', 'OPENSSL', 'DITTO', 'XCRUN', 'SPCTL', 'STRIP', 'GARDE_LISTE'):
             with self.subTest(nom):
                 e = self.env(**{nom: '/usr/bin/true'})
                 o = FauxOutils(e)
@@ -835,6 +845,98 @@ class TestOutilsNonRemplacables(Base):
         with sans_bruit(), self.assertRaises(publication.Refus) as r:
             publication.publier(self.args(True), o, e)
         self.assertIn('ligne 1', str(r.exception))
+
+
+class TestStripEtVersion(Base):
+    def test_strip_precede_la_premiere_signature_de_chaque_binaire(self):
+        o, _ = self.publier()
+        strips = [i for i, c in enumerate(o.appels) if os.path.basename(c[0]) == 'strip']
+        self.assertEqual(1, len(strips))
+        self.assertEqual(['-S'], o.appels[strips[0]][1:2])
+        binaire = o.appels[strips[0]][-1]
+        self.assertTrue(binaire.endswith('Contents/MacOS/macstatusd'))
+        signatures = [i for i, c in enumerate(o.appels) if '--force' in c and c[-1] == binaire]
+        self.assertEqual(1, len(signatures))
+        self.assertLess(strips[0], signatures[0])
+        # Jamais sur le paquet lui-même.
+        self.assertEqual([], [c for c in o.appels if os.path.basename(c[0]) == 'strip' and c[-1].endswith('.app')])
+
+    def test_strip_est_un_outil_remplacable_seulement_en_repetition(self):
+        self.assertEqual('/usr/bin/strip', publication.Outils({}).strip)
+        self.assertEqual('/usr/bin/strip', publication.Outils({'STRIP': '/essai/strip'}).strip)
+        self.assertEqual('/essai/strip', publication.Outils({'STRIP': '/essai/strip'}, remplacables=True).strip)
+        e = self.env(STRIP='/usr/bin/true')
+        o = FauxOutils(e)
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertIn('STRIP', str(r.exception))
+        self.assertEqual([], o.appels)
+
+    def test_version_du_code_differente_refus_avant_tout_appel(self):
+        e = self.env()
+        o = FauxOutils(e, version_code='0.5.9')
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertIn('macstatusdVersion', str(r.exception))
+        self.assertEqual([], o.appels)
+
+    def test_arbre_modifie_refus_avant_tout_appel(self):
+        e = self.env()
+        o = FauxOutils(e, arbre=' M Sources/MacStatusCore/Version.swift\n')
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertIn('arbre modifié', str(r.exception))
+        self.assertEqual([], o.appels)
+
+    def test_arbre_illisible_refus(self):
+        e = self.env()
+        o = FauxOutils(e, arbre=None)
+        with sans_bruit(), self.assertRaises(publication.Refus) as r:
+            publication.publier(self.args(), o, e)
+        self.assertIn('arbre', str(r.exception))
+
+    def test_repetition_accepte_la_version_dev_et_un_arbre_modifie(self):
+        for version_code in ('0.6.0', '0.6.0-dev'):
+            with self.subTest(version_code):
+                e = self.env()
+                o = FauxOutils(e, version_code=version_code, arbre=' M fichier\n')
+                with sans_bruit():
+                    publication.publier(self.args(True), o, e)
+                self.assertIn('signer', o.etapes())
+
+    def test_repetition_refuse_d_autres_chiffres(self):
+        for version_code in ('0.6.1', '0.6.1-dev', '0.5.0', '0.6.0-beta', ''):
+            with self.subTest(version_code):
+                e = self.env()
+                o = FauxOutils(e, version_code=version_code)
+                with sans_bruit(), self.assertRaises(publication.Refus):
+                    publication.publier(self.args(True), o, e)
+                self.assertEqual([], o.appels)
+
+    def test_hors_repetition_la_version_dev_est_refusee(self):
+        e = self.env()
+        o = FauxOutils(e, version_code='0.6.0-dev')
+        with sans_bruit(), self.assertRaises(publication.Refus):
+            publication.publier(self.args(), o, e)
+
+    def test_lecture_reelle_de_la_version_du_code(self):
+        dossier = os.path.join(self.depot, 'Sources', 'MacStatusCore')
+        os.makedirs(dossier)
+        with open(os.path.join(dossier, 'Version.swift'), 'w', encoding='utf-8') as f:
+            f.write('public let macstatusdVersion = "1.2.3"\n')
+        self.assertEqual('1.2.3', publication.Outils({}).version_du_code(self.depot))
+
+    def test_garde_avant_l_envoi_a_apple(self):
+        e = self.env()
+        o = FauxOutils(e, ressources={'Contents/Resources/r.json': CHEMIN_PERSO.encode()})
+        with sans_bruit(), self.assertRaises(publication.Refus):
+            publication.publier(self.args(), o, e)
+        self.assertEqual([], [c for c in o.appels if c[1:3] == ['notarytool', 'submit']])
+        self.assertFalse(os.path.exists(os.path.join(self.cache, 'publication', '0.6.0', 'soumission.zip')))
+
+    def test_masque_les_deux_points_echappes(self):
+        masque = publication.masquer_identite('CN\\=Developer ID Application\\: %s (%s)' % (TITULAIRE, EQUIPE))
+        self.assertEqual([], vu(masque), masque)
 
 
 if __name__ == '__main__':

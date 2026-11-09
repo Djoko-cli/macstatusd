@@ -688,8 +688,10 @@ bash outils/assembler-app.sh [--binaire <chemin>] [--identifiant <id>] [--nom-su
 
 Il construit `macstatusd.app` (`Contents/MacOS/macstatusd`, `Info.plist`,
 `build-info.json`, l'icône, et le plist de l'agent dans
-`Contents/Library/LaunchAgents/`), signée ad hoc par défaut, dans `build/app`. La
-dernière ligne affichée est le chemin de l'app. Il refuse de s'exécuter sans
+`Contents/Library/LaunchAgents/`), signée ad hoc par défaut, dans
+`~/Library/Caches/macstatusd-build/app` (hors de `~/Documents`, où iCloud ajoute
+des attributs que `codesign` refuse). La dernière ligne affichée est le chemin de
+l'app. Il refuse de s'exécuter sans
 l'icône (code de sortie 2). Un identifiant `com.djoko.macstatusd.<suffixe>` donne
 une app nommée `macstatusd-<suffixe>.app`, ce qui permet aux builds d'essai de
 vivre à côté de la vraie.
@@ -731,6 +733,7 @@ vivre à côté de la vraie.
   que l'écran s'endort.
 - **Double-clic** : tant que l'agent tourne, un double-clic sur l'app n'ouvre rien
   (macOS réutilise l'instance en cours).
+- **Apple silicon seulement** : le binaire est arm64 (Apple silicon), il n'y a pas de build Intel.
 - **Corbeille des scripts** : c'est un `mv` vers `~/.Trash` ; le Finder n'a pas de
   « Remettre » pour ces fichiers.
 
@@ -744,9 +747,13 @@ est produite par :
 bash outils/publier.sh [--repetition] X.Y.Z
 ```
 
-Le script refuse un clone superficiel, lance d'abord les tests, signe l'app
-(runtime renforcé), vérifie que l'archive ne porte aucune donnée personnelle,
-notarise, agrafe, et écrit `build/publication/X.Y.Z/` (`macstatusd-X.Y.Z.zip`,
+Le script refuse un clone superficiel, et un arbre qui a des modifications suivies
+ou dont `macstatusdVersion` n'est pas `X.Y.Z` (une répétition accepte `X.Y.Z` ou
+`X.Y.Z-dev`, et n'importe quel arbre). Il lance d'abord les tests, retire les
+symboles de débogage de l'exécutable (`strip -S`, ils portent des chemins
+personnels), signe l'app (runtime renforcé), vérifie que l'archive ne porte aucune
+donnée personnelle, une première fois avant de l'envoyer à Apple et une seconde
+sur l'archive finale, notarise, agrafe, et écrit `build/publication/X.Y.Z/` (`macstatusd-X.Y.Z.zip`,
 `SHA256SUMS`). `--repetition` fait la même chose avec une identité de répétition
 (`com.djoko.macstatusd.repetition`) dans `build/repetition/X.Y.Z/`.
 Environnement : `IDENTITE_SIGNATURE` (défaut `Developer ID Application`),

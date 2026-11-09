@@ -88,7 +88,7 @@ lancer() {
     read -r -a env_cas <<< "$vars"
   fi
   env -u IDENTITE_SIGNATURE -u NOTARISER -u PROFIL_NOTARISATION -u CODESIGN -u SECURITY -u OPENSSL -u DITTO -u XCRUN \
-    -u SPCTL -u GARDE_LISTE HOME="$home_essai" PATH="$faux_outils:$PATH" "${env_cas[@]+"${env_cas[@]}"}" bash "$clone/outils/publier.sh" "$@" > "$sortie" 2>&1
+    -u SPCTL -u STRIP -u DEVELOPER_DIR -u GARDE_LISTE HOME="$home_essai" PATH="$faux_outils:$PATH" "${env_cas[@]+"${env_cas[@]}"}" bash "$clone/outils/publier.sh" "$@" > "$sortie" 2>&1
   code=$?
 }
 
@@ -120,7 +120,7 @@ refus "cliquet : IDENTITE_SIGNATURE autre refusée" "$complet" "IDENTITE_SIGNATU
 refus "cliquet : NOTARISER=0 sans --repetition refusé" "$complet" "NOTARISER=0" "notarisée" 0.6.0
 refus "cliquet : NOTARISER vide sans --repetition refusé" "$complet" "NOTARISER=" "notarisée" 0.6.0
 refus "clone superficiel refusé" "$superficiel" "-" "superficiel" 0.6.0
-for nom in CODESIGN SECURITY OPENSSL DITTO XCRUN SPCTL GARDE_LISTE; do
+for nom in CODESIGN SECURITY OPENSSL DITTO XCRUN SPCTL STRIP DEVELOPER_DIR GARDE_LISTE; do
   refus "remplacement : $nom posée sans --repetition refusée" "$complet" "$nom=/usr/bin/true" "$nom" 0.6.0
 done
 code_attendu=2

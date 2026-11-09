@@ -20,6 +20,7 @@ New:
 - New `/status` fields: `facts_reason`, `saver_detection`, `saver_dismissal`, `saver_start`, `slow_calls`, `build`, `service`, `main_display`, `display_list`; new options `--register`, `--unregister`, `--status-service`, `--agent`; `--version` shows the git commit and build date.
 - Access hardening: `Host` and browser-origin checks, rate limits, connection cap, degraded mode on an invalid configuration.
 - `off_command` and `wake_command` must be absolute executable paths; their exit code is logged.
+- Apple silicon (arm64) only: the binary has no Intel build.
 
 **Français**
 
@@ -39,6 +40,7 @@ Nouveautés :
 - Nouveaux champs de `/status` : `facts_reason`, `saver_detection`, `saver_dismissal`, `saver_start`, `slow_calls`, `build`, `service`, `main_display`, `display_list` ; nouvelles options `--register`, `--unregister`, `--status-service`, `--agent` ; `--version` montre le commit git et la date de compilation.
 - Accès durci : contrôles de `Host` et d'origine de navigateur, limites de débit, plafond de connexions, mode dégradé sur configuration invalide.
 - `off_command` et `wake_command` doivent être des chemins absolus exécutables ; leur code de sortie est journalisé.
+- Apple silicon (arm64) seulement : le binaire n'a pas de build Intel.
 
 ## 0.5.0
 
