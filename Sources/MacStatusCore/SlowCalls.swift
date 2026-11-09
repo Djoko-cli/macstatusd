@@ -32,6 +32,11 @@ public final class SlowCallMonitor {
         return result
     }
 
+    /// Note une durée déjà mesurée ailleurs (lecture d'arrière-plan) : même seuil, même WARN espacé que `measure`.
+    public func record(_ name: String, elapsed: Double) {
+        if elapsed >= threshold { note(name, elapsed: elapsed, at: clock.awake()) }
+    }
+
     private func note(_ name: String, elapsed: Double, at now: Double) {
         verrou.lock()
         counts[name, default: 0] += 1

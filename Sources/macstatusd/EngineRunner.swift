@@ -44,8 +44,13 @@ final class EngineRunner: EngineFacade {
             redisplayIdle: Double(config.saverRedisplayIdleSeconds),
             signals: signals
         )
+        // Les écrans se lisent sur leur propre file (R85) : le retour d'une relecture repasse par la file du moteur.
+        let displayQueue = DispatchQueue(label: "macstatusd.ecrans")
+        let queue = self.queue
         core = EngineCore(config: config, clock: clock, signals: signals, oracle: oracle,
-                          actions: actions, publisher: webhook, buildInfo: buildInfo, serviceState: serviceState)
+                          actions: actions, publisher: webhook, buildInfo: buildInfo, serviceState: serviceState,
+                          displayRunner: DispatchDisplayReadRunner(queue: displayQueue),
+                          deliver: { work in queue.async(execute: work) })
     }
 
     // MARK: - Cycle de vie

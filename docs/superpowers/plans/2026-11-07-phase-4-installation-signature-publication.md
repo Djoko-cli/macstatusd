@@ -344,7 +344,7 @@ Hypothèse : une lecture du système bloque la file du moteur, le temps que le s
     saisie sécurisée sont relus.
   - Suite complète. Commit « Plan 4 : fin de veille sans avis sans relecture des écrans (R85, banc 3) ».
   - Le banc de la nouvelle répétition (tâche 11) refait R85.
-- [ ] **Étape 10 : les écrans se lisent hors de la file du moteur (R85, banc 4, amendement du 09/11).**
+- [x] **Étape 10 : les écrans se lisent hors de la file du moteur (R85, banc 4, amendement du 09/11).**
   Banc 4, réveil par l'avis IOKit : ON 1,5 s après les premiers faits « écrans allumés ». Trois lectures des écrans de
   1,5 s environ ont tenu la file pendant la reconfiguration ; le lissage ON attendait la lecture suivante.
   - Hors veille annoncée, une lecture des écrans rend le dernier relevé et lance une relecture en arrière-plan, une

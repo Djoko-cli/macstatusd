@@ -42,6 +42,10 @@ public final class EngineCore {
     private let buildInfo: BuildInfo
     /// État de l'agent auprès de macOS, relu à chaque `/status` (C20).
     private let serviceState: () -> ServiceState
+    /// Exécuteur des lectures des écrans, sur sa propre file (R85, banc 4) ; `nil` : lecture synchrone directe.
+    private let displayRunner: DisplayReadRunner?
+    /// Remet un travail sur la file du moteur (en production : `queue.async`). Sert au retour d'une relecture.
+    private let deliver: ((@escaping () -> Void) -> Void)?
 
     private var facts = Facts()
     private var systemAsleep = false
@@ -195,7 +199,11 @@ public final class EngineCore {
                 actions: CommandActions,
                 publisher: StatePublisher,
                 buildInfo: BuildInfo = .unknown,
-                serviceState: @escaping () -> ServiceState = { .unknown }) {
+                serviceState: @escaping () -> ServiceState = { .unknown },
+                displayRunner: DisplayReadRunner? = nil,
+                deliver: ((@escaping () -> Void) -> Void)? = nil) {
+        self.displayRunner = displayRunner
+        self.deliver = deliver
         self.buildInfo = buildInfo
         self.serviceState = serviceState
         self.config = config
@@ -405,6 +413,13 @@ public final class EngineCore {
 
     /// Dernier relevé brut des écrans rendu par `signals.displaySnapshot()`, avant `DisplayTopology.state`.
     private var lastDisplaySnapshot: DisplaySnapshot?
+    /// Le relevé gardé peut servir tel quel hors veille. Faux après chaque réveil (`noteWake`) : un relevé d'avant la
+    /// veille ferait un faux ON pendant un réveil sombre. La lecture suivante est alors synchrone.
+    private var displaySnapshotValid = false
+    /// Une relecture d'arrière-plan est partie et n'est pas revenue : une seule à la fois.
+    private var displayReadInFlight = false
+    /// Change à chaque veille annoncée et à chaque réveil : une relecture lancée avant est jetée à son retour.
+    private var displayGeneration = 0
 
     /// `reuseDisplaySnapshot` : ne pas relire les écrans, reprendre le dernier relevé brut (la topologie en est
     /// recalculée avec l'état courant de `screensAsleepNotified`). Sans relevé gardé, les écrans sont lus.
@@ -423,6 +438,17 @@ public final class EngineCore {
         let snapshot: DisplaySnapshot
         if reuseDisplaySnapshot, let kept = lastDisplaySnapshot {
             snapshot = kept
+        } else if let runner = displayRunner {
+            if let kept = lastDisplaySnapshot, displaySnapshotValid, !systemAsleep {
+                // Hors veille annoncée, avec un relevé sûr : on ne bloque pas la file du moteur sur CoreGraphics.
+                snapshot = kept
+                startBackgroundDisplayRead(runner)
+            } else {
+                // Veille annoncée, ou premier relevé, ou réveil : relevé réel, lu tout de suite.
+                snapshot = slowCalls.measure("ecrans") { runner.readNow { signals.displaySnapshot() } }
+                lastDisplaySnapshot = snapshot
+                displaySnapshotValid = true
+            }
         } else {
             snapshot = slowCalls.measure("ecrans") { signals.displaySnapshot() }
             lastDisplaySnapshot = snapshot
@@ -749,6 +775,7 @@ public final class EngineCore {
         }
         logInfo("veille imminente → publication OFF avant gel du daemon")
         systemAsleep = true
+        displayGeneration += 1   // une relecture des écrans en vol sera jetée
         // Deux avis de veille sans réveil entre eux : le début reste celui du premier.
         if lastSleep == nil || lastSleep?.end != nil {
             lastSleep = SleepSpan(start: clock.monotonic(), awakeStart: clock.awake())
@@ -885,6 +912,9 @@ public final class EngineCore {
         }
         systemAsleep = false
         screensAsleepNotified = false
+        // Le relevé d'avant la veille ne doit jamais servir au réveil : relecture synchrone, relecture en vol jetée.
+        displayGeneration += 1
+        displaySnapshotValid = false
         saver.noteSystemWake()
         return slept
     }
@@ -920,6 +950,35 @@ public final class EngineCore {
         noteWake(now: now)
         logInfo("fin de la veille sans avis de réveil (\(cause))")
         refreshFacts(reuseDisplaySnapshot: true)
+        // Ce relevé a été lu de façon synchrone dans ce tick, pendant la veille annoncée : il est réel.
+        displaySnapshotValid = true
+    }
+
+    /// Lance une relecture des écrans sur la file des écrans, s'il n'y en a pas déjà une en vol. À son retour sur la
+    /// file du moteur : relevé jeté si une veille ou un réveil a eu lieu depuis (génération), sinon il devient le
+    /// relevé gardé, sa durée est comptée dans `slow_calls`, et les faits sont recalculés avec lui **sans nouvelle
+    /// lecture** (sinon chaque retour relancerait une lecture, sans fin), puis évalués sans l'immédiat.
+    private func startBackgroundDisplayRead(_ runner: DisplayReadRunner) {
+        guard !displayReadInFlight, let deliver else { return }
+        displayReadInFlight = true
+        let generation = displayGeneration
+        let signals = self.signals
+        let clock = self.clock
+        runner.readLater { [weak self] in
+            let start = clock.awake()
+            let read = signals.displaySnapshot()
+            let elapsed = clock.awake() - start
+            deliver {
+                guard let self else { return }
+                self.displayReadInFlight = false
+                guard !self.isShutDown, generation == self.displayGeneration else { return }
+                self.lastDisplaySnapshot = read
+                self.displaySnapshotValid = true
+                self.slowCalls.record("ecrans", elapsed: elapsed)
+                self.refreshFacts(reuseDisplaySnapshot: true)
+                self.evaluate(immediate: false)
+            }
+        }
     }
 
     // MARK: - Arrêt
