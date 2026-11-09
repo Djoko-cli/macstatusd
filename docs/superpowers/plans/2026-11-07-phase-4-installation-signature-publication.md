@@ -748,7 +748,7 @@ deux fois de suite pour vérifier qu'il ne laisse rien hors de son dossier d'ess
 `NOTES-VERSIONS.md` : `## 0.6.0`, puis `## 0.5.0`. Chaque section a un bloc **English**, puis un bloc **Français**.
 La 0.6.0 dit ce qui change à la mise à jour : la liste du lot 7, que le banc 3 vérifie.
 
-- [ ] **Étape 1 : tests rouges `DocumentationTests`**
+- [x] **Étape 1 : tests rouges `DocumentationTests`**
   - `test_chaqueCleDeConfig_estDecriteDansLesDeuxReadme` : chaque clé de `Config.knownKeys`, entre accents graves ;
   - `test_chaqueChampDeStatus_estDecritDansLesDeuxReadme` : les clés du premier niveau de `statusSnapshot()`, sur
     un moteur d'essai ;
@@ -758,9 +758,9 @@ La 0.6.0 dit ce qui change à la mise à jour : la liste du lot 7, que le banc 3
   - `test_readme_lienVersLAutreLangue`.
 
   Mutation à rejouer : retirer une clé de `README.fr.md`. Le premier test échoue et nomme la clé.
-- [ ] **Étape 2 :** écrire les deux README ensemble, puis `NOTES-VERSIONS.md` et `architecture.txt`. Aucune valeur
+- [x] **Étape 2 :** écrire les deux README ensemble, puis `NOTES-VERSIONS.md` et `architecture.txt`. Aucune valeur
   réelle : adresses `192.0.2.x`, identifiants d'exemple.
-- [ ] **Étape 3 :** suite complète, et balayage de l'anonymat du diff (motifs de la garde, chemins personnels). Commit
+- [x] **Étape 3 :** suite complète, et balayage de l'anonymat du diff (motifs de la garde, chemins personnels). Commit
   « Plan 4 : README anglais et français, notes de version 0.5.0 et 0.6.0, architecture (F68) ».
 
 **Contrôle du relecteur :** suivre la section d'installation à la lettre, dans un `HOME` d'essai, avec l'app d'essai

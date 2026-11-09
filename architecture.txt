@@ -1,84 +1,61 @@
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                               HOMEKIT (iOS / iPadOS / macOS)                 │
-│                                                                              │
-│   • Interface utilisateur                                                    │
-│   • Affiche l’état ON/OFF du Mac                                             │
-│   • Envoie les commandes ON/OFF                                              │
-│                                                                              │
-│   Action utilisateur → "Allumer" / "Éteindre"                                │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                        │
-                                        │ 1. Commande ON/OFF
-                                        ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                                 HOMEBRIDGE                                   │
-│                         Plugin HTTP Webhooks (benzman81)                     │
-│                                                                              │
-│   • Reçoit les commandes HomeKit                                             │
-│       - ON  → appelle /wake sur macstatusd                                   │
-│       - OFF → appelle /sleep sur macstatusd                                  │
-│                                                                              │
-│   • Lit l’état du Mac via /state                                             │
-│   • Reçoit les webhooks push de macstatusd                                   │
-│   • Met à jour l’accessoire HomeKit                                          │
-│                                                                              │
-│   Rôle : passerelle bidirectionnelle entre HomeKit et macstatusd             │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                        │
-                                        │ 2. /wake, /sleep, /state, webhooks
-                                        ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                                 macstatusd                                   │
-│                         (Daemon Swift appliance‑grade)                       │
-│                                                                              │
-│   • Serveur HTTP local (port 9090)                                           │
-│   • Moteur d’état interne :                                                  │
-│       - isAsleep                                                             │
-│       - screenSaverActive                                                    │
-│       - wakePending                                                          │
-│       - idleMonitoringActive                                                 │
-│                                                                              │
-│   • Timers intelligents :                                                    │
-│       - wakeTimeout (30.5s)                                                  │
-│       - idleTimeout (30.5s)                                                  │
-│       - idlePolling (0.5s)                                                   │
-│                                                                              │
-│   • Détection système :                                                      │
-│       - CGDisplayIsAsleep (écran ON/OFF)                                     │
-│       - CGSessionCopyCurrentDictionary (lock/loginwindow)                    │
-│       - NSWorkspace sleep/wake                                               │
-│       - Screensaver notifications                                            │
-│       - Activité HID                                                         │
-│                                                                              │
-│   • Logique ON/OFF :                                                         │
-│       - OFF si : vrai sleep, écran OFF, screensaver                          │
-│       - ON si : écran ON, wake, display wake                                 │
-│                                                                              │
-│   • Push vers Homebridge :                                                   │
-│       - sendWebhook(state=true/false)                                        │
-│                                                                              │
-│   Rôle : vérité absolue de l’état du Mac                                     │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                        │
-                                        │ 3. Notifications + API système
-                                        ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                                      macOS                                   │
-│                                                                              │
-│   • États réels :                                                            │
-│       - Sleep (S0)                                                           │
-│       - Awake (S1)                                                           │
-│       - Locked (S2)                                                          │
-│       - Screensaver (S3)                                                     │
-│       - Pseudo‑sleep (écran OFF sans sleep)                                  │
-│       - Darkwake (wake silencieux)                                           │
-│                                                                              │
-│   • Événements :                                                             │
-│       - willSleep / didWake                                                  │
-│       - Extinction écran                                                     │
-│       - Display wake                                                         │
-│       - Loginwindow                                                          │
-│       - HID activity                                                         │
-│                                                                              │
-│   Rôle : source brute de vérité physique                                     │
-└──────────────────────────────────────────────────────────────────────────────┘
+macstatusd 0.6 : architecture
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOME ASSISTANT / HOMEKIT (via Homebridge)                                  │
+│    commandes : GET /wake, GET /sleep (en-tête X-Auth-Token)                 │
+│    lectures  : GET /state, GET /status, GET /health                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │ HTTP                                         ▲ push webhook
+          ▼                                              │ (GET ou POST, par cible)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  macstatusd.app (~/Applications), agent enregistré par SMAppService         │
+│                                                                             │
+│  Sources/macstatusd : l'exécutable (tout ce qui touche le système)          │
+│    main.swift             options, --register/--unregister/--status-service │
+│    HTTPServer.swift       écoute (boucle locale ou interfaces), connexions  │
+│    EngineRunner.swift     boucle du moteur, arrêt, signaux                  │
+│    LiveSystemSignals.swift  lectures réelles (IOKit, CoreGraphics, IOHID)   │
+│    LoginFramework.swift   fonctions SAC* de login.framework (dlopen)        │
+│    PowerWatcher / PowerActions   veille, réveil, pmset, caffeinate          │
+│    NetworkWatcher / LocalNames   changements de réseau, noms .local         │
+│    ServiceRegistry.swift  SMAppService (enregistrement de l'agent)          │
+│    URLSessionTransport.swift   envoi des webhooks                           │
+│                                                                             │
+│  Sources/MacStatusCore : le cœur, testable sans système                     │
+│    EngineCore.swift       faits → verdict → état publié, commandes,         │
+│                           intentions, /status (statusSnapshot)              │
+│    Facts / ConsoleOwnership / DisplayTopology   les faits observés          │
+│    ScreenSaverOracle / SaverProcesses   économiseur en cours ou à l'écran   │
+│    Router / AccessPolicy / RequestParser / HTTPMessage   surface HTTP       │
+│    RateLimits / ConnectionLimiter       rafales, échecs, plafond            │
+│    WebhookClient.swift    cibles, réessais, battement de cœur               │
+│    Config.swift           clés connues, défauts, avertissements             │
+│    Commands / CommandOverride   actions OFF/ON et surcharges                │
+│    ServiceRegistration    états et codes de sortie de l'agent               │
+│    SupportPaths / BuildInfo / SlowCalls / Shutdown / Scheduler / Clock      │
+│                                                                             │
+│  Sources/MacStatusLog (journal)    Sources/MacStatusNet (signature réseau)  │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │ API système (aucune lecture de journal)
+          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  macOS : IOKit (veille), CGDisplay (écrans), IORegistry (verrouillage),     │
+│  IOHIDSystem (inactivité), login.framework (économiseur), launchd           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Flux d'une décision
+  1. Chaque cycle (poll_interval_ms), le moteur relit les faits.
+  2. Un verdict (ON/OFF + raison) en sort ; il n'est publié qu'après la durée de
+     stabilité (settle_on_ms / settle_off_ms).
+  3. Une commande /wake ou /sleep crée une intention : l'action part, puis les
+     faits la confirment, l'escaladent ou l'abandonnent.
+  4. Chaque changement est poussé à toutes les cibles de webhook_targets, puis
+     répété toutes les heartbeat_seconds.
+
+Fichiers et outils
+  scripts/install.sh, scripts/uninstall.sh   installation sans sudo, migration depuis /opt
+  scripts/selftest.sh, scripts/validate-live.sh   essais isolés, validation guidée
+  outils/assembler-app.sh                    assemble macstatusd.app (icône, agent, build-info)
+  outils/publier.sh, outils/publication.py   signature, notarisation, archive
+  outils/pre-push                            garde d'anonymat avant chaque push
+  config.example.json                        modèle de configuration (webhook désactivé)
