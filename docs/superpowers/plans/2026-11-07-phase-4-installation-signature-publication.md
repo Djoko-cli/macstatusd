@@ -881,7 +881,7 @@ faite et refaite au banc.
   - `bash outils/tests/test-assembler-app.sh`, `test-install.sh`, `test-publier.sh` et `test-garde.sh` ;
   - `python3 -m unittest discover -s outils/tests -p 'test_publication.py'` ;
   - `--once` comparé à l'instance réelle.
-- [ ] **Étape 4 : version.**
+- [x] **Étape 4 : version.** (10/11 : version 0.6.0 et date des notes, 0e1a5f7 ; tête 7a58123 verte : 589 tests, bancs assembleur, installation, publier, garde 31 OK, python 78 OK, --once en 0.6.0 ; main avancée en avance rapide sur ce commit)
   - `grep -rn '0\.6\.0-dev' .` (hors `.build`, `.superpowers`) : classer chaque occurrence, à monter, historique à
     garder ou autre composant.
   - `macstatusdVersion` passe à `"0.6.0"`, et la date va dans `NOTES-VERSIONS.md`. Commit.
