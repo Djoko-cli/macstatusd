@@ -213,11 +213,12 @@ Djoko.
 - [x] **Étape 3 : vérifier.** `/health` 200 sur 9090 ; `/status` : version 0.6.0, service activé, push confirmé
   (encore vers l'ancien identifiant) ; un seul processus `macstatusd`, celui de `~/Applications` ; plus aucun
   agent dont le programme est sous `/opt`.
-- [ ] **Étape 4 : commandes de HA avec le jeton.** Veille puis réveil par `rest_command` : code 200, au journal de
+- [x] **Étape 4 : commandes de HA avec le jeton.** Veille puis réveil par `rest_command` : code 200, au journal de
   la 0.6.0. Une requête sans en-tête, lancée par la session HA depuis HA : 401.
-- [ ] **Retour arrière (écrit, lancé seulement en cas de besoin, par Djoko) :**
+- [-] **Retour arrière (écrit, lancé seulement en cas de besoin, par Djoko) :**
   `./scripts/uninstall.sh --app ~/Applications/macstatusd.app` (config gardée) ; l'ancien plist remis de la
   Corbeille dans `~/Library/LaunchAgents`, puis `launchctl bootstrap gui/$(id -u) <plist>` ; `/health` vérifié.
+  Non lancé : l'installation est vérifiée ; il reste possible jusqu'à la tâche 8.
 
 **Critère de sortie :** 0.6.0 active, commandes de HA servies avec le jeton, refusées sans.
 
