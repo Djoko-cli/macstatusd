@@ -229,7 +229,7 @@ Djoko.
   identifiant, que HA n'écoute plus : l'`input_boolean` reste figé quelques minutes.
 - [x] **Étape 2 :** sur l'ordre de Djoko, `transferer-push.sh` dans un onglet du Terminal. Attendu : « URL écrite »,
   « hôte inchangé : oui », agent relancé (marqueur posé, donc aucun OFF au redémarrage), code 0.
-- [ ] **Étape 3 : vérifier que l'`input_boolean` change**, puisque HA répond 200 même à un identifiant inconnu.
+- [x] **Étape 3 : vérifier que l'`input_boolean` change**, puisque HA répond 200 même à un identifiant inconnu.
   OFF par `rest_command.macbook_veille` (économiseur), puis ON par `macbook_reveil` :
   `input_boolean.remplacant_macbook_pro_etat` passe à off puis à on, et `switch.macbook_pro` suit. La session HA
   relève les deux transitions.
