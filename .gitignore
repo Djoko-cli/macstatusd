@@ -34,3 +34,6 @@ garde.local.txt
 
 # App assemblée par outils/assembler-app.sh (signature, équipe) : jamais commitée.
 build/
+
+# Bytecode Python des tests (porte des chemins absolus)
+__pycache__/
