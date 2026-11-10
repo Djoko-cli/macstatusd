@@ -224,10 +224,10 @@ Djoko.
 
 ### Tâche 6 : nouvel identifiant de webhook
 
-- [ ] **Étape 1 : préavis**, puis la session HA tire un nouvel identifiant (`macbook_webhook_id` et
+- [x] **Étape 1 : préavis**, puis la session HA tire un nouvel identifiant (`macbook_webhook_id` et
   `macbook_push_url`), recharge ce qu'il faut et prévient. Jusqu'à l'étape 2, le push de la 0.6.0 va à l'ancien
   identifiant, que HA n'écoute plus : l'`input_boolean` reste figé quelques minutes.
-- [ ] **Étape 2 :** sur l'ordre de Djoko, `transferer-push.sh` dans un onglet du Terminal. Attendu : « URL écrite »,
+- [x] **Étape 2 :** sur l'ordre de Djoko, `transferer-push.sh` dans un onglet du Terminal. Attendu : « URL écrite »,
   « hôte inchangé : oui », agent relancé (marqueur posé, donc aucun OFF au redémarrage), code 0.
 - [ ] **Étape 3 : vérifier que l'`input_boolean` change**, puisque HA répond 200 même à un identifiant inconnu.
   OFF par `rest_command.macbook_veille` (économiseur), puis ON par `macbook_reveil` :
