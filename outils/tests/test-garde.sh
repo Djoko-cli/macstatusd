@@ -26,6 +26,7 @@ prenom_accent="Pr""é""nom-Essai"
 ip_privee="192.""168.$((3+4)).9"
 chemin_perso="/Us""ers/Essai"
 courriel="essai""@""example"".com"
+courriel_2x="contact""@""2x"".example"
 identite_noreply="1+Essai@users.noreply.github.com"
 
 distant="$tmp/distant.git"
@@ -212,6 +213,19 @@ repartir
 printf 'contact %s\n' "$courriel" > "$clone/f.txt"
 commiter "Ajout d'une adresse" f.txt
 attendre_refusee "email" "e-mail (diff)" main
+
+# email-image-2x (témoin) : des noms d'images en haute résolution (« icon_16x16@2x.png ») ne sont pas des adresses.
+repartir
+printf 'noms icon_16x16.png, icon_16x16@2x.png, icon_512x512@2x.png, fond@3x.jpg\n' > "$clone/f2.txt"
+commiter "Ajout de noms d'images @2x" f2.txt
+attendre_acceptee "email-image-2x" main
+
+# email-domaine-2x (garde, vert dès l'écriture, preuve par mutation) : une adresse dont le domaine commence par
+# « 2x. » mais finit par un vrai domaine de premier niveau reste une adresse.
+repartir
+printf 'contact %s\n' "$courriel_2x" > "$clone/f3.txt"
+commiter "Ajout d'une adresse en 2x" f3.txt
+attendre_refusee "email-domaine-2x" "e-mail (diff)" main
 
 # auteur : contenu propre, mais l'e-mail de l'auteur n'est pas une adresse noreply.
 repartir

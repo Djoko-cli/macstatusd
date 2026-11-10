@@ -30,7 +30,8 @@
 #     casse), ni une IPv4 privée (10.x, 172.16 à 31.x, 192.168.x ; les plages de
 #     documentation sont permises), ni un chemin personnel (« /Users/ » suivi d'une
 #     lettre), ni une adresse e-mail autre que *@users.noreply.github.com ou
-#     noreply@anthropic.com.
+#     noreply@anthropic.com (un nom d'image en haute résolution, « nom@2x.png »,
+#     n'est pas une adresse).
 #
 # La liste locale est garde.local.txt à la racine du dépôt (ignoré par git), ou le
 # fichier désigné par la variable GARDE_LISTE (utilisée par les tests). Une valeur
@@ -84,6 +85,7 @@ re_ip_privee='(^|[^0-9])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0
 re_chemin='/Users/[A-Za-z]'
 re_email='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+'
 re_email_permis='(@users\.noreply\.github\.com|^noreply@anthropic\.com)$'
+re_image_hd='@[0-9]+x\.(png|jpe?g|gif|heic|tiff?|svg|pdf|icns)$'
 re_noreply='^[^[:space:]@]+@users\.noreply\.github\.com$'
 
 # Contrôle un fichier de texte ($1) : $2 dit d'où il vient (« message », « diff »,
@@ -105,9 +107,11 @@ verifier_texte() {
     signaler "$court" "chemin personnel ($lieu)"
   fi
   # Une adresse se termine par un domaine à extension alphabétique : « mot-de-passe@192.0.2.10 »
-  # (identifiants dans une URL) n'en est pas une.
+  # (identifiants dans une URL) n'en est pas une. Un nom d'image en haute résolution non plus : dans
+  # « icon_16x16@2x.png », le « domaine » 2x.png finit par une extension d'image, pas par un domaine.
   if LC_ALL=C grep -a -o -E "$re_email" "$fichier" \
     | grep -E '\.[A-Za-z]{2,}$' \
+    | grep -v -i -E "$re_image_hd" \
     | grep -v -i -E "$re_email_permis" \
     | grep -q .; then
     signaler "$court" "e-mail ($lieu)"
