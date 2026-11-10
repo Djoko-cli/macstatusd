@@ -247,7 +247,7 @@ Djoko.
   Attendu : chaque étape vérifiée.
   Fait : 12 OK, 1 échec dû au motif de réveil du script, antérieur au repli « fin de la veille sans avis de réveil » ;
   le réveil est vérifié au journal. Les commandes finales ont reçu le jeton par un fichier temporaire.
-- [ ] **Étape 4 :** résultats dans `.superpowers/deploiement-0.6.0/resultats.md`.
+- [x] **Étape 4 :** résultats dans `.superpowers/deploiement-0.6.0/resultats.md`.
 
 **Critère de sortie :** tout vert, sans retour arrière.
 
