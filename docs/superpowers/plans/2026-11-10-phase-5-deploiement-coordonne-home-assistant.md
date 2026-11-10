@@ -90,20 +90,20 @@ marche, et un retour arrière reste possible jusqu'à la tâche 8.
 - Créer : `.superpowers/deploiement-0.6.0/etat-des-lieux.md` (local, ignoré par git)
 - Télécharger dans : `~/Library/Caches/macstatusd-deploiement-0.6.0/`
 
-- [ ] **Étape 1 : télécharger et vérifier l'app publiée.** `gh release download v0.6.0 --repo Djoko-cli/macstatusd
+- [x] **Étape 1 : télécharger et vérifier l'app publiée.** `gh release download v0.6.0 --repo Djoko-cli/macstatusd
   -D ~/Library/Caches/macstatusd-deploiement-0.6.0`, puis `shasum -a 256 -c SHA256SUMS`, `ditto -x -k` dans `x/`,
   `xcrun stapler validate` et `spctl -a -vv` sur `x/macstatusd.app`, sorties masquées. Attendu : somme OK,
   « The validate action worked! », « accepted », « source=Notarized Developer ID ».
-- [ ] **Étape 2 : relever l'état du Mac, en lecture seule.** `/status` de l'instance réelle (version, push
+- [x] **Étape 2 : relever l'état du Mac, en lecture seule.** `/status` de l'instance réelle (version, push
   confirmé, aucune URL) ; ancien agent trouvé par son contenu (`ProgramArguments[0]` vaut
   `/opt/macstatusd/macstatusd`), libellé lu sans affichage ; aucune config 0.6 encore
   (`~/Library/Application Support/macstatusd/config.json` absent) ; contenu de `~/Library/Logs/macstatusd/` et du
   fichier `~/Library/Logs/macstatusd.log` (noms, tailles, dates), qui peuvent porter l'ancienne URL. Attendu :
   conforme à l'état de départ ; sinon, arrêt et rapport à Djoko.
-- [ ] **Étape 3 : relever l'état de HA, en lecture seule.** Par `ssh ha` : les trois secrets présents, forme de
+- [x] **Étape 3 : relever l'état de HA, en lecture seule.** Par `ssh ha` : les trois secrets présents, forme de
   `macbook_entetes` (une ligne, objet JSON), `jq` présent, existence de `/config/.sauvegardes-secrets`. Attendu :
   l'état de départ. Écart : arrêt.
-- [ ] **Étape 4 : préavis à la session HA.** Djoko le transmet, ou message direct si elle est ouverte sur ce Mac :
+- [x] **Étape 4 : préavis à la session HA.** Djoko le transmet, ou message direct si elle est ouverte sur ce Mac :
   le plan, les étapes qui la touchent, et ce qu'elle aura à faire aux tâches 4, 6, 7 et 8.
 
 **Critère de sortie :** app publiée vérifiée, états du Mac et de HA conformes et notés, préavis envoyé.
