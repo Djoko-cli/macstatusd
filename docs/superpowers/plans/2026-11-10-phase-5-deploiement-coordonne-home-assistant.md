@@ -238,7 +238,7 @@ Djoko.
 
 ### Tâche 7 : de bout en bout, puis banc avec Djoko
 
-- [ ] **Étape 1 : depuis l'app Maison** (Djoko, sur l'iPhone) : l'interrupteur du Mac suit l'état ; OFF lance
+- [x] **Étape 1 : depuis l'app Maison** (Djoko, sur l'iPhone) : l'interrupteur du Mac suit l'état ; OFF lance
   l'économiseur, ON l'écarte.
 - [x] **Étape 2 : empreintes du jeton** comparées de nouveau, sans affichage : `transferer-jeton.sh --verifier`
   donne « empreintes identiques : oui ».
