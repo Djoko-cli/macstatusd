@@ -176,7 +176,7 @@ marche, et un retour arrière reste possible jusqu'à la tâche 8.
   toujours.
 - [x] **Étape 2 : vérifier sans afficher.** Droits 600 et 700 (`stat`) ; forme du jeton (longueur, hexadécimal) ;
   une cible en GET (longueur de l'URL seulement) ; `/status` de la 0.5 inchangé.
-- [ ] **Étape 3 : essai sur les vraies données, sans écriture** (compléments de tests, règle 6) :
+- [x] **Étape 3 : essai sur les vraies données, sans écriture** (compléments de tests, règle 6) :
   `transferer-jeton.sh --verifier` et `transferer-push.sh --verifier` contre le vrai HA. Attendu : code 0,
   confirmations seulement.
 
