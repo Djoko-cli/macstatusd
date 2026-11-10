@@ -4,6 +4,8 @@
 
 **English**
 
+Released on 10 November 2026.
+
 What changes when you update from 0.5:
 
 - **The token is required.** Commands need `X-Auth-Token` (or `Authorization: Bearer`), and reads from another machine too. Without `auth_token`, only the Mac itself is served. `install.sh` generates a token of 64 hexadecimal characters into the configuration (mode 600) and never prints it. The Home Assistant `rest_command` entries must send it.
@@ -23,6 +25,8 @@ New:
 - Apple silicon (arm64) only: the binary has no Intel build.
 
 **Français**
+
+Publiée le 10 novembre 2026.
 
 Ce qui change à la mise à jour depuis la 0.5 :
 
