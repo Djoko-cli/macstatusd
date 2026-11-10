@@ -189,8 +189,9 @@ contre le vrai HA sans écriture.
   redémarrage sur l'accord de Djoko. La 0.5 ignore l'en-tête : les commandes de HA continuent de marcher.
 - [x] **Étape 2 :** sur l'ordre de Djoko, `transferer-jeton.sh` dans un onglet du Terminal, avec un guetteur.
   Attendu : « X-Auth-Token écrit (64 caractères) », « empreintes identiques : oui », code 0.
-- [ ] **Étape 3 : la session HA** lance `ha core check` (vert), puis redémarre HA avec l'accord de Djoko.
-- [ ] **Étape 4 : HA commande toujours le Mac (0.5).** La session HA appelle `rest_command.macbook_reveil` : la
+- [x] **Étape 3 : la session HA** lance `ha core check` (vert), puis redémarre HA avec l'accord de Djoko.
+  Fait par un rechargement ciblé (`rest_command.reload`), sur décision de Djoko : redémarrage seulement si la tâche 5 montre un 401.
+- [x] **Étape 4 : HA commande toujours le Mac (0.5).** La session HA appelle `rest_command.macbook_reveil` : la
   requête arrive au journal de la 0.5, servie en 200.
 
 **Critère de sortie :** HA redémarré, en-tête en place, commandes toujours servies par la 0.5.
