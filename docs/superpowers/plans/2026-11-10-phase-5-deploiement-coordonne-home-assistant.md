@@ -240,7 +240,7 @@ Djoko.
 
 - [ ] **Étape 1 : depuis l'app Maison** (Djoko, sur l'iPhone) : l'interrupteur du Mac suit l'état ; OFF lance
   l'économiseur, ON l'écarte.
-- [ ] **Étape 2 : empreintes du jeton** comparées de nouveau, sans affichage : `transferer-jeton.sh --verifier`
+- [x] **Étape 2 : empreintes du jeton** comparées de nouveau, sans affichage : `transferer-jeton.sh --verifier`
   donne « empreintes identiques : oui ».
 - [ ] **Étape 3 : `validate-live.sh` avec Djoko**, sur l'instance installée : cinq étapes manuelles (bureau,
   verrouillage, économiseur, écran éteint, veille), une dizaine de minutes, journal suivi dans un onglet.
