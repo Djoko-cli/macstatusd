@@ -253,8 +253,8 @@ Djoko.
 
 ### Tâche 8 : nettoyage et clôture
 
-- [ ] **Étape 1 : Djoko lance** `sudo rm -rf /opt/macstatusd` (Touch ID). Vérifier : dossier absent, `/health` 200.
-- [ ] **Étape 2 : restes de la 0.5 qui portent l'ancienne URL** (relevés à la tâche 1, par exemple
+- [x] **Étape 1 : Djoko lance** `sudo rm -rf /opt/macstatusd` (Touch ID). Vérifier : dossier absent, `/health` 200.
+- [x] **Étape 2 : restes de la 0.5 qui portent l'ancienne URL** (relevés à la tâche 1, par exemple
   `~/Library/Logs/macstatusd.log`) : à la Corbeille, avec l'accord de Djoko.
 - [x] **Étape 3 : préavis de fin à la session HA.** La note `docs/BACKLOG.md:271-277` de `maison-ha` peut se fermer
   (la 0.6.0 pousse en GET). Les sauvegardes de `secrets.yaml` d'avant le jeton ne servent plus : elle décide de
