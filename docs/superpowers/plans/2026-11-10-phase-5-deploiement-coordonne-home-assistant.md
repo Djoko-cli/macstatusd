@@ -135,11 +135,11 @@ marche, et un retour arrière reste possible jusqu'à la tâche 8.
   - Sortie : « webhook_targets : URL écrite (N caractères), hôte inchangé : oui|non ».
   - `--verifier` et codes : comme ci-dessus.
 
-- [ ] **Étape 1 : la trace avant le faux** (compléments de tests, règle 5). Par `ssh ha`, en lecture seule : shell de
+- [x] **Étape 1 : la trace avant le faux** (compléments de tests, règle 5). Par `ssh ha`, en lecture seule : shell de
   connexion, présence et options de `cp -p`, `mv`, `mktemp`, `sha256sum` et `jq --rawfile`, propriétaire et
   droits de `secrets.yaml`. Le faux `ssh` reproduit ce relevé (shell, outils), pas davantage. Relevé noté dans
   `etat-des-lieux.md`.
-- [ ] **Étape 2 : écrire les tests, rouges.** Valeurs inventées seulement (jeton `0000…0001`, URL
+- [x] **Étape 2 : écrire les tests, rouges.** Valeurs inventées seulement (jeton `0000…0001`, URL
   `http://192.0.2.20:8123/api/webhook/essai`) :
   - `jeton-dict-vide` : `{}` devient `{"X-Auth-Token":"<jeton>"}`, une seule ligne changée, sauvegarde créée
     avant l'écriture, code 0 ;
@@ -158,10 +158,10 @@ marche, et un retour arrière reste possible jusqu'à la tâche 8.
   - `push-secret-absent` → code 1, config identique.
 
   Lancer `bash .superpowers/ops/tests/test-ops.sh` ; attendu : échecs, les scripts n'existant pas.
-- [ ] **Étape 3 : écrire les deux commandes,** jusqu'au vert.
-- [ ] **Étape 4 : preuve par mutation** (compléments de tests, règle 3) des cas verts dès l'écriture : sans la sauvegarde,
+- [x] **Étape 3 : écrire les deux commandes,** jusqu'au vert.
+- [x] **Étape 4 : preuve par mutation** (compléments de tests, règle 3) des cas verts dès l'écriture : sans la sauvegarde,
   ou en laissant passer un bloc YAML, au moins un cas devient rouge. Remise en état vérifiée par empreintes.
-- [ ] **Étape 5 : relecture par Opus** (secrets, sécurité) des deux scripts, de leurs tests et du relevé de
+- [x] **Étape 5 : relecture par Opus** (secrets, sécurité) des deux scripts, de leurs tests et du relevé de
   l'étape 1. Contrôle de risque nommé (compléments de plans, règle 7) : le relecteur lance le banc avec le faux `ssh` qui
   journalise ses arguments, et cherche le jeton d'essai dans tous les journaux et sorties.
 
