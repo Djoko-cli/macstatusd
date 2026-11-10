@@ -259,7 +259,7 @@ Djoko.
 - [x] **Étape 3 : préavis de fin à la session HA.** La note `docs/BACKLOG.md:271-277` de `maison-ha` peut se fermer
   (la 0.6.0 pousse en GET). Les sauvegardes de `secrets.yaml` d'avant le jeton ne servent plus : elle décide de
   leur sort.
-- [ ] **Étape 4 :** cocher la phase 5 dans la feuille de route de la spec (§6), instantané de Jalons sans
+- [x] **Étape 4 :** cocher la phase 5 dans la feuille de route de la spec (§6), instantané de Jalons sans
   avertissement, commit et push, garde active.
 
 **Critère de sortie :** plus rien de la 0.5 sur le Mac, phase 5 cochée.
