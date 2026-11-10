@@ -193,7 +193,7 @@ coche quand son plan est fini, banc compris.
 - [x] Phase 1 : anonymisation du dépôt et garde (lot 0)
 - [x] Phase 2 : socle testable, sécurité HTTP et résilience (lots 1 à 3)
 - [x] Phase 3 : économiseur sous macOS 27, écrans, veille avortée et efficience (lots 4 et 5)
-- [ ] Phase 4 : installation, documentation, signature et publication (lots 6 à 8)
+- [x] Phase 4 : installation, documentation, signature et publication (lots 6 à 8)
 - [ ] Phase 5 : déploiement coordonné avec Home Assistant (lot 9)
 
 ### Lot 0 — Anonymisation et garde

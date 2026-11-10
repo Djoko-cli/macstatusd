@@ -887,31 +887,31 @@ faite et refaite au banc.
   - `macstatusdVersion` passe à `"0.6.0"`, et la date va dans `NOTES-VERSIONS.md`. Commit.
   - Fusion dans `main` en avance rapide : `git merge-base --is-ancestor main correctifs-audit`, puis
     `git update-ref refs/heads/main <tête> <ancienne valeur>`.
-- [ ] **Étape 5 : arrêt. Attendre « publie 0.6.0 » de Djoko.**
-- [ ] **Étape 6 : criblage de tout l'historique,** depuis un clone complet neuf dans
-  `.superpowers/publication/clone-0.6.0`.
+- [x] **Étape 5 : arrêt. Attendre « publie 0.6.0 » de Djoko.** (10/11 : « publie 0.6 » de Djoko, après le correctif du message de désinstallation, 78fdaf4)
+- [x] **Étape 6 : criblage de tout l'historique,** depuis un clone complet neuf dans
+  `.superpowers/publication/clone-0.6.0`. (10/11 : la garde refusait 49daf09, un nom d'image `@2x.png` pris pour une adresse ; garde corrigée en 542e9a7, puis code 0 sur tout l'historique et sur les 124 commits poussés. Crible : 19 valeurs réelles, dont l'hôte du webhook extrait par Djoko : 0 ; formes d'équipe : 7, aucune n'est la vraie.)
   - La garde `pre-push` passe sur tous les commits à pousser.
   - `git log -p --all` est passé au crible des motifs de `garde.local.txt`, et des valeurs vivantes lues à la
     source sans affichage : nom d'hôte et nom de l'ordinateur, adresse IPv4 locale du Mac, libellé de l'ancien
     agent, hôte du webhook de la config réelle, et forme d'une équipe.
   - Le rapport ne donne que des nombres et des positions, jamais une valeur.
-- [ ] **Étape 7 : tests du clone de publication** (`swift test`, puis les tests de l'étape 3), avant tout script.
-- [ ] **Étape 8 : publication.**
+- [x] **Étape 7 : tests du clone de publication** (`swift test`, puis les tests de l'étape 3), avant tout script. (10/11, clone 542e9a7 : 589 tests, bancs, python, selftest écran allumé 92 OK ; écran éteint non refait : même code Swift que bdc4cc1, vérifié le matin même.)
+- [x] **Étape 8 : publication.** (10/11 : main poussée, ab4626d..542e9a7 ; publier.sh 0.6.0 dans le clone : notarisation acceptée, agrafée, Gatekeeper OK, garde de l'archive passée ; étiquette v0.6.0 poussée ; page de version avec le zip et SHA256SUMS, que le README demande de télécharger.)
   - `git push origin main`, garde active.
   - `outils/publier.sh 0.6.0` dans un onglet du Terminal, avec un guetteur.
   - Étiquette `v0.6.0`, poussée.
   - `gh release create v0.6.0 build/publication/0.6.0/macstatusd-0.6.0.zip`, avec les notes de la 0.6.0, en
     anglais puis en français.
-- [ ] **Étape 9 : vérification en ligne.** `gh release download`, `cmp` avec l'archive locale, décompression, puis
+- [x] **Étape 9 : vérification en ligne.** (10/11 : archive en ligne identique à la locale (cmp), SHA256SUMS OK, stapler validate OK, spctl accepted, source=Notarized Developer ID.) `gh release download`, `cmp` avec l'archive locale, décompression, puis
   `xcrun stapler validate` et `spctl -a -vv`, sortie masquée, ligne `origin=` comprise.
 
 ---
 
 ## Fin du plan 4
 
-- [ ] Relecture finale par Opus faite et corrigée (tâche 11, étapes 1 et 2).
-- [ ] Vérification finale (tâche 11, étape 3) : tout vert, avec les nombres au registre.
-- [ ] README et notes de version alignés sur les registres des plans 3 et 4 : rubriques « Pour le README » vides de
-  tout point non reporté.
-- [ ] Version 0.6.0 publiée et vérifiée en ligne (tâche 11, étapes 8 et 9).
-- [ ] Case « Phase 4 » cochée dans la feuille de route de la spec (§6). Instantané de Jalons sans avertissement.
+- [x] Relecture finale par Opus faite et corrigée (tâche 11, étapes 1 et 2).
+- [x] Vérification finale (tâche 11, étape 3) : tout vert, avec les nombres au registre.
+- [x] README et notes de version alignés sur les registres des plans 3 et 4 : rubriques « Pour le README » vides de
+  tout point non reporté. (D'après le rapport de la tâche 9 : les points non placés sont des détails internes, choisis alors ; ses trois affirmations non vérifiées le sont depuis : 32 et 8 connexions (ConnectionLimiter), jeton donné à une config 0.5 (banc 4), libellé « Allow in the Background » des Réglages. Les changements d'après la tâche 9 sont internes.)
+- [x] Version 0.6.0 publiée et vérifiée en ligne (tâche 11, étapes 8 et 9).
+- [x] Case « Phase 4 » cochée dans la feuille de route de la spec (§6). Instantané de Jalons sans avertissement. (10/11 : 4 phases terminées sur 5, 80 %, aucun triangle ; phase 5 : plan à écrire.)
