@@ -583,6 +583,8 @@ printf 'journal\n' > "$HOME/Library/Logs/macstatusd-essai/macstatusd.log"
 lancer_desinstall --app "$installee"
 verifier "$cas" "code de sortie" 0 "$code"
 verifier "$cas" "--unregister appelé" 1 "$(nb_motif "--unregister" "$FAUX_JOURNAL/app.log")"
+verifier "$cas" "« agent retiré » annoncé" 1 "$(nb_motif "agent retiré" "$base/sortie-desinstall.txt")"
+verifier "$cas" "aucun conseil --register après le retrait" 0 "$(nb_motif "lancer macstatusd --register" "$base/sortie-desinstall.txt")"
 verifier "$cas" "app retirée de ~/Applications" absent "$([[ -e "$installee" ]] && echo présent || echo absent)"
 verifier "$cas" "app à la Corbeille" 1 "$(en_poubelle "macstatusd-essai.app")"
 verifier "$cas" "config gardée" présent "$([[ -f "$config" ]] && echo présent || echo absent)"
@@ -611,6 +613,9 @@ lancer_install --app "$app" --ancien-prefixe "$base/opt/inexistant"
 export FAUX_APP_UNREGISTER_CODE=3
 lancer_desinstall --app "$installee"
 verifier "$cas" "--unregister en échec : code 1" 1 "$code"
+# Garde (vert dès l'écriture, preuve par mutation) : en échec, le message d'état reste affiché pour le diagnostic.
+verifier "$cas" "message d'état gardé en échec" 1 "$(nb_motif "à autoriser" "$base/sortie-desinstall.txt")"
+verifier "$cas" "aucun « agent retiré » en échec" 0 "$(nb_motif "agent retiré" "$base/sortie-desinstall.txt")"
 verifier "$cas" "app laissée en place" présent "$([[ -d "$installee" ]] && echo présent || echo absent)"
 
 # --- sans-sudo --------------------------------------------------------------------------

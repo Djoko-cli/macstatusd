@@ -109,13 +109,15 @@ if [[ $app_presente -eq 1 ]]; then
   echo "==> Retrait de l'agent"
   code_app=0
   sortie_app="$("$app/Contents/MacOS/macstatusd" --unregister 2>&1)" || code_app=$?
-  echo "    $sortie_app"
   # Après --unregister, « non enregistré » (4) ou « introuvable » (5) disent que l'agent est parti.
   if [[ $code_app -ne 4 && $code_app -ne 5 ]]; then
+    echo "    $sortie_app"
     echo "!! L'agent n'est pas retiré (code $code_app) : l'app reste en place. Relance, ou retire-la" >&2
     echo "   à la main dans Réglages Système > Général > Ouverture et extensions." >&2
     exit 1
   fi
+  # Le message d'état de l'app (« non enregistré : lancer macstatusd --register ») conseillerait de la réenregistrer.
+  echo "    agent retiré"
   corbeille "$app"
   echo "==> App mise à la Corbeille : $nom_app"
 fi
