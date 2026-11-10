@@ -200,17 +200,17 @@ Djoko.
 
 ### Tâche 5 : installer la 0.6.0
 
-- [ ] **Étape 1 : Djoko lance**, devant le Mac déverrouillé,
+- [x] **Étape 1 : Djoko lance**, devant le Mac déverrouillé,
   `cd ~/Documents/Dev/swift/macstatusd && ./scripts/install.sh --app "$HOME/Library/Caches/macstatusd-deploiement-0.6.0/x/macstatusd.app"; echo "code=$?"`
   (ancien préfixe par défaut, `/opt/macstatusd`). Attendu :
   - « config existante gardée » et « jeton déjà présent » ;
   - « ancien agent retiré (libellé de 20 caractères) », plist et anciens journaux à la Corbeille ;
   - « activé », puis « Installé. Journal : ~/Library/Logs/macstatusd/macstatusd.log » ;
   - la commande `sudo rm -rf /opt/macstatusd` affichée, non lancée ; code 0.
-- [ ] **Étape 2 : invites du système.** Djoko accepte « Réseau local » et, s'il paraît, le pare-feu. Si
+- [x] **Étape 2 : invites du système.** Djoko accepte « Réseau local » et, s'il paraît, le pare-feu. Si
   l'enregistrement demande une autorisation (code 3) : Réglages Système > Général > Ouverture et extensions, puis
   l'étape 1 relancée (le README l'exige).
-- [ ] **Étape 3 : vérifier.** `/health` 200 sur 9090 ; `/status` : version 0.6.0, service activé, push confirmé
+- [x] **Étape 3 : vérifier.** `/health` 200 sur 9090 ; `/status` : version 0.6.0, service activé, push confirmé
   (encore vers l'ancien identifiant) ; un seul processus `macstatusd`, celui de `~/Applications` ; plus aucun
   agent dont le programme est sous `/opt`.
 - [ ] **Étape 4 : commandes de HA avec le jeton.** Veille puis réveil par `rest_command` : code 200, au journal de
