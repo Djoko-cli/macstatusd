@@ -242,9 +242,11 @@ Djoko.
   l'économiseur, ON l'écarte.
 - [x] **Étape 2 : empreintes du jeton** comparées de nouveau, sans affichage : `transferer-jeton.sh --verifier`
   donne « empreintes identiques : oui ».
-- [ ] **Étape 3 : `validate-live.sh` avec Djoko**, sur l'instance installée : cinq étapes manuelles (bureau,
+- [x] **Étape 3 : `validate-live.sh` avec Djoko**, sur l'instance installée : cinq étapes manuelles (bureau,
   verrouillage, économiseur, écran éteint, veille), une dizaine de minutes, journal suivi dans un onglet.
   Attendu : chaque étape vérifiée.
+  Fait : 12 OK, 1 échec dû au motif de réveil du script, antérieur au repli « fin de la veille sans avis de réveil » ;
+  le réveil est vérifié au journal. Les commandes finales ont reçu le jeton par un fichier temporaire.
 - [ ] **Étape 4 :** résultats dans `.superpowers/deploiement-0.6.0/resultats.md`.
 
 **Critère de sortie :** tout vert, sans retour arrière.
