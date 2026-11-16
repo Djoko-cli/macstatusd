@@ -2,7 +2,7 @@
 
 - **Date :** 25/10/2026
 - **Demande :** Djoko (« go pour tout », 25/10/2026)
-- **Version visée :** 0.6.0 (D7) ; amendement 0.6.1 du 16/11/2026 (§12), à valider par Djoko
+- **Version visée :** 0.6.0 (D7) ; amendement 0.6.1 du 16/11/2026 (§12), validé par Djoko le 16/11/2026
 - **Statut :** à valider par Djoko
 - **Audit de référence :** audit multi-agents du 25/09/2026 sur le commit `7e54123`
   (90 constats après fusion, 63 confirmés par des vérificateurs contradictoires, 27 réfutés).

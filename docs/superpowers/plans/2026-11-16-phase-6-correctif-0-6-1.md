@@ -9,7 +9,7 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 1 : conception
 
-- [ ] §12 validé par Djoko
+- [x] §12 validé par Djoko (16/11/2026, en conversation)
 
 ### Tâche 2 : prototype
 
