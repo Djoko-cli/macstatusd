@@ -13,8 +13,8 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 2 : prototype
 
-- [ ] Tests d'abord, dans `.superpowers/wt-061` (branche `reveil-garde-0.6.1`)
-- [ ] Code de C15 révisée et de C27, suite complète verte
+- [x] Tests d'abord, dans `.superpowers/wt-061` (branche `reveil-garde-0.6.1`)
+- [x] Code de C15 révisée et de C27, suite complète verte
 - [ ] Prototype relu
 
 ### Tâche 3 : banc avec Djoko
