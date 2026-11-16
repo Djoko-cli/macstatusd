@@ -2,7 +2,7 @@
 
 - **Date :** 25/10/2026
 - **Demande :** Djoko (« go pour tout », 25/10/2026)
-- **Version visée :** 0.6.0 (D7)
+- **Version visée :** 0.6.0 (D7) ; amendement 0.6.1 du 16/11/2026 (§12), à valider par Djoko
 - **Statut :** à valider par Djoko
 - **Audit de référence :** audit multi-agents du 25/09/2026 sur le commit `7e54123`
   (90 constats après fusion, 63 confirmés par des vérificateurs contradictoires, 27 réfutés).
@@ -162,10 +162,10 @@ journal ; la migration supprime aussi les anciens journaux de la 5.0.0.
 | C9 | **Webhook : confirmation sur tout 2xx, sans redirection suivie, réponse plafonnée à 4 Kio.** On n'exige **pas** un corps JSON `success: true` (proposition de F53) : un webhook HA répond 200 sans corps. | F53, F54, adaptés à HA. |
 | C10 | **F89 décliné** : pas de battement de cœur « en lecture ». C'est un mécanisme propre à http-webhooks, et une requête sans `state` sur un webhook HA ne porte rien d'utile. Le battement de cœur en écriture reste ; côté HA il ne coûte pas d'écriture disque (l'historique de HA n'enregistre que les changements). | Transition vers HA. |
 | C11 | **F15 décliné** (« écran rallumé par macOS sans personne devant → ON ») : la définition de Djoko compte l'écran de verrouillage visible comme ON. | Respect de la définition. |
-| C12 | **F14 traité par une option `wake_hold_seconds`, désactivée par défaut** (0 = comportement actuel). Sur session verrouillée, macOS rendort l'écran au bout d'environ 30 s ; le retenir plus longtemps irait contre le comportement natif. | Expérience native d'abord. |
+| C12 | **F14 traité par une option `wake_hold_seconds`, désactivée par défaut** (0 = comportement actuel). Sur session verrouillée, macOS rendort l'écran au bout d'environ 30 s ; le retenir plus longtemps irait contre le comportement natif. Mesuré le 16/11 (§12) : macOS l'éteint environ 10 s après le relâchement de l'assertion de réveil. | Expérience native d'abord. |
 | C13 | **F88 traité hors code**, côté HA. Relevé du 25/10 dans les journaux du Mac (du 2 au 25/10) : 1 406 commandes ON et aucune OFF. Elles venaient de Homebridge jusqu'au 23/10 (environ 55 par jour), puis de HA à partir du 22/10 (jusqu'à 95 par jour), avec un écart médian de 7 min 30 s. Chacune rallume les écrans et repousse la veille par inactivité (C15). Source identifiée par la session HA (25/10) : deux automatisations d'éclairage de la pièce du Mac, migrées de Maison le 22/10, appellent `rest_command.macbook_reveil` à chaque détection de présence. C'est voulu sur le principe (réveiller le Mac en entrant), mais chaque mouvement le refaisait. **Réglé côté HA le 25/10 à 01 h 17** sur décision de Djoko : réveil seulement à l'arrivée (présence qui passe à « présent », ou mouvement pendant une présence « absent »). À vérifier dans le journal du Mac : 1 à 2 ON par arrivée. C8 et C15 restent utiles. | Constat de configuration, pas de code. |
 | C14 | **Socle testable d'abord** (F23) : la logique passe dans une cible bibliothèque `MacStatusCore` (horloge, sources de faits, actions et transport injectés), testée par XCTest (`swift test`). L'exécutable `macstatusd` devient une fine couche de câblage. | Tous les autres lots s'appuient dessus pour écrire leurs tests d'abord. |
-| C15 | **Assertion d'activité de `/wake`** : vérifier au banc sa durée réelle (relevé d'une autre session : « Timeout will fire in 1572 secs ») et la relâcher dès que l'état est confirmé ou à l'arrêt, pour ne pas bloquer la veille par inactivité pendant une demi-heure après chaque ON. | Constat hors audit, relevé le 25/10 dans deux sessions de diagnostic. |
+| C15 | **Assertion d'activité de `/wake`** : vérifier au banc sa durée réelle (relevé d'une autre session : « Timeout will fire in 1572 secs ») et la relâcher dès que l'état est confirmé ou à l'arrêt, pour ne pas bloquer la veille par inactivité pendant une demi-heure après chaque ON. **Révisée le 16/11 (§12)** : sur une session verrouillée, le relâchement attend le déverrouillage ou un plafond de 30 s. | Constat hors audit, relevé le 25/10 dans deux sessions de diagnostic. |
 | C16 | **OFF à l'arrêt, sauf redémarrage prévu de l'agent.** OFF est publié à l'extinction, au redémarrage du Mac et à la fermeture de session (menu Pomme > Fermer la session). Le simple verrouillage n'est pas concerné : la session reste ouverte et macstatusd continue de tourner. À la fermeture de session, la fenêtre de login est visible (ON selon la définition), mais macstatusd ne tourne plus et ne pourrait exécuter aucune commande : OFF dit mieux ce que la maison peut faire. Un redémarrage prévu de l'agent (`install.sh`, mise à jour, `kickstart`) pose d'abord un marqueur, `restart-pending` dans le dossier de l'application : l'agent qui s'arrête le voit, le supprime et ne publie rien, ce qui évite un aller-retour OFF puis ON. Aucune automatisation de HA ne réagit à un OFF du Mac (vérifié par la session HA, 25/10) : un OFF à la fermeture de session n'a pas d'effet physique. | F04, et les réserves de ses trois vérificateurs. |
 | C17 | **La 0.6.0 est déployée après le retrait de l'accessoire « MacBook Pro » de Homebridge (D6).** Le jeton n'a donc à aller que dans HA, jamais dans la config de Homebridge, où il serait en clair. | Simplifie le lot 9 ; c'est l'ordre annoncé par la session HA (Task 10 dans les jours qui viennent). |
 | C18 | **Commandes d'exploitation liées à la maison de Djoko** (bascule du push en 5.0.0, transfert du jeton vers HA) : dans `.superpowers/ops/`, local et ignoré par git, jamais dans le dépôt public. | Elles décrivent son installation HA. |
@@ -173,7 +173,7 @@ journal ; la migration supprime aussi les anciens journaux de la 5.0.0.
 | C21 | **Version initiale renommée 0.5.0 dans l'historique réécrit** (`Version.swift`, titres des README, message du premier commit), pour une suite 0.5.0 → 0.6.0 cohérente. Les prototypes de `Versionning/` gardent leurs noms d'origine, comme archives. | D7 ; l'historique est réécrit de toute façon (D4). |
 | C22 | **Compilations de travail en signature ad hoc** (tests, instances de test sur ports réservés). Seule l'app installée par Djoko et les versions publiées portent le Developer ID. | Les tests n'ont besoin d'aucune autorisation du système ; la notarisation prend plusieurs minutes. |
 | C23 | **Session d'économiseur établie par `SACScreenSaverIsRunning`** (ou par un process `ScreenSaverEngine`), jamais par les fenêtres ni par le seul process hôte. | Banc 1 (31/10) : SAC vaut 1 pendant chaque session et 0 sur un simple verrouillage ; les fenêtres de loginwindow et le pointeur existent dans les deux cas. |
-| C24 | **`/wake` écarte l'économiseur par `SACScreenSaverStopNow`**, `killall` en repli. | Banc 1 : seule méthode qui fasse apparaître le panneau ; les autres laissaient l'économiseur et publiaient un faux ON. |
+| C24 | **`/wake` écarte l'économiseur par `SACScreenSaverStopNow`**, `killall` en repli. Complétée le 16/11 par C27 (§12) : sur une session verrouillée dont l'écran était éteint, le réveil fait apparaître le panneau à lui seul. | Banc 1 : seule méthode qui fasse apparaître le panneau ; les autres laissaient l'économiseur et publiaient un faux ON. |
 | C25 | **`saver_redisplay_idle_seconds` : défaut 30** (au lieu de 90). | Banc 1 : retour à l'économiseur 30 s après la dernière frappe ou le dernier arrêt natif, mesuré cinq fois sous 27.0.1. |
 | C26 | **Veille avortée** par une frappe postérieure à l'annonce ou par un déverrouillage ; filet du réveil perdu porté de 35 à 120 s. | Banc 1 (B5, B6) : une veille annulée laissait le daemon à OFF 14 s ; une entrée en veille de 29 s a déclenché le rattrapage à tort. |
 | C19 | **Banc du lot 4 sur deux économiseurs** : l'actuel, tiers et x86_64 (hôte `legacyScreenSaver-x86_64`), et un économiseur d'Apple (hôte arm64 `legacyScreenSaver`, celui du piège du faux OFF permanent). L'hôte est identifié par son chemin complet et son instant de lancement, jamais par le seul nom. | Avis des vérificateurs de F03 ; Rosetta sera restreint après macOS 27. |
@@ -186,15 +186,16 @@ version), et le lot 9 ne se fait qu'avec la session HA.
 
 ### Feuille de route
 
-Les lots se livrent en cinq phases. Chaque phase a son plan, du même numéro, dans
+Les lots se livrent en cinq phases, suivies d'une sixième pour le correctif 0.6.1 (§12). Chaque phase a son plan, du même numéro, dans
 `docs/superpowers/plans/` (nom en `…-phase-N-….md`, pour que Jalons le rattache à sa phase). Une phase se
-coche quand son plan est fini, banc compris.
+coche quand son plan est fini, banc compris. La phase 6 suit la voie courte : son plan n'est qu'une liste d'étapes.
 
 - [x] Phase 1 : anonymisation du dépôt et garde (lot 0)
 - [x] Phase 2 : socle testable, sécurité HTTP et résilience (lots 1 à 3)
 - [x] Phase 3 : économiseur sous macOS 27, écrans, veille avortée et efficience (lots 4 et 5)
 - [x] Phase 4 : installation, documentation, signature et publication (lots 6 à 8)
 - [x] Phase 5 : déploiement coordonné avec Home Assistant (lot 9)
+- [ ] Phase 6 : correctif 0.6.1, réveil gardé jusqu'au déverrouillage (§12)
 
 ### Lot 0 — Anonymisation et garde
 
@@ -632,3 +633,71 @@ Ouvertes le 09/11/2026, pour après la 0.6.0 (constats des essais de R85, regist
   (4,8 s et 6,4 s), alors que le daemon l'autorise 1 ms après l'avoir reçu : l'avis lui arrive en retard.
 - **Retard d'entrée en veille d'environ 30 s.** Le plus souvent, une app tierce laisse expirer l'avis de veille (banc 2).
   Une fois, le retard est resté sans elle (essai 4 de R85) : cause inconnue. Le daemon n'y est pour rien.
+
+## 12. Amendement 0.6.1 : réveil gardé jusqu'au déverrouillage (16/11/2026)
+
+**Symptôme, rapporté par Djoko le 16/11.** Juste après un déverrouillage, le Mac se reverrouille au bout de quelques
+secondes, et il faut déverrouiller une seconde fois. Djoko l'attribuait à macOS 27.2.1.
+
+**Diagnostic.** Les relevés sont locaux, dans `.superpowers/diagnostics/2026-11-16-reverrouillage/` (ignoré par git :
+journaux réels).
+- *Constaté :* 9 reverrouillages `kLWLockFromDisplayDim` du 11 au 16/11, tous après un réveil commandé par HA suivi
+  d'un déverrouillage dans les 2 à 11 s. Dans les 9 cas, l'écran s'éteint 10 à 11 s après le relâchement de
+  l'assertion « macstatusd wake ». Ce relâchement a lieu sur une session verrouillée, dès la confirmation de l'ON
+  (C15), et l'extinction suit, que l'utilisateur ait déverrouillé entre-temps ou non.
+- *Constaté :* deux des 9 cas sont venus sans aucun appel à `SACScreenSaverStopNow` : le relâchement suffit.
+- *Constaté :* le premier cas date du 11/11, sous macOS 27.0.1 (la 27.2.1 est installée le 13/11). La 0.6.0 tourne
+  depuis le 10/11. La 0.5 ne relâchait pas l'assertion : elle expirait au bout de 30 min.
+- *Constaté :* deux expirations de la 0.5 sur une session ouverte, 27 s et 68 min après un déverrouillage, n'ont rien
+  éteint dans les minutes qui ont suivi. L'extinction relevée 229 s après la première vient d'une demande explicite
+  d'extinction de l'écran (`requestDisplayState`).
+- *Constaté :* délais du premier déverrouillage après un réveil de HA (13 cas) : 2, 3, 4, 6, 6, 7, 7, 8, 11, 15, 17
+  et 26 s, puis 84 s.
+
+**C15 révisée : l'assertion de réveil n'est jamais relâchée sur une session verrouillée avant son plafond.**
+- Un relâchement demandé par un chemin ordinaire (ON confirmé, réveil léger R49, réveil sans intention R30, commande
+  terminée sans confirmation) attend, tant que la session est verrouillée et que les faits sont ON.
+- Session ouverte : le relâchement attend que 30 s se soient écoulées depuis le dernier déverrouillage vu par le
+  daemon (la première lecture qui voit la session ouverte), quel que soit le chemin qui le demande. Un
+  reverrouillage dans ce délai ramène à l'attente sur session verrouillée.
+- Sans déverrouillage : le relâchement a lieu au plafond, 30 s après le réveil, ou à la fin de la retenue de
+  `wake_hold_seconds` (C12) si elle finit plus tard.
+- Faits OFF, commande OFF, veille du système et arrêt du daemon : relâchement aussitôt, comme avant.
+- Un nouveau réveil pendant l'attente repart de zéro, avec un nouveau plafond.
+- Hors de ces cas, rien ne change : le relâchement est immédiat (C15 d'origine).
+
+Raisons : un relâchement sur une session verrouillée éteint l'écran environ 10 s plus tard, et cette extinction
+reverrouille une session ouverte entre-temps. Le plafond de 30 s reprend la durée du panneau mesurée après une
+frappe (C25). Aucun des 13 déverrouillages relevés ne tombe dans la fenêtre qui reste exposée, de 30 à 40 s après le
+réveil. Les 30 s après le déverrouillage sont une précaution, alignée sur le cas constaté de 27 s (*supposé* : un
+relâchement pendant la transition du déverrouillage pourrait encore éteindre l'écran). Elles ne changent rien de
+visible : l'écran d'une session ouverte ne s'éteint qu'après 30 min sans activité.
+
+Coût accepté : sans déverrouillage, l'écran reste allumé environ 40 s après un réveil commandé, contre environ 13 s
+en 0.6.0. HA en envoie environ 8 par nuit (relevé du 11 au 16/11).
+
+**C27 (nouvelle) : sur une session verrouillée dont l'écran était éteint, le réveil compte comme une frappe pour
+l'oracle.**
+- *Constaté (15 et 16/11) :* après 37 réveils sur 37, loginwindow affiche le panneau (`startUnlock`,
+  `kLWUnlockFromUserActive`) 0,3 à 0,7 s après le réveil, avant tout arrêt natif. L'escalade, 2,5 à 3 s plus tard,
+  n'en fait apparaître aucun dans 22 cas sur 23.
+- Sous macOS 27, `SACScreenSaverIsRunning` reste à 1 sur ce panneau quand l'écran s'était éteint pendant une
+  session d'économiseur. Sans frappe ni arrêt natif, l'oracle y voyait un économiseur seul à l'écran : l'ON n'était
+  confirmé que par l'escalade (`SACScreenSaverStopNow`), avec un avertissement à chaque réveil.
+- Désormais, la commande ON qui trouve l'écran éteint sur une session verrouillée note son réveil auprès de
+  l'oracle. La preuve se nomme `écarté-par-réveil` et suit les règles de réaffichage de l'arrêt natif. L'ON se
+  confirme à la relecture suivante.
+- L'escalade reste le secours. Rien n'est noté avec `wake_command`, dont le réveil n'est pas celui du daemon.
+
+**Banc avec Djoko (phase 6).** L'instance de banc est compilée en ad hoc (C22) et écoute sur un port réservé ;
+l'instance installée reste en place. Au départ de chaque essai, la session est verrouillée et l'écran éteint, puis
+l'instance de banc réveille le Mac :
+1. Après une session d'économiseur : déverrouillage aussitôt au Touch ID, puis aucune frappe pendant 60 s. Attendu :
+   pas de reverrouillage. Au journal : l'ON confirmé sans escalade (`écarté-par-réveil`), l'assertion gardée, puis
+   relâchée environ 30 s après le déverrouillage. Chez loginwindow : aucun `kLWLockFromDisplayDim`.
+2. Le même essai après une simple extinction de l'écran, sans économiseur.
+3. Après une session d'économiseur, sans déverrouillage : relâchement au plafond (30 s), écran éteint vers 40 s. Un
+   économiseur qui revient et reste affiché arrête le banc : il faudra alors éteindre l'écran au plafond, puis
+   refaire cet essai seul.
+
+**Suivi :** `docs/superpowers/plans/2026-11-16-phase-6-correctif-0-6-1.md`.
