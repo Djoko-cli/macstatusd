@@ -15,7 +15,7 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 - [x] Tests d'abord, dans `.superpowers/wt-061` (branche `reveil-garde-0.6.1`)
 - [x] Code de C15 révisée et de C27, suite complète verte
-- [ ] Prototype relu
+- [x] Prototype relu (relecture, puis corrections de ses constats ; 607 tests verts)
 
 ### Tâche 3 : banc avec Djoko
 
