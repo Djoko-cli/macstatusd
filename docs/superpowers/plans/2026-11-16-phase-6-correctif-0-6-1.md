@@ -26,8 +26,10 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 4 : report sur `main`
 
-- [ ] Commits clairs sur `main`
-- [ ] Relecture finale de la branche
+- [x] Commits clairs sur `main` : un commit regroupé, `53c66db` ; suite complète verte, 607 tests et 30 suites
+  (22/11/2026)
+- [x] Relecture finale de la branche : aucun constat critique ni important ; deux mineurs reportés, dont la liste des
+  preuves du README, à compléter en tâche 5
 
 ### Tâche 5 : version 0.6.1
 
