@@ -166,12 +166,18 @@ if /usr/bin/grep -q -F -- "$raison" "$journal"; then ok "$cas : raison affichée
 if [[ -d "$dossier/macstatusd.app" ]]; then ko "$cas" "une app a été produite malgré l'icône absente"; else ok "$cas : aucune app produite"; fi
 
 # --- Cas 4 : sortie par défaut hors de ~/Documents (HOME d'essai pour l'assembleur seul) ---
+# Le dossier build/ du dépôt peut exister pour d'autres raisons (produits de outils/publier.sh ou d'une
+# répétition) : le cas juge ce que ce lancement y change, par l'état de build/ (chaque chemin et sa date
+# de modification à la nanoseconde) pris avant et après.
 cas=sortie-par-defaut
 journal="$sortie_essai/defaut-sortie.log"
 home_essai="$sortie_essai/home-essai"
 attendu_app="$home_essai/Library/Caches/macstatusd-build/app/macstatusd.app"
+etat_build() { if [[ -d "$depot/build" ]]; then (cd "$depot/build" && find . -exec stat -f '%Fm %N' {} + | LC_ALL=C sort); fi; }
+build_avant=$(etat_build)
 HOME="$home_essai" bash "$assembleur" --binaire "$binaire" > "$journal" 2>&1
 code=$?
+build_apres=$(etat_build)
 if [[ $code -eq 0 ]]; then ok "$cas : code 0"; else ko "$cas" "code $code ; dernière ligne : $(tail -n 1 "$journal")"; fi
 app=$(tail -n 1 "$journal")
 if [[ "$app" == "$attendu_app" ]]; then ok "$cas : chemin imprimé sous Library/Caches"; else ko "$cas" "chemin imprimé « $app » au lieu de « $attendu_app »"; fi
@@ -182,7 +188,12 @@ if [[ -d "$attendu_app" ]]; then
 else
   ko "$cas" "app absente : $attendu_app"
 fi
-if [[ -e "$depot/build" ]]; then ko "$cas" "$depot/build existe (la sortie par défaut ne doit plus y aller)"; else ok "$cas : pas de build/ dans le dépôt"; fi
+if [[ "$build_avant" != "$build_apres" ]]; then
+  ecart=$(comm -3 <(printf '%s\n' "$build_avant") <(printf '%s\n' "$build_apres") | head -n 1)
+  ko "$cas" "le lancement a changé $depot/build (la sortie par défaut ne doit plus y aller) : ${ecart#"${ecart%%[![:space:]]*}"}"
+else
+  ok "$cas : rien d'écrit dans build/ du dépôt"
+fi
 
 echo
 if [[ $echec -eq 0 ]]; then echo "Banc de l'assembleur : tout passe."; else echo "Banc de l'assembleur : des cas échouent."; fi
