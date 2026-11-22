@@ -1,5 +1,35 @@
 # Notes de version / Release notes
 
+## 0.6.1
+
+**English**
+
+Released on 23 November 2026.
+
+What changes when you update from 0.6.0:
+
+- **No more locking again right after a wake.** When Home Assistant turned the Mac on while the session was locked and the displays had gone to sleep through inactivity, an unlock right away could be followed, a few seconds later, by the displays going dark and the session locking again. The wake signal that keeps the displays on is no longer released as soon as the ON is confirmed: on a locked session, macstatusd holds it until 30 s after the wake, or until the end of `wake_hold_seconds` if that is later; after an unlock, it holds it for 30 more seconds. An OFF, system sleep and stopping macstatusd release it at once, as before.
+- **An ON that finds the displays asleep on a locked session** is now noted by the screen saver detection (evidence `écarté-par-réveil`): it is confirmed without waiting for the escalation (`command_escalate_after_ms`). Nothing is noted when `wake_command` is set.
+- Nothing to change in the configuration or in Home Assistant.
+
+For contributors:
+
+- `outils/installer-garde.sh` copies the pre-push guard into the git common directory (`hooks/pre-push`) instead of setting a relative `core.hooksPath`, which a checkout older than the guard skipped silently. Run it again once.
+
+**Français**
+
+Publiée le 23 novembre 2026.
+
+Ce qui change à la mise à jour depuis la 0.6.0 :
+
+- **Plus de reverrouillage juste après un réveil.** Quand Home Assistant allumait le Mac sur une session verrouillée dont les écrans s'étaient éteints par inactivité, un déverrouillage aussitôt pouvait être suivi, quelques secondes plus tard, de l'extinction des écrans et d'un nouveau verrouillage de la session. Le signal de réveil, qui garde les écrans allumés, n'est plus relâché dès l'ON confirmé : sur une session verrouillée, macstatusd le tient jusqu'à 30 s après le réveil, ou jusqu'à la fin de `wake_hold_seconds` si elle vient plus tard ; après un déverrouillage, il le tient encore 30 s. Un OFF, la veille du système et l'arrêt de macstatusd le relâchent aussitôt, comme avant.
+- **Un ON qui trouve les écrans éteints sur une session verrouillée** est désormais noté par la détection de l'économiseur (preuve `écarté-par-réveil`) : il se confirme sans attendre l'escalade (`command_escalate_after_ms`). Rien n'est noté quand `wake_command` est défini.
+- Rien à changer dans la configuration ni dans Home Assistant.
+
+Pour les contributeurs :
+
+- `outils/installer-garde.sh` copie la garde pre-push dans le dossier git commun (`hooks/pre-push`), au lieu de régler un `core.hooksPath` relatif, qu'une extraction plus ancienne que la garde sautait sans rien dire. Le relancer une fois.
+
 ## 0.6.0
 
 **English**

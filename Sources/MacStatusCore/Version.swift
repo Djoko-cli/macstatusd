@@ -1,1 +1,1 @@
-public let macstatusdVersion = "0.6.0"
+public let macstatusdVersion = "0.6.1"

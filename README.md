@@ -58,10 +58,11 @@ observable API, with an independent fallback source:
 (`SACScreenSaverIsRunning`), or `hôte` when that function is missing (fallback on
 the host process that appeared after `didstart`). The evidence of an active
 screen saver is `sac`, `process` or `notification+hôte`; once it is over it
-becomes `écarté-par-activité` (keyboard or mouse), `écarté-par-commande` (HomeKit
-or Home Assistant ON) or `réaffiché` (back on screen), then `none`. A
-notification alone never makes the Mac OFF, and windows are no longer used as
-evidence (no screen recording permission is needed).
+becomes `écarté-par-activité` (keyboard or mouse), `écarté-par-commande` (native
+stop on a HomeKit or Home Assistant ON), `écarté-par-réveil` (an ON that found
+the displays asleep on a locked session) or `réaffiché` (back on screen), then
+`none`. A notification alone never makes the Mac OFF, and windows are no longer
+used as evidence (no screen recording permission is needed).
 
 ### Screen saver running ≠ screen saver on screen
 
@@ -555,7 +556,7 @@ binary) and, with `--debug`, a line "raison : A → B" at every change of reason
 | `--unregister` | removes the agent and prints its state |
 | `--status-service` | prints the agent state (read-only), exit codes in the table above |
 | `--agent` | launch by launchd (starts the daemon) |
-| `--version`, `-v` | `macstatusd 0.6.0 (git …, <date>)`, or "(compilation inconnue)" |
+| `--version`, `-v` | `macstatusd 0.6.1 (git …, <date>)`, or "(compilation inconnue)" |
 | `--help`, `-h` | usage, with the resolved configuration path |
 
 ### `/status` fields
@@ -715,7 +716,10 @@ attributes that `codesign` refuses). The last line printed is the path of the ap
 - **Mixed setting**: when the native stop shows no visible panel, a false ON of up
   to 30 s is possible.
 - **After `/wake` with the displays off**: macOS shows the lock screen, then turns
-  the displays off again after 30 s, without restarting the screen saver.
+  the displays off again after 30 s (or at the end of `wake_hold_seconds`, if
+  later), without restarting the screen saver. macstatusd holds its wake that
+  long, and until 30 s after an unlock: in 0.6.0, an unlock right after the wake
+  could be followed by the displays going dark and the session locking again.
 - **Blinking prompt**: the "Touch ID or password" prompt blinks during the 30 s
   of a panel opened by the native stop (rendering of `loginwindow`, no HID
   activity; no effect on the state).

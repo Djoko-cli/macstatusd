@@ -78,7 +78,7 @@ final class DocumentationTests: EngineCoreTestCase {
                 sections[sections.count - 1].append(String(ligne))
             }
         }
-        XCTAssertEqual(versions, ["0.6.0", "0.5.0"], "NOTES-VERSIONS.md : sections attendues 0.6.0 puis 0.5.0")
+        XCTAssertEqual(versions, ["0.6.1", "0.6.0", "0.5.0"], "NOTES-VERSIONS.md : sections attendues 0.6.1, 0.6.0 puis 0.5.0")
         for (version, lignes) in zip(versions, sections) {
             let anglais = lignes.firstIndex(of: "**English**")
             let francais = lignes.firstIndex(of: "**Français**")
@@ -88,6 +88,14 @@ final class DocumentationTests: EngineCoreTestCase {
                 XCTAssertLessThan(anglais, francais, "\(version) : **English** doit précéder **Français**")
             }
         }
+    }
+
+    /// La première section des notes est la version du code : un numéro monté d'un côté seulement se voit.
+    func test_notesDeVersion_premiereSection_estLaVersionDuCode() throws {
+        let premiere = try lire("NOTES-VERSIONS.md").split(separator: "\n")
+            .first { $0.hasPrefix("## ") }.map { String($0.dropFirst(3)) }
+        let version = macstatusdVersion.hasSuffix("-dev") ? String(macstatusdVersion.dropLast(4)) : macstatusdVersion
+        XCTAssertEqual(premiere, version, "NOTES-VERSIONS.md : la première section doit être la version de Version.swift (sans -dev)")
     }
 
     func test_readme_lienVersLAutreLangue() throws {

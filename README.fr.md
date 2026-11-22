@@ -59,11 +59,12 @@ d'une API observable, avec une source de repli indépendante :
 (`SACScreenSaverIsRunning`), ou `hôte` quand cette fonction manque (repli sur le
 process hôte apparu après `didstart`). La preuve d'un économiseur actif est
 `sac`, `process` ou `notification+hôte` ; une fois fini, elle devient
-`écarté-par-activité` (clavier ou souris), `écarté-par-commande` (ON demandé par
-HomeKit ou Home Assistant) ou `réaffiché` (de retour à l'écran), puis `none`. Une
-notification seule ne fait jamais passer le Mac à OFF, et les fenêtres ne servent
-plus de preuve (aucune autorisation d'enregistrement de l'écran n'est
-nécessaire).
+`écarté-par-activité` (clavier ou souris), `écarté-par-commande` (arrêt natif
+sur un ON de HomeKit ou de Home Assistant), `écarté-par-réveil` (ON qui a trouvé
+les écrans éteints sur une session verrouillée) ou `réaffiché` (de retour à
+l'écran), puis `none`. Une notification seule ne fait jamais passer le Mac à
+OFF, et les fenêtres ne servent plus de preuve (aucune autorisation
+d'enregistrement de l'écran n'est nécessaire).
 
 ### Économiseur en cours ≠ économiseur à l'écran
 
@@ -572,7 +573,7 @@ raison.
 | `--unregister` | retire l'agent et affiche son état |
 | `--status-service` | affiche l'état de l'agent (lecture seule), codes de sortie dans le tableau ci-dessus |
 | `--agent` | lancement par launchd (démarre le daemon) |
-| `--version`, `-v` | `macstatusd 0.6.0 (git …, <date>)`, ou « (compilation inconnue) » |
+| `--version`, `-v` | `macstatusd 0.6.1 (git …, <date>)`, ou « (compilation inconnue) » |
 | `--help`, `-h` | usage, avec le chemin de configuration résolu |
 
 ### Champs de `/status`
@@ -739,7 +740,11 @@ vivre à côté de la vraie.
 - **Réglage mixte** : quand l'arrêt natif n'a aucun effet visible, un faux ON
   de 30 s au plus est possible.
 - **Après `/wake` écrans éteints** : macOS montre l'écran verrouillé, puis
-  rééteint les écrans au bout de 30 s, sans relancer l'économiseur.
+  rééteint les écrans au bout de 30 s (ou à la fin de `wake_hold_seconds`, si
+  elle vient plus tard), sans relancer l'économiseur. macstatusd tient son réveil
+  jusque-là, et jusqu'à 30 s après un déverrouillage : en 0.6.0, un
+  déverrouillage juste après le réveil pouvait être suivi de l'extinction des
+  écrans et d'un nouveau verrouillage de la session.
 - **Invite qui clignote** : l'invite « Touch ID ou mot de passe » clignote pendant
   les 30 s d'un panneau ouvert par l'arrêt natif (rendu de `loginwindow`, sans
   activité HID ; sans effet sur l'état).
