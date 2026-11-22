@@ -35,7 +35,7 @@ import Foundation
 ///    secondes après la dernière activité (30 s mesurées) : l'économiseur est alors « réaffiché ».
 ///
 /// La preuve (`Verdict.evidence`) nomme la source, suivie de `écarté-par-activité`,
-/// `écarté-par-commande` ou `réaffiché` ; `none` hors session.
+/// `écarté-par-commande`, `écarté-par-réveil` ou `réaffiché` ; `none` hors session.
 ///
 /// Les instants sont des secondes de fonctionnement hors veille (`Clock.awake()`), comme `HIDIdleTime`, pas des dates.
 /// À n'utiliser que depuis la file série du moteur d'état.
@@ -87,6 +87,9 @@ public final class ScreenSaverOracle {
     private var lastKnownInput: Double?
     /// Arrêt natif demandé par le moteur ; oublié à l'ouverture d'une session et à chaque réaffichage.
     private var nativeStopAt: Double?
+    /// Réveil commandé par le moteur sur un écran éteint dont la session est verrouillée (`noteWakePanel`) ; oublié
+    /// comme `nativeStopAt` : à l'ouverture et à la fermeture d'une session, et à chaque réaffichage.
+    private var wakePanelAt: Double?
     /// `didstart` en attente de corroboration : l'instant du plus récent.
     private var pendingDidStartAt: Double?
     /// `didstop` en attente, avec l'instant où il est arrivé. Une lecture sans source, ou dont la source n'est pas
@@ -131,6 +134,12 @@ public final class ScreenSaverOracle {
         nativeStopAt = now
     }
 
+    /// Réveil commandé par le moteur sur un écran éteint dont la session est verrouillée (C27, spec §12) : le panneau de
+    /// connexion apparaît dans la seconde, comme sur une frappe. Mêmes règles que l'arrêt natif.
+    public func noteWakePanel(now: Double) {
+        wakePanelAt = now
+    }
+
     /// Réveil du système : l'attente d'un `didstart` et celle d'un `didstop` sont oubliées. Une session
     /// établie reste ; ses sources sont relues au verdict suivant.
     public func noteSystemWake() {
@@ -160,10 +169,11 @@ public final class ScreenSaverOracle {
                 current.occupiedSince = now
                 session = current
                 nativeStopAt = nil
+                wakePanelAt = nil
                 panel = "réaffiché"
             } else {
                 dismissed = true
-                panel = latest.byCommand ? "écarté-par-commande" : "écarté-par-activité"
+                panel = latest.label
             }
         }
         return Verdict(active: !dismissed,
@@ -239,6 +249,7 @@ public final class ScreenSaverOracle {
             } else {
                 session = Session(begin: now, occupiedSince: now, source: source)
                 nativeStopAt = nil
+                wakePanelAt = nil
                 logDebug("économiseur : session ouverte (\(source))")
             }
         } else {
@@ -248,6 +259,7 @@ public final class ScreenSaverOracle {
             if stopped || current.missedReading {
                 session = nil
                 nativeStopAt = nil
+                wakePanelAt = nil
                 retainedHostPID = nil
                 logDebug("économiseur : session fermée (\(stopped ? "didstop" : "deux lectures sans source"))")
             } else {
@@ -279,15 +291,18 @@ public final class ScreenSaverOracle {
     }
 
     /// Activité la plus récente qui recouvre l'économiseur du panneau : la dernière frappe connue, si elle
-    /// suit l'occupation et la grâce de l'ouverture ; l'arrêt natif, s'il suit l'occupation (sans grâce).
-    /// À égalité, l'arrêt natif l'emporte.
-    private func latestActivity(in session: Session) -> (at: Double, byCommand: Bool)? {
-        var latest: (at: Double, byCommand: Bool)?
+    /// suit l'occupation et la grâce de l'ouverture ; le réveil noté (C27) et l'arrêt natif, s'ils suivent
+    /// l'occupation (sans grâce). À égalité, l'arrêt natif l'emporte sur le réveil, et le réveil sur la frappe.
+    private func latestActivity(in session: Session) -> (at: Double, label: String)? {
+        var latest: (at: Double, label: String)?
         if let input = lastKnownInput, input > session.occupiedSince, input > session.begin + dismissGrace {
-            latest = (input, false)
+            latest = (input, "écarté-par-activité")
+        }
+        if let wake = wakePanelAt, wake >= session.occupiedSince, wake >= (latest?.at ?? wake) {
+            latest = (wake, "écarté-par-réveil")
         }
         if let stop = nativeStopAt, stop >= session.occupiedSince, stop >= (latest?.at ?? stop) {
-            latest = (stop, true)
+            latest = (stop, "écarté-par-commande")
         }
         return latest
     }

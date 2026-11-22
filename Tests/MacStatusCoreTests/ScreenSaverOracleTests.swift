@@ -320,6 +320,49 @@ final class ScreenSaverOracleTests: XCTestCase {
         XCTAssertEqual(verdict.evidence, "sac+écarté-par-commande")
     }
 
+    /// C27 : le réveil d'un écran éteint sur session verrouillée compte comme une frappe, sans grâce, et cède à
+    /// « réaffiché » `redisplayIdle` secondes plus tard ; la note est alors oubliée.
+    func test_reveilNote_ecarteParReveil_puisReaffiche_neRevientPas() {
+        let oracle = nouvelOracle()
+        sessionSAC(oracle)
+        oracle.noteWakePanel(now: t0 + 5)
+        let ecarte = oracle.verdict(now: t0 + 6, hidIdle: 306)
+        XCTAssertFalse(ecarte.active)
+        XCTAssertTrue(ecarte.dismissed)
+        XCTAssertEqual(ecarte.evidence, "sac+écarté-par-réveil")
+        XCTAssertEqual(oracle.verdict(now: t0 + 34.5, hidIdle: 334.5).evidence, "sac+écarté-par-réveil")
+
+        let retour = oracle.verdict(now: t0 + 35, hidIdle: 335)
+        XCTAssertTrue(retour.active)
+        XCTAssertEqual(retour.evidence, "sac+réaffiché")
+        let ensuite = oracle.verdict(now: t0 + 36, hidIdle: 336)
+        XCTAssertTrue(ensuite.active, "la note de réveil ne revient pas")
+        XCTAssertFalse(ensuite.dismissed)
+        XCTAssertEqual(ensuite.evidence, "sac")
+    }
+
+    /// I1 : « postérieure ou égale » (§12). Note à l'instant même de l'ouverture : elle compte ; une note
+    /// antérieure à l'ouverture ne compte pas.
+    func test_reveilNote_egaliteALOuverture_compte() {
+        let oracle = nouvelOracle()
+        sessionSAC(oracle)
+        oracle.noteWakePanel(now: t0)
+        let ecarte = oracle.verdict(now: t0 + 1, hidIdle: 301)
+        XCTAssertFalse(ecarte.active)
+        XCTAssertTrue(ecarte.dismissed)
+        XCTAssertEqual(ecarte.evidence, "sac+écarté-par-réveil")
+    }
+
+    func test_reveilNote_avantOuverture_neComptePas() {
+        let oracle = nouvelOracle()
+        oracle.noteWakePanel(now: t0 - 1)
+        sessionSAC(oracle)
+        let verdict = oracle.verdict(now: t0 + 1, hidIdle: 301)
+        XCTAssertTrue(verdict.active)
+        XCTAssertFalse(verdict.dismissed)
+        XCTAssertEqual(verdict.evidence, "sac")
+    }
+
     func test_arretNatifAvantLaSession_neComptePas() {
         let oracle = nouvelOracle()
         XCTAssertFalse(oracle.verdict(now: t0 - 5, hidIdle: 295).running)

@@ -457,19 +457,6 @@ final class EngineCoreTests: EngineCoreTestCase {
 
     private typealias AppelReveil = FakeActions.AppelReveil
 
-    /// Configuration avec retenue d'écran de `secondes` secondes.
-    private func configRetenue(_ secondes: Int) -> Config {
-        var config = Config()
-        config.wakeHoldSeconds = secondes
-        return config
-    }
-
-    /// Session verrouillée, écran éteint : un /wake doit rallumer l'écran sur l'écran de verrouillage.
-    private func sessionVerrouilleeEcranEteint() {
-        signaux.etatSession.locked = true
-        signaux.etatEcran.asleep = true
-    }
-
     /// L'assertion posée par /wake est relâchée dès que les faits confirment le ON, une seule fois.
     func test_onConfirme_libereLAssertion() {
         signaux.etatEcran.asleep = true
@@ -603,7 +590,10 @@ final class EngineCoreTests: EngineCoreTestCase {
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         XCTAssertNil(commandeEnAttente(core))
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        // Spec §12 (C15 révisée) : sur une session verrouillée, l'assertion est gardée jusqu'au plafond (30 s).
+        XCTAssertEqual(actions.appelsReveil, [], "gardée : session verrouillée avant le plafond")
+        for _ in 0..<59 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake], "relâchée au plafond, T0 + 30 s")
         XCTAssertFalse(journalContient("retenue d'écran"))
     }
 
@@ -619,12 +609,13 @@ final class EngineCoreTests: EngineCoreTestCase {
 
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+        // Spec §12 : l'assertion reste gardée (session verrouillée), seule la retenue est posée.
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60)])
         XCTAssertTrue(journalContient("retenue d'écran posée pour 60 s (session verrouillée)"))
 
         // Tant que la session reste verrouillée et allumée : aucun nouvel appel.
         for _ in 0..<20 { scruter(core, 0.5) }
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60)])
     }
 
     /// Session déverrouillée (bureau) : la retenue ne sert à rien, même avec `wake_hold_seconds > 0`.
@@ -647,7 +638,10 @@ final class EngineCoreTests: EngineCoreTestCase {
         core.requestOn(peer: "essai")
         scruter(core, 0.5)
         XCTAssertEqual(actions.appels, [.wake])
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake])
+        // Spec §12 (C15 révisée) : session verrouillée, le réveil léger est gardé jusqu'au plafond (30 s).
+        XCTAssertEqual(actions.appelsReveil, [], "gardé : session verrouillée avant le plafond")
+        for _ in 0..<59 { scruter(core, 0.5) }
+        XCTAssertEqual(actions.appelsReveil, [.releaseWake], "relâché au plafond, T0 + 30 s")
     }
 
     /// La retenue est levée au déverrouillage.
@@ -662,10 +656,11 @@ final class EngineCoreTests: EngineCoreTestCase {
 
         signaux.etatSession.locked = false
         core.handle(.screenUnlocked)
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
+        // Spec §12 : l'assertion reste gardée 30 s après le déverrouillage ; seule la retenue est levée.
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60), .holdDisplay(0)])
         XCTAssertTrue(journalContient("retenue d'écran levée (session déverrouillée)"))
         for _ in 0..<10 { scruter(core, 0.5) }
-        XCTAssertEqual(actions.appelsReveil.count, 3, "une seule levée")
+        XCTAssertEqual(actions.appelsReveil.count, 2, "une seule levée")
     }
 
     /// La retenue est levée dès que les faits passent à OFF (écran éteint à la main, économiseur…).
@@ -679,7 +674,8 @@ final class EngineCoreTests: EngineCoreTestCase {
 
         signaux.etatEcran.asleep = true
         scruter(core, 0.5)
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
+        // Spec §12 : faits OFF, l'assertion gardée est relâchée aussitôt, avant la levée de la retenue.
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60), .releaseWake, .holdDisplay(0)])
         XCTAssertTrue(journalContient("retenue d'écran levée (OFF)"))
     }
 
@@ -692,7 +688,8 @@ final class EngineCoreTests: EngineCoreTestCase {
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         core.requestOff(peer: "essai")
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0)])
+        // Spec §12 : la commande OFF relâche l'assertion gardée aussitôt, puis lève la retenue.
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60), .releaseWake, .holdDisplay(0)])
         XCTAssertEqual(actions.appels.last, .runOff(.displaySleep))
     }
 
@@ -705,7 +702,8 @@ final class EngineCoreTests: EngineCoreTestCase {
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
         for _ in 0..<12 { scruter(core, 5) }
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+        // Spec §12 : le plafond suit la retenue (C12) ; l'assertion est relâchée à son échéance.
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60), .releaseWake])
         XCTAssertTrue(journalContient("retenue d'écran échue"))
 
         signaux.etatEcran.asleep = true
@@ -724,16 +722,16 @@ final class EngineCoreTests: EngineCoreTestCase {
         core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60)])
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60)], "spec §12 : assertion gardée")
 
-        // Écran éteint (retenue levée), puis un second /wake.
+        // Écran éteint (assertion relâchée, retenue levée), puis un second /wake.
         signaux.etatEcran.asleep = true
         scruter(core, 0.5)
         core.requestOn(peer: "essai")
         signaux.etatEcran.asleep = false
         scruter(core, 0.5)
-        XCTAssertEqual(actions.appelsReveil, [.releaseWake, .holdDisplay(60), .holdDisplay(0),
-                                              .releaseWake, .holdDisplay(60)])
+        XCTAssertEqual(actions.appelsReveil, [.holdDisplay(60), .releaseWake, .holdDisplay(0),
+                                              .holdDisplay(60)])
     }
 
     /// Avec `wake_command`, le réveil ne pose rien : ni relâchement d'assertion, ni retenue d'écran,

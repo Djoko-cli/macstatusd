@@ -111,6 +111,19 @@ class EngineCoreTestCase: XCTestCase {
         ]
     }
 
+    /// Configuration avec retenue d'écran de `secondes` secondes.
+    func configRetenue(_ secondes: Int) -> Config {
+        var config = Config()
+        config.wakeHoldSeconds = secondes
+        return config
+    }
+
+    /// Session verrouillée, écran éteint : un /wake doit rallumer l'écran sur l'écran de verrouillage.
+    func sessionVerrouilleeEcranEteint() {
+        signaux.etatSession.locked = true
+        signaux.etatEcran.asleep = true
+    }
+
     var publicationsForcees: Int { publieur.publications.filter { $0.force }.count }
 
     /// Écran éteint de bout en bout : l'état reste OFF à travers la veille, aucune transition

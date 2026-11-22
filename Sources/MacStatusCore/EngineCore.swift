@@ -134,13 +134,23 @@ public final class EngineCore {
     /// Retenue d'écran en cours (`actions.holdDisplay`) : instant monotone d'échéance. `nil` : aucune.
     private var displayHoldUntil: Double?
     /// Réveil léger (R49) : /wake sur un Mac déjà ON selon les faits, sans intention ni attente.
-    /// L'assertion est relâchée à l'évaluation suivante.
+    /// L'assertion est relâchée à l'évaluation suivante, ou plus tard si la garde (§12) la retient.
     private var lightWake = false
     /// `wakeNow()` a eu lieu pendant l'évaluation en cours (ou juste avant elle) : rien n'est relâché
     /// avant l'évaluation suivante (R47). Remis à faux à la fin de chaque évaluation.
     private var wakeJustIssued = false
-    /// Raison d'un relâchement remis à l'évaluation suivante par `wakeJustIssued`.
+    /// Raison d'un relâchement remis à l'évaluation suivante par `wakeJustIssued`, ou retenu par la garde (§12).
     private var deferredReleaseReason: String?
+    /// Garde de l'assertion de réveil (C15 révisée, spec §12) : durée (s) du plafond après le réveil, et du délai
+    /// après le dernier déverrouillage vu. Pas de clé de configuration : la valeur reprend la durée du panneau
+    /// de connexion mesurée après une frappe.
+    static let wakeGuardSeconds: Double = 30
+    /// Instant monotone du dernier `wakeNow()` qui a posé l'assertion ; chaque réveil repart de zéro.
+    private var wakeIssuedAt: Double?
+    /// Instant monotone de la lecture qui a vu la session s'ouvrir alors que la précédente la voyait verrouillée.
+    private var unlockSeenAt: Double?
+    /// La garde a déjà retenu un relâchement pour ce réveil : sa ligne de journal est écrite, une seule par réveil.
+    private var wakeGuardLogged = false
 
     // MARK: Autorisation de publier (tâche 16)
 
@@ -444,6 +454,9 @@ public final class EngineCore {
         next.consoleUserLoggedIn = session.loggedIn
         next.onConsole = session.onConsole
         next.lockEvidence = session.evidence
+        // Déverrouillage vu : la session s'ouvre alors que la lecture précédente la voyait verrouillée (la première
+        // lecture n'en est pas un). Il compte avec ou sans commande en cours : la garde du réveil s'y règle.
+        if factsRead, facts.sessionLocked, !session.locked { unlockSeenAt = clock.monotonic() }
         // Session vue verrouillée pendant la veille en cours : relue déverrouillée, elle y met fin.
         if sleepInProgress, session.locked { sleepSawLocked = true }
 
@@ -676,23 +689,65 @@ public final class EngineCore {
         wakeSaverWaitUntil = nil
         lightWake = false
         deferredReleaseReason = nil
+        wakeGuardLogged = false
         actions.wake()
         // Aucune livraison de relecture ne doit lâcher l'assertion avant le tick suivant, qui relit de façon synchrone.
         invalidateDisplaySnapshot()
         guard !actions.hasWakeOverride else { return }
         wakeAssertionHeld = true
         wakeJustIssued = true
+        wakeIssuedAt = clock.monotonic()
     }
 
-    /// Relâche l'assertion posée par `wake()`, une seule fois. Sans effet si rien n'est posé.
-    private func releaseWakeAssertion(_ why: String) {
+    /// Relâche l'assertion posée par `wake()`, une seule fois. Sans effet si rien n'est posé. `cause` : pourquoi la
+    /// garde a fini de retenir, quand elle a retenu ce relâchement.
+    private func releaseWakeAssertion(_ why: String, cause: String? = nil) {
         guard wakeAssertionHeld else { return }
         wakeAssertionHeld = false
         wakeSaverWaitUntil = nil
         lightWake = false
         deferredReleaseReason = nil
+        wakeGuardLogged = false
         actions.releaseWake()
-        logInfo("assertion de réveil relâchée (\(why))")
+        logInfo("assertion de réveil relâchée (\(why)\(cause.map { " ; " + $0 } ?? ""))")
+    }
+
+    /// Pourquoi la garde retient un relâchement maintenant, ou `nil` s'il peut avoir lieu (C15 révisée, spec §12) :
+    /// les faits sont ON, et la session est verrouillée avant le plafond, ou ouverte depuis moins de 30 s.
+    /// Le plafond est le plus tardif du réveil + 30 s et de la fin de la retenue d'écran (C12).
+    private func wakeGuardReason(now: Double) -> String? {
+        guard wakeAssertionHeld, let issued = wakeIssuedAt, factsVerdict().state else { return nil }
+        if facts.sessionLocked {
+            let ceiling = max(issued + Self.wakeGuardSeconds, displayHoldUntil ?? -.infinity)
+            return now < ceiling ? "session verrouillée" : nil
+        }
+        if let unlocked = unlockSeenAt, now < unlocked + Self.wakeGuardSeconds {
+            return "déverrouillage vu il y a \(Int(now - unlocked)) s"
+        }
+        return nil
+    }
+
+    /// Demande de relâchement par un chemin ordinaire : elle attend tant que la garde retient, et la ligne de
+    /// journal de la retenue n'est écrite qu'une fois par réveil. Rend vrai si l'assertion est relâchée (ou n'était
+    /// pas posée), faux si la garde la retient.
+    @discardableResult
+    private func releaseWakeAssertionGuarded(_ why: String, now: Double) -> Bool {
+        guard wakeAssertionHeld else { return true }
+        if let held = wakeGuardReason(now: now) {
+            if !wakeGuardLogged {
+                wakeGuardLogged = true
+                logInfo("assertion de réveil gardée (\(held)) : relâchement demandé (\(why)), remis à plus tard")
+            }
+            return false
+        }
+        var cause: String?
+        if wakeGuardLogged {
+            cause = !factsVerdict().state ? "faits OFF"
+                : facts.sessionLocked ? "plafond atteint"
+                : "\(Int(Self.wakeGuardSeconds)) s après le déverrouillage"
+        }
+        releaseWakeAssertion(why, cause: cause)
+        return true
     }
 
     /// Levée de la retenue d'écran en cours, s'il y en a une.
@@ -726,38 +781,44 @@ public final class EngineCore {
     }
 
     /// Un ON vient d'être confirmé par les faits : l'assertion de réveil a fini son travail et est
-    /// relâchée. Puis, en option (`wake_hold_seconds > 0`) et sur une session verrouillée, l'écran
+    /// relâchée, sauf si la garde la retient (session verrouillée avant le plafond, ou déverrouillage de moins de
+    /// 30 s : spec §12). Puis, en option (`wake_hold_seconds > 0`) et sur une session verrouillée, l'écran
     /// est retenu : macOS le rendort vite sur l'écran de verrouillage. La retenue vient toujours
     /// après la confirmation, jamais dans `requestOn` : le chemin /wake n'attend rien.
     private func onWakeConfirmed(now: Double) {
-        if wakeJustIssued {
-            // R47 : confirmé dans l'évaluation même du réveil, il est relâché à la suivante.
-            deferredReleaseReason = "ON confirmé par les faits"
-        } else {
-            releaseWakeAssertion("ON confirmé par les faits")
+        // La retenue est posée avant la demande de relâchement : le plafond de la garde (§12) inclut la fin de cette
+        // retenue dès la première vérification. Avec `wake_command`, `holdDisplay` ne pose rien (avertissement de
+        // config au démarrage).
+        if config.wakeHoldSeconds > 0, facts.sessionLocked, !actions.hasWakeOverride {
+            // Une nouvelle retenue remplace l'ancienne (c'est `holdDisplay` qui le garantit).
+            displayHoldUntil = now + Double(config.wakeHoldSeconds)
+            actions.holdDisplay(seconds: Double(config.wakeHoldSeconds))
+            logInfo("retenue d'écran posée pour \(config.wakeHoldSeconds) s (session verrouillée)")
         }
-        // Avec `wake_command`, `holdDisplay` ne pose rien (avertissement de config au démarrage).
-        guard config.wakeHoldSeconds > 0, facts.sessionLocked, !actions.hasWakeOverride else { return }
-        // Une nouvelle retenue remplace l'ancienne (c'est `holdDisplay` qui le garantit).
-        displayHoldUntil = now + Double(config.wakeHoldSeconds)
-        actions.holdDisplay(seconds: Double(config.wakeHoldSeconds))
-        logInfo("retenue d'écran posée pour \(config.wakeHoldSeconds) s (session verrouillée)")
+        if wakeJustIssued || !releaseWakeAssertionGuarded("ON confirmé par les faits", now: now) {
+            // R47 : confirmé dans l'évaluation même du réveil, il est relâché à la suivante. Gardé (C15 révisée) :
+            // la demande revient à chaque évaluation, par `maintainWake`, jusqu'à ce que la garde tombe.
+            deferredReleaseReason = "ON confirmé par les faits"
+        }
     }
 
     /// Appelé à chaque évaluation, une fois l'intention tranchée : relâche l'assertion d'une commande
-    /// terminée sans confirmation (échéance, veille, remplacée) ou d'un réveil sans intention dont
-    /// l'économiseur est parti, et lève la retenue d'écran à l'échéance, au déverrouillage ou à un OFF.
+    /// terminée sans confirmation (échéance, veille, remplacée), d'un réveil léger ou d'un réveil sans intention
+    /// dont l'économiseur est parti, dès que la garde (spec §12) ne la retient plus, et lève la retenue d'écran à
+    /// l'échéance, au déverrouillage ou à un OFF.
     private func maintainWake(factual: (state: Bool, reason: String), now: Double) {
         if wakeAssertionHeld, intent == nil, !wakeJustIssued {
+            var why: String?
             if lightWake {
-                releaseWakeAssertion("réveil léger : évaluation suivante")
+                why = "réveil léger : évaluation suivante"
             } else if let until = wakeSaverWaitUntil {
                 if !(now < until && facts.screenSaverRunning) {
-                    releaseWakeAssertion("réveil sans intention : économiseur parti ou délai écoulé")
+                    why = "réveil sans intention : économiseur parti ou délai écoulé"
                 }
             } else {
-                releaseWakeAssertion(deferredReleaseReason ?? "commande terminée sans confirmation")
+                why = deferredReleaseReason ?? "commande terminée sans confirmation"
             }
+            if let why { releaseWakeAssertionGuarded(why, now: now) }
         }
         guard let until = displayHoldUntil else { return }
         if now >= until {
@@ -788,6 +849,8 @@ public final class EngineCore {
             return
         }
         logInfo("veille imminente → publication OFF avant gel du daemon")
+        // Spec §12 : la veille relâche l'assertion aussitôt, sans garde.
+        releaseWakeAssertion("veille du système")
         systemAsleep = true
         invalidateDisplaySnapshot()   // une relecture des écrans en vol sera jetée
         // Deux avis de veille sans réveil entre eux : le début reste celui du premier.
@@ -1126,7 +1189,8 @@ public final class EngineCore {
     ///   `stop_screensaver_on_wake`, il est aussi écarté par la commande du système : si macOS est déjà
     ///   revenu à l'économiseur, le panneau reparaît pour 30 s ;
     /// - sinon, réveil léger (Ruling R49), réservé aux cas sans session d'économiseur : les faits ne voient
-    ///   pas l'écran assombri. L'assertion est relâchée à l'évaluation suivante.
+    ///   pas l'écran assombri. L'assertion est relâchée à l'évaluation suivante, ou plus tard si la garde
+    ///   (spec §12 : session verrouillée avant le plafond de 30 s, ou déverrouillage de moins de 30 s) la retient.
     ///
     /// Un ON qui remplace un OFF dont l'action est partie n'est pas confirmé avant
     /// `command_escalate_after_ms` : l'économiseur lancé par `open -a` peut démarrer après coup, et
@@ -1181,6 +1245,12 @@ public final class EngineCore {
         }
         intent = next
         wakeNow()
+        // C27 (spec §12) : sur une session verrouillée dont l'écran était éteint, le réveil fait apparaître le panneau
+        // de connexion comme une frappe. Pas avec `wake_command` : son réveil n'est pas celui du daemon.
+        if facts.displayAsleep, facts.sessionLocked, !actions.hasWakeOverride {
+            saver.noteWakePanel(now: clock.awake())
+            logInfo("réveil noté à l'oracle : panneau de connexion attendu")
+        }
         // Un économiseur seul à l'écran ne s'arrête pas sur simple activité déclarée : on l'écarte dans le
         // même geste, comme le ferait une frappe clavier. Les faits ne le verront qu'à la relecture suivante.
         if facts.screenSaverActive && config.stopScreensaverOnWake {
