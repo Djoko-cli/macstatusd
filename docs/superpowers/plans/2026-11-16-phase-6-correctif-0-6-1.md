@@ -19,9 +19,10 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 3 : banc avec Djoko
 
-- [ ] Essai 1 : économiseur, déverrouillage aussitôt, aucun reverrouillage
-- [ ] Essai 2 : simple extinction de l'écran, déverrouillage aussitôt, aucun reverrouillage
-- [ ] Essai 3 : économiseur, sans déverrouillage, relâchement au plafond et écran éteint
+- [x] Témoin sous la 0.6.0, ajouté au banc : reverrouillage reproduit, écran éteint par sa minuterie (§12, 22/11/2026)
+- [x] Essai 1 : économiseur, déverrouillage aussitôt, aucun reverrouillage
+- [x] Essai 2 : simple extinction de l'écran, déverrouillage aussitôt, aucun reverrouillage
+- [x] Essai 3 : économiseur, sans déverrouillage, relâchement au plafond et écran éteint
 
 ### Tâche 4 : report sur `main`
 

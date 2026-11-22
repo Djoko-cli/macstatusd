@@ -667,14 +667,15 @@ journaux réels).
 - Hors de ces cas, rien ne change : le relâchement est immédiat (C15 d'origine).
 
 Raisons : un relâchement sur une session verrouillée éteint l'écran environ 10 s plus tard, et cette extinction
-reverrouille une session ouverte entre-temps. Le plafond de 30 s reprend la durée du panneau mesurée après une
+reverrouille une session ouverte entre-temps. *Constaté au banc du 22/11 :* seulement quand l'écran s'était éteint par
+sa minuterie d'inactivité, ce qui est le cas d'un réveil par HA après une absence. Le plafond de 30 s reprend la durée du panneau mesurée après une
 frappe (C25). Aucun des 13 déverrouillages relevés ne tombe dans la fenêtre qui reste exposée, de 30 à 40 s après le
 réveil. Les 30 s après le déverrouillage sont une précaution, alignée sur le cas constaté de 27 s (*supposé* : un
 relâchement pendant la transition du déverrouillage pourrait encore éteindre l'écran). Elles ne changent rien de
 visible : l'écran d'une session ouverte ne s'éteint qu'après 30 min sans activité.
 
-Coût accepté : sans déverrouillage, l'écran reste allumé environ 40 s après un réveil commandé, contre environ 13 s
-en 0.6.0. HA en envoie environ 8 par nuit (relevé du 11 au 16/11).
+Coût accepté : sans déverrouillage, l'écran reste allumé environ 40 s après un réveil commandé (30 s mesurées au banc
+du 22/11), contre environ 13 s en 0.6.0. HA en envoie environ 8 par nuit (relevé du 11 au 16/11).
 
 **C27 (nouvelle) : sur une session verrouillée dont l'écran était éteint, le réveil compte comme une frappe pour
 l'oracle.**
@@ -689,15 +690,28 @@ l'oracle.**
   confirme à la relecture suivante.
 - L'escalade reste le secours. Rien n'est noté avec `wake_command`, dont le réveil n'est pas celui du daemon.
 
-**Banc avec Djoko (phase 6).** L'instance de banc est compilée en ad hoc (C22) et écoute sur un port réservé ;
-l'instance installée reste en place. Au départ de chaque essai, la session est verrouillée et l'écran éteint, puis
-l'instance de banc réveille le Mac :
-1. Après une session d'économiseur : déverrouillage aussitôt au Touch ID, puis aucune frappe pendant 60 s. Attendu :
-   pas de reverrouillage. Au journal : l'ON confirmé sans escalade (`écarté-par-réveil`), l'assertion gardée, puis
-   relâchée environ 30 s après le déverrouillage. Chez loginwindow : aucun `kLWLockFromDisplayDim`.
-2. Le même essai après une simple extinction de l'écran, sans économiseur.
-3. Après une session d'économiseur, sans déverrouillage : relâchement au plafond (30 s), écran éteint vers 40 s. Un
-   économiseur qui revient et reste affiché arrête le banc : il faudra alors éteindre l'écran au plafond, puis
-   refaire cet essai seul.
+**Banc avec Djoko (phase 6), fait le 22/11/2026.** L'instance de banc est compilée en ad hoc (C22) et écoute sur un
+port réservé ; l'instance installée reste en place, et son journal est surveillé (aucune commande reçue pendant les
+essais).
+- *Constaté :* la panne ne se reproduit que si l'écran s'est éteint par sa minuterie d'inactivité. Deux témoins sous la
+  0.6.0, partis d'un écran éteint à la demande (`pmset displaysleepnow`) après 28 puis 106 s d'inactivité, n'ont pas
+  reverrouillé. Pendant le banc, Djoko a réglé le délai d'extinction de l'écran à 2 min, puis l'a remis à 30 min.
+- *Constaté :* la veille du système n'y est pour rien. Le Touch ID remet l'inactivité à zéro, mais n'annule pas une
+  extinction décidée au relâchement.
+- Départ de chaque passage : session verrouillée, écran éteint par sa minuterie depuis 45 s, au moins 150 s
+  d'inactivité lues avant le réveil.
+- Témoin, 0.6.0, réveil par HA, déverrouillage au Touch ID 5,4 s après : écran éteint 10,2 s après le relâchement,
+  reverrouillage `kLWLockFromDisplayDim` 7,8 s après le déverrouillage. Le banc voit donc la panne.
+
+Les trois essais, sous la 0.6.1 :
+1. Après une session d'économiseur, déverrouillage aussitôt au Touch ID, puis aucune frappe pendant 60 s : réveil noté
+   à l'oracle, ON confirmé en 0,8 s sans escalade, assertion gardée, puis relâchée 30 s après le déverrouillage. Aucun
+   `kLWLockFromDisplayDim`, aucun reverrouillage.
+2. Après une simple extinction de l'écran : même résultat (ON en 0,9 s, relâchement 30 s après le déverrouillage).
+3. Après une session d'économiseur, sans déverrouillage : relâchement à 30 s (faits OFF), écran éteint dans la même
+   seconde, état OFF poussé 1 s plus tard ; l'économiseur n'est pas revenu. L'écart de 10 s attendu entre l'état et
+   l'écran (écran éteint vers 40 s) n'est pas apparu. Décision de Djoko (22/11/2026) : rien à changer.
+
+Relevés locaux : `.superpowers/phase-6/banc/` (ignoré par git : journaux réels).
 
 **Suivi :** `docs/superpowers/plans/2026-11-16-phase-6-correctif-0-6-1.md`.
