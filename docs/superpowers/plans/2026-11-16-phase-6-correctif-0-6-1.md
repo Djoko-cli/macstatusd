@@ -33,9 +33,15 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 5 : version 0.6.1
 
-- [ ] Ancien numéro cherché dans tout le dépôt, chaque occurrence classée, numéro monté
-- [ ] Notes de version en anglais puis en français ; README anglais et français
-- [ ] Tests du clone de publication
+- [x] Ancien numéro cherché dans tout le dépôt, chaque occurrence classée, numéro monté (`e38e98a` ; montés :
+  `Version.swift`, exemple de `--version`, test des notes ; le reste est historique ou valeur d'essai)
+- [x] Notes de version en anglais puis en français ; README anglais et français (`e38e98a` : réveil tenu,
+  `wake_hold_seconds`, `écarté-par-réveil`)
+- [x] Deux mineurs d'outillage : garde copiée dans le dossier git commun (`62dc258`, réinstallée dans le dépôt,
+  essayée depuis le commit racine) ; cas `sortie-par-defaut` du banc de l'assembleur (`d185f90`)
+- [x] Tests du clone de publication (clone `e38e98a`, 23/11/2026) : 608 tests et 30 suites, quatre bancs (garde
+  37 cas), 78 tests Python, selftest écran éteint forcé 88 OK
+- [ ] Selftest écran allumé dans le clone : au passage du 23/11, l'écran était éteint, et ses 4 sections ont sauté
 
 ### Tâche 6 : publication
 
