@@ -92,8 +92,9 @@ copier_outils() {
   cp "$ici/test-garde.sh" "$clone/outils/tests/"
 }
 
-# Remet le clone sur l'état publié. La garde est recopiée ensuite : si le cas « propre-script »
-# échoue, le retour à l'état publié l'effacerait, et les cas suivants deviendraient illisibles.
+# Remet le clone sur l'état publié. Les outils sont recopiés ensuite : si le cas « propre-script »
+# échoue, le retour à l'état publié les effacerait de l'arbre de travail. La garde active, elle, est
+# la copie que l'installeur a posée dans le dossier git commun : aucune extraction ne l'efface.
 repartir() {
   git_c checkout -q -f main
   git_c reset -q --hard origin/main
@@ -369,20 +370,36 @@ refuser_garde_sans_liste() { # $1 nom du cas, $2 fichier de liste, $3 fragment a
   fi
 }
 
+# Crée un dépôt vierge où la garde et son installeur sont copiés dans outils/ (non suivis), et
+# imprime son chemin.
+nouveau_vierge() {
+  local vierge
+  vierge=$(mktemp -d "$tmp/vierge.XXXXXX") || return 1
+  git init -q "$vierge" || return 1
+  mkdir -p "$vierge/outils" || return 1
+  cp "$outils/pre-push" "$outils/installer-garde.sh" "$vierge/outils/" || return 1
+  echo "$vierge"
+}
+
+# Lance l'installeur dans le dépôt $1 ; sa sortie va dans $sortie.
+installer() { (cd "$1" && bash outils/installer-garde.sh > "$sortie" 2>&1); }
+
+# Vrai si la ligne de l'installeur (préfixe « installer-garde : ») contient le fragment $1.
+installeur_dit() { grep -F -- "installer-garde :" "$sortie" | grep -q -F -- "$1"; }
+
 # Lance l'installeur dans un dépôt vierge avec la liste $2 : il doit échouer avec le fragment $3 et
 # ne rien régler.
 refuser_installeur_sans_liste() { # $1 nom du cas, $2 fichier de liste, $3 fragment attendu
   local nom=$1 fichier_liste=$2 attendu=$3 vierge
-  vierge=$(mktemp -d "$tmp/vierge.XXXXXX")
-  git init -q "$vierge"
-  mkdir -p "$vierge/outils"
-  cp "$outils/pre-push" "$outils/installer-garde.sh" "$vierge/outils/"
+  vierge=$(nouveau_vierge) || { verdict "$nom" 1 "préparation du dépôt vierge"; return; }
   if (cd "$vierge" && env GARDE_LISTE="$fichier_liste" bash outils/installer-garde.sh > "$sortie" 2>&1); then
     verdict "$nom" 1 "l'installeur a réussi sans liste utilisable"
   elif ! grep -q -F -- "$attendu" "$sortie"; then
     verdict "$nom" 1 "message inattendu (attendu « $attendu ») : $(tr '\n' ' ' < "$sortie")"
   elif [ -n "$(git -C "$vierge" config core.hooksPath)" ]; then
     verdict "$nom" 1 "core.hooksPath a été réglé malgré l'échec"
+  elif [ -e "$vierge/.git/hooks/pre-push" ]; then
+    verdict "$nom" 1 "la garde a été copiée dans .git/hooks malgré l'échec"
   else
     verdict "$nom" 0
   fi
@@ -408,6 +425,88 @@ refuser_installeur_sans_liste "installeur-sans-liste" "$tmp/liste-absente.txt" "
 # installeur-liste-vide, installeur-liste-commentaires : de même pour une liste sans ligne utilisable.
 refuser_installeur_sans_liste "installeur-liste-vide" "$liste_vide" "sans ligne utilisable"
 refuser_installeur_sans_liste "installeur-liste-commentaires" "$liste_commentaires" "sans ligne utilisable"
+
+# --- Installation dans le dossier git commun ----------------------------------
+
+# ancienne-extraction : une copie de travail d'un commit antérieur à la garde (sans outils/pre-push)
+# pousse une valeur de la liste ; la garde, installée dans le dossier git commun, la refuse quand même.
+# Avec l'ancienne installation (core.hooksPath=outils, résolu dans l'arbre de travail), git sautait la
+# garde sans rien dire.
+ancienne="$tmp/ancienne-extraction"
+racine_commit=$(git_c rev-list --max-parents=0 main)
+if ! git_c worktree add -q --detach "$ancienne" "$racine_commit" > "$sortie" 2>&1; then
+  verdict "ancienne-extraction" 1 "préparation : git worktree add a échoué : $(tr '\n' ' ' < "$sortie")"
+elif [ -e "$ancienne/outils/pre-push" ]; then
+  verdict "ancienne-extraction" 1 "préparation : la copie ancienne contient outils/pre-push"
+elif ! printf '%s\n' "$prenom" > "$ancienne/ancien.txt" \
+  || ! git -C "$ancienne" add -- ancien.txt \
+  || ! git -C "$ancienne" commit -q -m "Commit sur une extraction ancienne" > "$sortie" 2>&1; then
+  verdict "ancienne-extraction" 1 "préparation : commit dans la copie ancienne : $(tr '\n' ' ' < "$sortie")"
+else
+  avant=$(etat_distant)
+  if git -C "$ancienne" push -q origin HEAD:refs/heads/ancienne > "$sortie" 2>&1; then
+    verdict "ancienne-extraction" 1 "poussée acceptée : la garde n'a pas tourné"
+  elif [ "$avant" != "$(etat_distant)" ]; then
+    verdict "ancienne-extraction" 1 "poussée refusée mais le distant a changé"
+  elif ! grep -F -- "garde pre-push : commit" "$sortie" | grep -q -F -- "liste locale (diff)"; then
+    verdict "ancienne-extraction" 1 "refusée sans le message de la garde : $(tr '\n' ' ' < "$sortie")"
+  else
+    verdict "ancienne-extraction" 0
+  fi
+fi
+
+# installeur-ancien-reglage : sur un dépôt réglé par l'ancien installeur (core.hooksPath=outils),
+# l'installeur retire ce réglage et copie la garde, exécutable, dans le dossier git commun ; relancé, il
+# remplace sa propre copie.
+if ! vierge=$(nouveau_vierge) || ! git -C "$vierge" config core.hooksPath outils; then
+  verdict "installeur-ancien-reglage" 1 "préparation du dépôt vierge"
+elif ! installer "$vierge"; then
+  verdict "installeur-ancien-reglage" 1 "l'installeur a échoué : $(tr '\n' ' ' < "$sortie")"
+elif [ -n "$(git -C "$vierge" config --get core.hooksPath)" ]; then
+  verdict "installeur-ancien-reglage" 1 "core.hooksPath est resté réglé"
+elif ! cmp -s "$outils/pre-push" "$vierge/.git/hooks/pre-push" || [ ! -x "$vierge/.git/hooks/pre-push" ]; then
+  verdict "installeur-ancien-reglage" 1 "la garde n'est pas copiée, exécutable, dans .git/hooks"
+elif ! installer "$vierge"; then
+  verdict "installeur-ancien-reglage" 1 "la réinstallation sur sa propre copie a échoué : $(tr '\n' ' ' < "$sortie")"
+else
+  verdict "installeur-ancien-reglage" 0
+fi
+
+# installeur-autre-reglage : un autre core.hooksPath arrête l'installation sans rien changer ; l'issue que
+# donne le message (git config --unset core.hooksPath, puis relancer) aboutit.
+if ! vierge=$(nouveau_vierge) || ! git -C "$vierge" config core.hooksPath crochets-ailleurs; then
+  verdict "installeur-autre-reglage" 1 "préparation du dépôt vierge"
+elif installer "$vierge"; then
+  verdict "installeur-autre-reglage" 1 "l'installeur a réussi malgré un autre core.hooksPath"
+elif ! installeur_dit "git config --unset core.hooksPath"; then
+  verdict "installeur-autre-reglage" 1 "message inattendu : $(tr '\n' ' ' < "$sortie")"
+elif [ "$(git -C "$vierge" config --get core.hooksPath)" != crochets-ailleurs ] || [ -e "$vierge/.git/hooks/pre-push" ]; then
+  verdict "installeur-autre-reglage" 1 "le refus a changé le réglage ou copié la garde"
+elif ! git -C "$vierge" config --unset core.hooksPath || ! installer "$vierge" \
+  || ! cmp -s "$outils/pre-push" "$vierge/.git/hooks/pre-push"; then
+  verdict "installeur-autre-reglage" 1 "l'issue conseillée n'aboutit pas : $(tr '\n' ' ' < "$sortie")"
+else
+  verdict "installeur-autre-reglage" 0
+fi
+
+# installeur-autre-crochet : un autre crochet pre-push (celui de git-lfs, par exemple) n'est jamais
+# écrasé ; déplacé comme le message le conseille, il laisse l'installation aboutir.
+autre_crochet="$tmp/autre-crochet.txt"
+printf '#!/bin/sh\nexit 0\n' > "$autre_crochet"
+if ! vierge=$(nouveau_vierge) || ! cp "$autre_crochet" "$vierge/.git/hooks/pre-push"; then
+  verdict "installeur-autre-crochet" 1 "préparation du dépôt vierge"
+elif installer "$vierge"; then
+  verdict "installeur-autre-crochet" 1 "l'installeur a réussi malgré un autre crochet pre-push"
+elif ! installeur_dit "un autre crochet pre-push existe déjà"; then
+  verdict "installeur-autre-crochet" 1 "message inattendu : $(tr '\n' ' ' < "$sortie")"
+elif ! cmp -s "$autre_crochet" "$vierge/.git/hooks/pre-push"; then
+  verdict "installeur-autre-crochet" 1 "l'autre crochet a été modifié malgré le refus"
+elif ! mv "$vierge/.git/hooks/pre-push" "$vierge/.git/hooks/pre-push.autre" || ! installer "$vierge" \
+  || ! cmp -s "$outils/pre-push" "$vierge/.git/hooks/pre-push"; then
+  verdict "installeur-autre-crochet" 1 "l'issue conseillée n'aboutit pas : $(tr '\n' ' ' < "$sortie")"
+else
+  verdict "installeur-autre-crochet" 0
+fi
 
 echo
 echo "$nb_ok cas OK, $nb_echec ÉCHEC"

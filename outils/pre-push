@@ -15,6 +15,8 @@
 #     références (par exemple « tout »).
 #   - étiquette annotée : le commit visé (<sha local>^{commit}), comme une branche.
 # La garde inspecte ce qui est poussé (commits), pas l'arbre de travail.
+# outils/installer-garde.sh en pose une copie dans le dossier git commun (hooks/pre-push),
+# qu'aucune extraction n'efface : le relancer après un changement de ce fichier.
 #
 # Pour chaque référence poussée, son nom distant, et pour une étiquette annotée son
 # contenu (git cat-file -p : message, nom et adresse de l'étiqueteur), passent par
