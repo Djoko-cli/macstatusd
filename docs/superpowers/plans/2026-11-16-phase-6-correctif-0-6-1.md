@@ -54,5 +54,7 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 7 : déploiement
 
-- [ ] `install.sh` lancé par Djoko
-- [ ] Au journal : un réveil par HA suivi d'un déverrouillage, sans reverrouillage
+- [x] `install.sh` lancé par Djoko (23/11/2026, 12:25 : `--app` sur l'app de la page en ligne, code 0 ; 0.6.1 active,
+  binaire identique au publié, push confirmé ; la 0.6.0 s'est arrêtée sans publier OFF)
+- [ ] Au journal : un réveil par HA suivi d'un déverrouillage, sans reverrouillage (à lire après un vrai réveil, au
+  choix de Djoko)
