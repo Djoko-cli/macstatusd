@@ -41,7 +41,8 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
   essayée depuis le commit racine) ; cas `sortie-par-defaut` du banc de l'assembleur (`d185f90`)
 - [x] Tests du clone de publication (clone `e38e98a`, 23/11/2026) : 608 tests et 30 suites, quatre bancs (garde
   37 cas), 78 tests Python, selftest écran éteint forcé 88 OK
-- [ ] Selftest écran allumé dans le clone : au passage du 23/11, l'écran était éteint, et ses 4 sections ont sauté
+- [x] Selftest écran allumé dans le clone (23/11/2026, écran allumé) : 92 OK, 0 échec, 3 sautées, comme en 0.6.0 ;
+  les 3 sautées demandent le faux économiseur, qui exige d'arrêter le daemon réel
 
 ### Tâche 6 : publication
 
