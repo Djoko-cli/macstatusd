@@ -46,8 +46,11 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 ### Tâche 6 : publication
 
-- [ ] Signature et notarisation, session ouverte
-- [ ] Page de version, vérifiée en ligne
+- [x] Signature et notarisation, session ouverte (23/11/2026 : crible de tout l'historique propre, `main` poussée
+  `faeee7d..0a8f403` ; `publier.sh 0.6.1` dans le clone `0a8f403` : notarisation acceptée, une fois l'accord du
+  programme développeur accepté par Djoko, app agrafée et acceptée par Gatekeeper, garde de l'archive passée)
+- [x] Page de version, vérifiée en ligne (étiquette `v0.6.1` sur `0a8f403` ; zip et SHA256SUMS téléchargés identiques
+  aux locaux, sommes OK, `stapler validate` OK, `spctl` : accepted, source=Notarized Developer ID)
 
 ### Tâche 7 : déploiement
 
