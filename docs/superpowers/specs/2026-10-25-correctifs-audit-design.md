@@ -195,7 +195,7 @@ coche quand son plan est fini, banc compris. La phase 6 suit la voie courte : so
 - [x] Phase 3 : économiseur sous macOS 27, écrans, veille avortée et efficience (lots 4 et 5)
 - [x] Phase 4 : installation, documentation, signature et publication (lots 6 à 8)
 - [x] Phase 5 : déploiement coordonné avec Home Assistant (lot 9)
-- [ ] Phase 6 : correctif 0.6.1, réveil gardé jusqu'au déverrouillage (§12)
+- [x] Phase 6 : correctif 0.6.1, réveil gardé jusqu'au déverrouillage (§12)
 
 ### Lot 0 — Anonymisation et garde
 
@@ -712,6 +712,14 @@ Les trois essais, sous la 0.6.1 :
    seconde, état OFF poussé 1 s plus tard ; l'économiseur n'est pas revenu. L'écart de 10 s attendu entre l'état et
    l'écran (écran éteint vers 40 s) n'est pas apparu. Décision de Djoko (22/11/2026) : rien à changer.
 
-Relevés locaux : `.superpowers/phase-6/banc/` (ignoré par git : journaux réels).
+*Constaté en usage réel le 23/11/2026, 0.6.1 installée :* réveil par HA à 18:40 sur une session verrouillée, écran
+éteint par sa minuterie depuis une heure, déverrouillage au Touch ID 6,6 s après l'ON. Assertion gardée, puis relâchée
+30 s après le déverrouillage ; l'écran est resté allumé, et loginwindow n'a noté aucun verrouillage ensuite (journaux
+de macstatusd, de `pmset` et de loginwindow). Les quatre réveils sans déverrouillage du même jour (14:08 à 17:39) ont
+été relâchés à 30 s (faits OFF), et l'état OFF est parti 1 s plus tard : deux fois sur l'écran éteint, deux fois sur
+l'économiseur revenu.
+
+Relevés locaux : `.superpowers/phase-6/banc/`, et pour l'usage réel `.superpowers/phase-6/reveil-reel-2026-11-23/`
+(ignorés par git : journaux réels).
 
 **Suivi :** `docs/superpowers/plans/2026-11-16-phase-6-correctif-0-6-1.md`.

@@ -56,5 +56,7 @@ report sur `main` en quelques commits, relecture finale. Cette liste ne sert qu'
 
 - [x] `install.sh` lancé par Djoko (23/11/2026, 12:25 : `--app` sur l'app de la page en ligne, code 0 ; 0.6.1 active,
   binaire identique au publié, push confirmé ; la 0.6.0 s'est arrêtée sans publier OFF)
-- [ ] Au journal : un réveil par HA suivi d'un déverrouillage, sans reverrouillage (à lire après un vrai réveil, au
-  choix de Djoko)
+- [x] Au journal : un réveil par HA suivi d'un déverrouillage, sans reverrouillage (23/11/2026, 18:40 : ON de HA sur
+  une session verrouillée, écran éteint par sa minuterie depuis 17:40 ; déverrouillage au Touch ID 6,6 s après ;
+  assertion gardée, puis relâchée 30 s après le déverrouillage ; ni extinction d'écran ni verrouillage ensuite,
+  d'après les journaux de macstatusd, de `pmset` et de loginwindow, relus de 18:46 à 18:50)
